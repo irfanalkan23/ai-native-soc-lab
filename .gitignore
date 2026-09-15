@@ -1,0 +1,30 @@
+# Environment and secrets
+.env
+*.env.local
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.venv/
+venv/
+ENV/
+
+# System and OS files
+.DS_Store
+Thumbs.db
+ehthumbs.db
+
+# IDE and Editor configurations
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Lab runtime / sensitive incident artifacts
+audit/
+incidents/private/
+screenshots/raw/
+logs/*.log
+*.log

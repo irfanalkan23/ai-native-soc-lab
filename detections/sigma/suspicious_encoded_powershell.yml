@@ -1,0 +1,38 @@
+# Status: IMPLEMENTED, NOT YET VALIDATED
+# Note: Implemented as a Sigma representation of suspicious encoded PowerShell execution.
+# Lab pipeline validation against Sysmon via pySigma/Sigma CLI is pending.
+
+title: Suspicious Encoded PowerShell Execution
+id: 4e4f13c0-89a9-4f0e-a08f-b70b9c19e729
+status: experimental
+description: Detects PowerShell process creation using encoded command-line arguments.
+author: Irfan Alkan
+date: 2026-09-15
+
+logsource:
+  category: process_creation
+  product: windows
+
+detection:
+  selection_image:
+    Image|endswith:
+      - '\powershell.exe'
+      - '\pwsh.exe'
+
+  selection_encoded:
+    CommandLine|contains:
+      - ' -EncodedCommand '
+      - ' -enc '
+
+  condition: selection_image and selection_encoded
+
+falsepositives:
+  - Administrative automation
+  - Software deployment or management tools
+  - Legitimate encoded PowerShell scripts
+
+level: medium
+
+tags:
+  - attack.execution
+  - attack.t1059.001
