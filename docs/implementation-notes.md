@@ -127,21 +127,74 @@ index=main sourcetype="XmlWinEventLog:Microsoft-Windows-Sysmon/Operational" "<Ev
 | :--- | :--- | :--- | :--- |
 | `detections/splunk/suspicious_encoded_powershell.spl` | SPL Detection | **IMPLEMENTED + TESTED** | Verified against live Sysmon telemetry in Splunk. |
 | `detections/sigma/suspicious_encoded_powershell.yml` | Sigma Rule | **IMPLEMENTED, NOT YET VALIDATED** | Rule defined; conversion and automated pipeline testing pending. |
+| `gateway/policy.py` | Policy Gate / Validation | **IMPLEMENTED + TESTED** | Input validation, type enforcement, allowlisted SPL template generator. Passed 29-test suite. |
+| `gateway/splunk_search.py` | Local Search Client | **IMPLEMENTED + TESTED** | Bounded export client; 29 unit tests passed; live localhost export query verified end-to-end. |
 | AI Investigator Agent | Python Automation / LLM | **PLANNED** | Not yet implemented. |
 | Policy Gate & Enforcement | Deterministic Rules | **PLANNED** | Not yet implemented. |
 | Response Actions | Automated Response | **PLANNED (SIMULATED)** | Containment/response will be simulated only; no destructive actions. |
 
 ---
 
-## 8. Known Limitations
+## 8. Known Limitations & Verified Constraints
 
 1. **Search-Time Rex Extraction**: The SPL query relies on regex parsing of `_raw` XML text at search time. In high-volume production deployments, pre-indexed field extraction via props.conf/transforms.conf or add-ons (Splunk Add-on for Microsoft Sysmon) is preferred for performance.
 2. **Flag Coverage**: The current SPL and Sigma rule specifically inspect for `-(encodedcommand|enc)`. Additional PowerShell parameter abbreviations (e.g., `-e`, `-enco`, `-encodedc`) can be tested and added in future detection refinements.
-3. **Splunk Free API & Authentication Behavior**: In Splunk Free, standard role-based access control (RBAC) and user token management operate differently than in Splunk Enterprise with an active license. The exact REST API authentication behavior, session management, and endpoint availability will be directly verified against the running Splunk instance before committing to a specific programmatic client architecture.
+3. **Splunk Free API & Remote Access Boundary (Verified)**: Under Splunk Free, unauthenticated local REST searches (`https://localhost:8089/services/search/jobs/export`) succeed locally on the Splunk server, while remote REST searches (e.g., from Kali or network hosts) are blocked by default. `allowRemoteLogin` remains intentionally **NOT ENABLED** by design to avoid weakening SIEM security controls. V1 therefore uses a bounded local Splunk-side search module rather than exposing remote unauthenticated administrative or search access.
 
 ---
 
-## 9. Next Milestone
+## 9. Milestone 2: Bounded Local Splunk Search Client & End-to-End Validation
 
-* **Next Step**: Investigate and verify programmatic search access against the Splunk server (testing REST API authentication behavior under Splunk Free) to implement a read-only search client.
-* **Scope Restriction**: No autonomous containment, no shell access, no direct administrative actions.
+### Overview
+A minimal, highly bounded Python search module was implemented using exclusively the Python standard library (`urllib`, `ssl`, `json`, `dataclasses`, `unittest`). It establishes a strict security boundary preventing callers or future AI agents from executing arbitrary queries or abusing SIEM capabilities.
+
+Following an independent security review, the module received a dedicated hardening pass to eliminate bypass vectors, enforce strict schema contracts, bound memory consumption, and sanitize error reporting.
+
+### Verified Security Boundaries
+The validated client strictly enforces:
+* **Fixed Localhost Endpoint**: Strictly calls `https://localhost:8089/services/search/jobs/export`.
+* **Fixed Telemetry Scope**: Fixed `index=main`, fixed sourcetype `XmlWinEventLog:Microsoft-Windows-Sysmon/Operational`, fixed Event ID `1` (Process Create).
+* **Fixed Detection Semantics**: Matches `powershell.exe` execution with `-EncodedCommand` or `-enc`.
+* **Host Allowlist**: Accepts strictly `host="DC01"` (prevents cross-host pivot or arbitrary host parameters).
+* **Bounded Temporal Window**: Integer `minutes` strictly between `1` and `60`.
+* **Bounded Result Limit**: Integer `limit` strictly between `1` and `50`.
+* **Type Safety**: Strictly rejects boolean coercion (e.g., `minutes=True`, `limit=True`).
+* **Fixed Returned Fields**: Projects strictly 7 allowlisted fields (`_time`, `host`, `User`, `Image`, `CommandLine`, `ParentImage`, `ParentCommandLine`).
+* **Mandatory Schema Enforcement**: Rejects partial/incomplete records; all 7 fields must exist and be non-empty.
+* **Bounded Memory Consumption**: Enforces a 1MB maximum response size (`MAX_RESPONSE_BYTES = 1_048_576`).
+* **Defense-in-Depth Result Count**: Fails closed if Splunk returns more records than the validated `limit`.
+* **Fail-Closed Parser**: Fails closed on Splunk server `messages` envelopes with severity `WARN`, `ERROR`, or `FATAL`.
+* **Sanitized Error Reporting**: HTTP errors and connection failures return concise status codes without leaking raw response bodies or telemetry into exceptions.
+* **No Arbitrary SPL or REST Path**: Callers cannot pass raw SPL or override the target URL/path.
+* **No Administrative Endpoints**: Never accesses user management, app installation, or configuration endpoints.
+* **No External Binaries / Subprocesses**: Zero use of `subprocess`, `os.system`, `shell=True`, `curl`, or `wget`.
+
+### Unit Test Verification
+The complete 29-test suite (`tests/test_gateway_policy.py` and `tests/test_splunk_search.py`) was executed and passed cleanly across two environments:
+1. **Development Machine**: 29/29 tests passed (`Ran 29 tests in 0.360s, OK`).
+2. **Splunk-Server Runtime**: 29/29 tests passed.
+
+### Live End-to-End Validation
+Live search integration was verified against the real running lab environment:
+* **Controlled DC01 Test**: A fresh benign encoded PowerShell execution was generated on `DC01`:
+  * Host: `DC01`
+  * User: `SOCLAB\Administrator`
+  * Image: `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`
+  * Parent Image: `C:\Windows\System32\cmd.exe`
+  * Command Line: Encoded PowerShell command string
+  * Event Timestamp: ~2026-09-15 17:05 UTC
+* **Live Query Execution**: The bounded search client successfully queried `https://localhost:8089/services/search/jobs/export` with:
+  * `host="DC01"`
+  * `minutes=15`
+  * `limit=10`
+* **Result**: Successfully retrieved and parsed the live DC01 Sysmon Event ID 1 record without exposing arbitrary SPL or REST paths.
+* **Pipeline Status**: **DC01 → Sysmon → Splunk Forwarder → Splunk Server → Bounded Python Client** is **END-TO-END TESTED + VERIFIED**.
+
+---
+
+## 10. Next Milestone
+
+* **Next Step (Milestone 3)**: Implement the AI investigation engine with structured tool calling for alert triage, command-line base64 decoding, and MITRE ATT&CK mapping.
+* **Scope Restriction**: AI agent operates strictly as an adviser under least-privilege, read-only boundaries; no autonomous containment or shell access.
+
+

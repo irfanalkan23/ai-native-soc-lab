@@ -68,8 +68,8 @@ The initial incident scenario covers an execution attempt using obfuscated Power
 | **Lab Infrastructure** | Virtual Network & Hosts | **VERIFIED** | VirtualBox LabNet (`192.168.1.0/24`), pfSense, DC01, Kali, Splunk Server. |
 | **Sysmon Telemetry Ingestion** | Data Pipeline | **VERIFIED** | DC01 Sysmon Event ID 1 forwarded to Splunk index `main`. |
 | **Splunk Detection (`.spl`)** | Detection Engineering | **IMPLEMENTED + TESTED** | Verified against benign encoded PowerShell test on DC01. |
-| **Sigma Rule (`.yml`)** | Detection Engineering | **IMPLEMENTED, UNVALIDATED** | Rule defined; automated pipeline conversion pending. |
-| **AI Investigator Agent** | Automation & LLM | **PLANNED** | Read-only Splunk search client not yet built; authentication behavior under Splunk Free to be verified. |
+| **Bounded Splunk Search Client** | Local Integration & Python Gateway | **IMPLEMENTED + TESTED** | Hardened local client; 29 unit tests pass; verified live against Splunk Free localhost export endpoint. |
+| **AI Investigator Agent** | Automation & LLM | **PLANNED** | Tool-calling triage engine planned for Milestone 3. |
 | **Policy Engine & Gate** | Security Controls | **PLANNED** | Deterministic rule-checking framework not yet built. |
 | **Response Actions** | SOAR / Containment | **PLANNED (SIMULATED)** | No real containment exists; future response actions will be simulated. |
 
@@ -124,7 +124,7 @@ Located in [`detections/sigma/suspicious_encoded_powershell.yml`](detections/sig
 ## 6. High-Level Project Roadmap
 
 - [x] **Milestone 1**: Lab environment deployment, Sysmon telemetry verification, controlled attack simulation, and SPL detection engineering.
-- [ ] **Milestone 2**: Read-only programmatic Splunk connector (Python) operating under least-privilege principles.
+- [x] **Milestone 2**: Bounded read-only Splunk search client (Python) operating under least-privilege principles and verified end-to-end against live telemetry.
 - [ ] **Milestone 3**: AI investigation engine with structured tool calling (triage, decoding, and MITRE mapping).
 - [ ] **Milestone 4**: Deterministic policy enforcement layer and human-approval workflow.
 - [ ] **Milestone 5**: Simulated response executor and structured incident report generator.
