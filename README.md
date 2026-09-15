@@ -37,7 +37,7 @@ To ensure safety and auditability, the runtime architecture follows a strict uni
 ```
 
 * **No Unrestricted Autonomous Agents**: The system does not have arbitrary shell execution, endpoint isolation capabilities, firewall management, or destructive access.
-* **Least Privilege (Target Architecture)**: All future programmatic access (e.g., SIEM queries, threat intelligence lookups) will be strictly read-only and restricted to explicit tool allowlists once connectors are built.
+* **Least Privilege**: Programmatic security-tool access is restricted through explicit, least-privilege interfaces. The current Splunk integration is bounded and read-only; future integrations such as threat-intelligence lookups will follow the same model.
 * **Human-in-the-Loop**: Consequential actions require explicit human authorization and remain simulated in initial phases.
 
 ---
@@ -68,8 +68,10 @@ The initial incident scenario covers an execution attempt using obfuscated Power
 | **Lab Infrastructure** | Virtual Network & Hosts | **VERIFIED** | VirtualBox LabNet (`192.168.1.0/24`), pfSense, DC01, Kali, Splunk Server. |
 | **Sysmon Telemetry Ingestion** | Data Pipeline | **VERIFIED** | DC01 Sysmon Event ID 1 forwarded to Splunk index `main`. |
 | **Splunk Detection (`.spl`)** | Detection Engineering | **IMPLEMENTED + TESTED** | Verified against benign encoded PowerShell test on DC01. |
+| **Sigma Rule (`.yml`)** | Detection Engineering | **IMPLEMENTED, UNVALIDATED** | Rule defined; automated pipeline conversion pending. |
 | **Bounded Splunk Search Client** | Local Integration & Python Gateway | **IMPLEMENTED + TESTED** | Hardened local client; 29 unit tests pass; verified live against Splunk Free localhost export endpoint. |
-| **AI Investigator Agent** | Automation & LLM | **PLANNED** | Tool-calling triage engine planned for Milestone 3. |
+| **Investigator Scaffolding & Tool Router** | Triage Scaffolding & Routing | **IMPLEMENTED + UNIT TESTED** | Deterministic schemas, UTF-16LE Base64 decoder, static MITRE mapper, allowlisted tool router. |
+| **AI Investigator Agent (LLM Integration)** | Automation & LLM | **PLANNED** | Tool-calling model integration planned for Milestone 3B. |
 | **Policy Engine & Gate** | Security Controls | **PLANNED** | Deterministic rule-checking framework not yet built. |
 | **Response Actions** | SOAR / Containment | **PLANNED (SIMULATED)** | No real containment exists; future response actions will be simulated. |
 
@@ -123,9 +125,9 @@ Located in [`detections/sigma/suspicious_encoded_powershell.yml`](detections/sig
 
 ## 6. High-Level Project Roadmap
 
-- [x] **Milestone 1**: Lab environment deployment, Sysmon telemetry verification, controlled attack simulation, and SPL detection engineering.
+- [x] **Milestone 1**: Lab environment deployment, Sysmon telemetry verification, controlled adversary-tradecraft simulation (benign test), and SPL detection engineering.
 - [x] **Milestone 2**: Bounded read-only Splunk search client (Python) operating under least-privilege principles and verified end-to-end against live telemetry.
-- [ ] **Milestone 3**: AI investigation engine with structured tool calling (triage, decoding, and MITRE mapping).
+- [ ] **Milestone 3**: AI investigation engine (Milestone 3A contract scaffolding complete; LLM tool-calling agent pending).
 - [ ] **Milestone 4**: Deterministic policy enforcement layer and human-approval workflow.
 - [ ] **Milestone 5**: Simulated response executor and structured incident report generator.
 - [ ] **Milestone 6**: Prompt injection testing, adversarial robustness evaluation, and audit logging.

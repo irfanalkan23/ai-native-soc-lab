@@ -1,8 +1,8 @@
-# Milestone 1 Implementation Notes: Telemetry Verification & Initial Detection
+# AI-Native SOC Lab — Implementation Notes (Milestones 1–3A)
 
 ## Overview
 
-This document records the verification of the initial lab infrastructure, telemetry ingestion pipeline, baseline observation, controlled attack simulation, and SPL detection engineering for the AI-Native SOC & Agentic Security Engineering Lab.
+This document records the verification of the initial lab infrastructure, telemetry ingestion pipeline, baseline observation, controlled security tests, SPL detection engineering, bounded Splunk integration, and Milestone 3A investigator contract scaffolding for the AI-Native SOC & Agentic Security Engineering Lab.
 
 ---
 
@@ -127,11 +127,18 @@ index=main sourcetype="XmlWinEventLog:Microsoft-Windows-Sysmon/Operational" "<Ev
 | :--- | :--- | :--- | :--- |
 | `detections/splunk/suspicious_encoded_powershell.spl` | SPL Detection | **IMPLEMENTED + TESTED** | Verified against live Sysmon telemetry in Splunk. |
 | `detections/sigma/suspicious_encoded_powershell.yml` | Sigma Rule | **IMPLEMENTED, NOT YET VALIDATED** | Rule defined; conversion and automated pipeline testing pending. |
-| `gateway/policy.py` | Policy Gate / Validation | **IMPLEMENTED + TESTED** | Input validation, type enforcement, allowlisted SPL template generator. Passed 29-test suite. |
-| `gateway/splunk_search.py` | Local Search Client | **IMPLEMENTED + TESTED** | Bounded export client; 29 unit tests passed; live localhost export query verified end-to-end. |
-| AI Investigator Agent | Python Automation / LLM | **PLANNED** | Not yet implemented. |
-| Policy Gate & Enforcement | Deterministic Rules | **PLANNED** | Not yet implemented. |
-| Response Actions | Automated Response | **PLANNED (SIMULATED)** | Containment/response will be simulated only; no destructive actions. |
+| `gateway/policy.py` | Input Policy / Query Validation | **IMPLEMENTED + TESTED** | Query input validation, type safety, allowlisted SPL template generator. |
+| `gateway/splunk_search.py` | Local Search Client | **IMPLEMENTED + TESTED** | Bounded export client; live localhost export query verified end-to-end. |
+| `investigator/schemas.py` | Investigation Schemas | **IMPLEMENTED + UNIT TESTED** | Immutable data contracts (`InvestigationInput`, `InvestigationResult`). |
+| `investigator/tools/base64_decoder.py` | Local Base64 Decoder Tool | **IMPLEMENTED + UNIT TESTED** | Bounded UTF-16LE decoder for PowerShell -EncodedCommand payloads. |
+| `investigator/tools/mitre_mapper.py` | Local MITRE Mapper Tool | **IMPLEMENTED + UNIT TESTED** | Static local lookup mapping detections to ATT&CK techniques. |
+| `investigator/tool_router.py` | Deterministic Tool Router | **IMPLEMENTED + UNIT TESTED** | Strict allowlist router wrapping local tools and bounded Splunk search. |
+| AI Investigator Agent (LLM Integration) | Automation & LLM | **NOT YET IMPLEMENTED** | Tool-calling model integration planned for Milestone 3B. |
+| Threat-Intelligence Integration | Enrichment | **NOT YET IMPLEMENTED** | External reputation lookups planned for future milestone. |
+| Numeric Risk / Confidence Scoring | Risk Scoring | **NOT YET IMPLEMENTED** | Qualitative ratings (`low`/`medium`/`high`) enforced in V1. |
+| Action Policy Engine & Gate | Security Controls | **NOT YET IMPLEMENTED** | Consequential action authorization engine planned for future milestone. |
+| Human Approval Workflow | Authorization | **NOT YET IMPLEMENTED** | Interactive human-in-the-loop approval gate planned. |
+| Response Actions | SOAR / Containment | **PLANNED (SIMULATED)** | Containment/response will be simulated only; no destructive actions. |
 
 ---
 
@@ -170,7 +177,7 @@ The validated client strictly enforces:
 * **No External Binaries / Subprocesses**: Zero use of `subprocess`, `os.system`, `shell=True`, `curl`, or `wget`.
 
 ### Unit Test Verification
-The complete 29-test suite (`tests/test_gateway_policy.py` and `tests/test_splunk_search.py`) was executed and passed cleanly across two environments:
+The 29-test Milestone 2 suite was executed and passed cleanly across two environments:
 1. **Development Machine**: 29/29 tests passed (`Ran 29 tests in 0.360s, OK`).
 2. **Splunk-Server Runtime**: 29/29 tests passed.
 
@@ -183,18 +190,59 @@ Live search integration was verified against the real running lab environment:
   * Parent Image: `C:\Windows\System32\cmd.exe`
   * Command Line: Encoded PowerShell command string
   * Event Timestamp: ~2026-09-15 17:05 UTC
-* **Live Query Execution**: The bounded search client successfully queried `https://localhost:8089/services/search/jobs/export` with:
-  * `host="DC01"`
-  * `minutes=15`
-  * `limit=10`
+* **Live Query Execution**: The bounded search client successfully queried `https://localhost:8089/services/search/jobs/export` with `host="DC01"`, `minutes=15`, `limit=10`.
 * **Result**: Successfully retrieved and parsed the live DC01 Sysmon Event ID 1 record without exposing arbitrary SPL or REST paths.
 * **Pipeline Status**: **DC01 → Sysmon → Splunk Forwarder → Splunk Server → Bounded Python Client** is **END-TO-END TESTED + VERIFIED**.
 
 ---
 
-## 10. Next Milestone
+## 10. Milestone 3A: AI Investigator Contract Scaffolding & Tool Router
 
-* **Next Step (Milestone 3)**: Implement the AI investigation engine with structured tool calling for alert triage, command-line base64 decoding, and MITRE ATT&CK mapping.
-* **Scope Restriction**: AI agent operates strictly as an adviser under least-privilege, read-only boundaries; no autonomous containment or shell access.
+### Overview
+Milestone 3A establishes the deterministic scaffolding and tool boundaries for the upcoming AI investigation workflow. In accordance with the project's security architecture (*AI proposes, deterministic policy enforces*), no LLM code or dynamic agent frameworks are introduced in this phase. All interfaces, data structures, and tool routing mechanisms are enforced in deterministic Python standard library code.
+
+### Implemented Components
+1. **Investigation Schemas (`investigator/schemas.py`)**:
+   - `InvestigationInput`: Immutable dataclass capturing alert context (`incident_id`, `timestamp`, `host`, `user`, `image`, `command_line`, `parent_image`, `parent_command_line`, `detection_name`, `detection_id`). Rejects empty/whitespace values upon construction.
+   - `InvestigationResult`: Deeply immutable dataclass capturing triage output (`summary`, `observations`, `decoded_command`, `mitre_techniques`, `suspicious_indicators`, `recommended_next_step`, `confidence_level`, `evidence_refs`).
+   - Deep Immutability: Collection fields (`observations`, `mitre_techniques`, `suspicious_indicators`, `evidence_refs`) accept list or tuple inputs and normalize them to immutable tuples via `object.__setattr__` during `__post_init__`, preventing callers from modifying collections in place post-construction.
+   - Strict Per-Element Validation: Every member in each collection must be exactly of type `str` and non-empty after `strip()`. Integers, dictionaries, `None`, empty/whitespace strings, and nested collections fail closed with `SchemaValidationError`.
+   - Strict Qualitative Confidence Bound: `confidence_level` must be strictly `'low'`, `'medium'`, or `'high'`. Numeric scoring is intentionally avoided in this phase.
+2. **Local Base64 Decoder Tool (`investigator/tools/base64_decoder.py`)**:
+   - Local-only in-memory decoding for PowerShell `-EncodedCommand` and `-enc` payloads.
+   - Strictly decodes Base64 bytes as UTF-16LE text (PowerShell's native `-EncodedCommand` encoding format).
+   - Strict V1 Contract: Removed UTF-8 fallback / heuristic behavior. Fails closed with `DecoderError` if payload bytes cannot be decoded as valid UTF-16LE text (e.g., odd byte counts, invalid surrogate sequences).
+   - Bounded input size: enforces a 32 KB maximum length (`MAX_ENCODED_INPUT_LENGTH = 32_768`).
+   - Fails closed on malformed Base64 or corrupted byte sequences.
+   - Strict non-execution: decoded content is returned strictly as inert string data (`DecodeResult.decoded_text`, `encoding="utf-16le"`) and is never passed to shell interpreters or `eval()`.
+3. **Local MITRE Mapper Tool (`investigator/tools/mitre_mapper.py`)**:
+   - Static, local lookup table mapping verified detection identifiers to ATT&CK Technique `T1059.001` (`Command and Scripting Interpreter: PowerShell`) and Tactic `TA0002` (`Execution`).
+   - No external MITRE API calls or network dependencies.
+   - Strict Boolean Type Validation: `fail_closed` parameter requires `type(fail_closed) is bool`, rejecting truthy/falsy types (`"true"`, `1`, `0`, `None`, etc.) with `MitreMappingError` (or `ToolValidationError` at the router boundary).
+   - Fails closed by raising `MitreMappingError` when `fail_closed=True`, or returns an explicit unmapped `MitreMapping` object when `fail_closed=False`.
+4. **Deterministic Tool Router (`investigator/tool_router.py`)**:
+   - Explicit tool allowlist: strictly exposes `bounded_splunk_search`, `decode_base64_powershell`, and `map_mitre_technique`.
+   - Rejects unauthorized tool names, unknown arguments, or attempts to pass custom SPL (`search`, `spl`, `query`) or URLs (`url`, `path`, `endpoint`).
+   - No dynamic dispatch (`eval`, `exec`, `getattr`, or dynamic imports); dispatches via static conditional branches.
+   - Wraps the existing `SplunkSearchClient` without bypassing its security boundaries.
+
+### Untrusted-Data Security Boundary
+All telemetry strings (logs, raw command lines, parent command lines, extracted tokens) and tool outputs (decoded Base64 content, MITRE labels) are treated strictly as **UNTRUSTED DATA**. They are never evaluated as instructions, executed as code, or allowed to alter router tables or policy gates.
+
+### Unit Test Verification
+A total of 56 unit tests across 4 test suites were executed and verified:
+* `tests/test_gateway_policy.py`: 15 tests (Milestone 2 query validation)
+* `tests/test_splunk_search.py`: 14 tests (Milestone 2 search client)
+* `tests/test_investigator_schemas.py`: 7 tests (Milestone 3A input/output schemas, deep immutability, per-element collection validation)
+* `tests/test_investigator_tools.py`: 20 tests (Milestone 3A UTF-16LE decoder, strict MITRE boolean validation, tool router allowlist and execution)
+* **Result**: **56 tests passed, 0 failures, 0 errors** (`Ran 56 tests in 0.399s, OK`).
+
+---
+
+## 11. Next Milestone
+
+* **Next Step (Milestone 3B)**: Integrate an LLM investigator using structured tool calling over the deterministic `ToolRouter` and `InvestigationResult` schema.
+* **Scope Restriction**: Read-only investigation only; no autonomous containment, no shell execution, no destructive tools.
+
 
 
