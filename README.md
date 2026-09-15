@@ -37,7 +37,7 @@ To ensure safety and auditability, the runtime architecture follows a strict uni
 ```
 
 * **No Unrestricted Autonomous Agents**: The system does not have arbitrary shell execution, endpoint isolation capabilities, firewall management, or destructive access.
-* **Least Privilege**: All programmatic access (e.g., SIEM queries, threat intelligence lookups) is read-only and restricted to explicit tool allowlists.
+* **Least Privilege (Target Architecture)**: All future programmatic access (e.g., SIEM queries, threat intelligence lookups) will be strictly read-only and restricted to explicit tool allowlists once connectors are built.
 * **Human-in-the-Loop**: Consequential actions require explicit human authorization and remain simulated in initial phases.
 
 ---
@@ -46,13 +46,13 @@ To ensure safety and auditability, the runtime architecture follows a strict uni
 
 The initial incident scenario covers an execution attempt using obfuscated PowerShell:
 
-1. **Adversary Activity**: Execution of base64-encoded command line on an internal host.
+1. **Controlled Test Activity**: Execution of a benign base64-encoded command line on an internal host (DC01) to simulate adversary tradecraft.
 2. **Telemetry Generation**: Microsoft Sysmon captures Process Create (Event ID 1).
 3. **SIEM Ingestion**: Splunk Universal Forwarder delivers events to a dedicated Splunk indexer.
 4. **Detection**: Custom SPL detection identifies the encoded execution.
 5. **AI Investigation *(Planned)***: Automated triage parsing command line parameters and parent process ancestry.
 6. **IOC Enrichment *(Planned)***: Automated reputation checks on extracted artifacts.
-7. **MITRE Mapping**: Automatic mapping to ATT&CK Technique T1059.001.
+7. **MITRE Mapping**: Current detection is manually mapped to ATT&CK Technique T1059.001 (automated mapping planned during agent triage phase).
 8. **Risk & Confidence Assessment *(Planned)***: Scoring severity based on execution context.
 9. **Policy Gate *(Planned)***: Deterministic evaluation of recommended actions.
 10. **Human Approval *(Planned)***: Operator review before executing response workflows.
@@ -69,7 +69,7 @@ The initial incident scenario covers an execution attempt using obfuscated Power
 | **Sysmon Telemetry Ingestion** | Data Pipeline | **VERIFIED** | DC01 Sysmon Event ID 1 forwarded to Splunk index `main`. |
 | **Splunk Detection (`.spl`)** | Detection Engineering | **IMPLEMENTED + TESTED** | Verified against benign encoded PowerShell test on DC01. |
 | **Sigma Rule (`.yml`)** | Detection Engineering | **IMPLEMENTED, UNVALIDATED** | Rule defined; automated pipeline conversion pending. |
-| **AI Investigator Agent** | Automation & LLM | **PLANNED** | Read-only Splunk REST API integration not yet built. |
+| **AI Investigator Agent** | Automation & LLM | **PLANNED** | Read-only Splunk search client not yet built; authentication behavior under Splunk Free to be verified. |
 | **Policy Engine & Gate** | Security Controls | **PLANNED** | Deterministic rule-checking framework not yet built. |
 | **Response Actions** | SOAR / Containment | **PLANNED (SIMULATED)** | No real containment exists; future response actions will be simulated. |
 

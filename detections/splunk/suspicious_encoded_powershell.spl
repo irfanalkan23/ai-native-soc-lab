@@ -1,12 +1,3 @@
-```
-Detection Name: Suspicious Encoded PowerShell Execution
-Status: IMPLEMENTED + TESTED
-Data Source: Splunk (sourcetype="XmlWinEventLog:Microsoft-Windows-Sysmon/Operational", EventID=1)
-MITRE ATT&CK: T1059.001 (Command and Scripting Interpreter: PowerShell)
-Known Limitation: Relies on runtime rex extraction from raw Sysmon XML as fields are not yet pre-indexed
-Scope: Lab validation only (verified against controlled benign test on DC01)
-```
-
 index=main sourcetype="XmlWinEventLog:Microsoft-Windows-Sysmon/Operational" "<EventID>1</EventID>"
 | rex field=_raw "<Data Name='Image'>(?<Image>[^<]+)"
 | rex field=_raw "<Data Name='CommandLine'>(?<CommandLine>[^<]+)"

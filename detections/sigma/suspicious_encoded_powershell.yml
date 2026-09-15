@@ -17,7 +17,6 @@ detection:
   selection_image:
     Image|endswith:
       - '\powershell.exe'
-      - '\pwsh.exe'
 
   selection_encoded:
     CommandLine|contains:

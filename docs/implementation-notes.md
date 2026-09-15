@@ -87,6 +87,13 @@ powershell.exe -NoProfile -EncodedCommand VwByAGkAdABlAC0ASABvAHMAdAAgACcAQQBJAC
 
 ## 5. SPL Detection Results
 
+### Detection Metadata
+* **Detection Name**: Suspicious Encoded PowerShell Execution
+* **Status**: IMPLEMENTED + TESTED
+* **Data Source**: Splunk (`sourcetype="XmlWinEventLog:Microsoft-Windows-Sysmon/Operational"`, `EventID=1`)
+* **MITRE ATT&CK**: T1059.001 (Command and Scripting Interpreter: PowerShell)
+* **Scope**: Lab validation only (verified against controlled benign test on DC01)
+
 ### Tested SPL Query
 ```spl
 index=main sourcetype="XmlWinEventLog:Microsoft-Windows-Sysmon/Operational" "<EventID>1</EventID>"
@@ -129,12 +136,12 @@ index=main sourcetype="XmlWinEventLog:Microsoft-Windows-Sysmon/Operational" "<Ev
 ## 8. Known Limitations
 
 1. **Search-Time Rex Extraction**: The SPL query relies on regex parsing of `_raw` XML text at search time. In high-volume production deployments, pre-indexed field extraction via props.conf/transforms.conf or add-ons (Splunk Add-on for Microsoft Sysmon) is preferred for performance.
-2. **Flag Coverage**: The current SPL specifically looks for `-(encodedcommand|enc)`. Alternate variations or PowerShell parameter abbreviations (e.g., `-e`, `-enco`, `-encodedc`) are covered in full Sigma definitions but can be expanded in SPL.
-3. **Splunk Free Authentication**: Splunk Free disables native role-based user authentication and token creation. Programmatic API access in later phases requires using basic auth or configured local service tokens.
+2. **Flag Coverage**: The current SPL and Sigma rule specifically inspect for `-(encodedcommand|enc)`. Additional PowerShell parameter abbreviations (e.g., `-e`, `-enco`, `-encodedc`) can be tested and added in future detection refinements.
+3. **Splunk Free API & Authentication Behavior**: In Splunk Free, standard role-based access control (RBAC) and user token management operate differently than in Splunk Enterprise with an active license. The exact REST API authentication behavior, session management, and endpoint availability will be directly verified against the running Splunk instance before committing to a specific programmatic client architecture.
 
 ---
 
 ## 9. Next Milestone
 
-* **Next Step**: Establish read-only programmatic Splunk access for the AI investigator component (querying alerts/events via Splunk REST API using least-privilege credentials).
+* **Next Step**: Investigate and verify programmatic search access against the Splunk server (testing REST API authentication behavior under Splunk Free) to implement a read-only search client.
 * **Scope Restriction**: No autonomous containment, no shell access, no direct administrative actions.
