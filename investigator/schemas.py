@@ -26,6 +26,15 @@ class ConfidenceLevel(str, Enum):
 
 ALLOWED_CONFIDENCE_LEVELS = frozenset({"low", "medium", "high"})
 
+# --- Output size bounds for model-facing content ---
+# These are enforced in InvestigationResult to prevent unbounded model output.
+MAX_SUMMARY_LENGTH = 2000
+MAX_RECOMMENDED_STEP_LENGTH = 500
+MAX_OBSERVATIONS = 20
+MAX_OBSERVATION_LENGTH = 500
+MAX_SUSPICIOUS_INDICATORS = 20
+MAX_EVIDENCE_REFS = 20
+
 
 @dataclass(frozen=True)
 class InvestigationInput:
@@ -91,10 +100,18 @@ class InvestigationResult:
         """Validate required output fields, confidence levels, and normalize collections to tuples."""
         if type(self.summary) is not str or not self.summary.strip():
             raise SchemaValidationError("Field 'summary' must be a non-empty string")
+        if len(self.summary) > MAX_SUMMARY_LENGTH:
+            raise SchemaValidationError(
+                f"Field 'summary' length {len(self.summary)} exceeds maximum {MAX_SUMMARY_LENGTH}"
+            )
 
         if type(self.recommended_next_step) is not str or not self.recommended_next_step.strip():
             raise SchemaValidationError(
                 "Field 'recommended_next_step' must be a non-empty string"
+            )
+        if len(self.recommended_next_step) > MAX_RECOMMENDED_STEP_LENGTH:
+            raise SchemaValidationError(
+                f"Field 'recommended_next_step' length {len(self.recommended_next_step)} exceeds maximum {MAX_RECOMMENDED_STEP_LENGTH}"
             )
 
         if self.confidence_level not in ALLOWED_CONFIDENCE_LEVELS:
@@ -115,6 +132,13 @@ class InvestigationResult:
             "suspicious_indicators",
             "evidence_refs",
         )
+        # Per-field count and element-length limits
+        _count_limits = {
+            "observations": MAX_OBSERVATIONS,
+            "suspicious_indicators": MAX_SUSPICIOUS_INDICATORS,
+            "evidence_refs": MAX_EVIDENCE_REFS,
+        }
+
         for field in collection_fields:
             raw_val = getattr(self, field)
             if not isinstance(raw_val, (list, tuple)):
@@ -122,7 +146,14 @@ class InvestigationResult:
                     f"Field '{field}' must be a list or tuple of strings, got {type(raw_val).__name__}"
                 )
 
-            # Per-element validation: every item must be non-empty string exactly
+            # Count bound (checked before per-element work)
+            max_count = _count_limits.get(field)
+            if max_count is not None and len(raw_val) > max_count:
+                raise SchemaValidationError(
+                    f"Field '{field}' has {len(raw_val)} elements; maximum is {max_count}"
+                )
+
+            # Per-element validation: every item must be a non-empty string
             validated_elements = []
             for idx, elem in enumerate(raw_val):
                 if type(elem) is not str:
@@ -132,6 +163,11 @@ class InvestigationResult:
                 if not elem.strip():
                     raise SchemaValidationError(
                         f"Element at index {idx} in '{field}' cannot be empty or whitespace-only"
+                    )
+                # Per-element length bound for observations
+                if field == "observations" and len(elem) > MAX_OBSERVATION_LENGTH:
+                    raise SchemaValidationError(
+                        f"Element at index {idx} in 'observations' length {len(elem)} exceeds maximum {MAX_OBSERVATION_LENGTH}"
                     )
                 validated_elements.append(elem)
 

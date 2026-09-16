@@ -7,6 +7,12 @@ from investigator.schemas import (
     InvestigationInput,
     InvestigationResult,
     SchemaValidationError,
+    MAX_SUMMARY_LENGTH,
+    MAX_RECOMMENDED_STEP_LENGTH,
+    MAX_OBSERVATIONS,
+    MAX_OBSERVATION_LENGTH,
+    MAX_SUSPICIOUS_INDICATORS,
+    MAX_EVIDENCE_REFS,
 )
 
 
@@ -204,6 +210,78 @@ class TestInvestigationSchemas(unittest.TestCase):
 
                     with self.assertRaises(SchemaValidationError):
                         InvestigationResult(**kwargs)
+
+
+class TestInvestigationResultSizeBounds(unittest.TestCase):
+    """Test output size bounds on InvestigationResult to prevent unbounded model output."""
+
+    def _valid_kwargs(self) -> dict:
+        """Return a base set of valid kwargs for InvestigationResult construction."""
+        return {
+            "summary": "Valid summary.",
+            "observations": ["obs1"],
+            "decoded_command": None,
+            "mitre_techniques": ["T1059.001"],
+            "suspicious_indicators": ["indicator1"],
+            "recommended_next_step": "Close alert.",
+            "confidence_level": "high",
+            "evidence_refs": ["ref1"],
+        }
+
+    def test_summary_too_long_fails(self) -> None:
+        """Proof: summary exceeding MAX_SUMMARY_LENGTH fails closed."""
+        kw = self._valid_kwargs()
+        kw["summary"] = "x" * (MAX_SUMMARY_LENGTH + 1)
+        with self.assertRaises(SchemaValidationError) as ctx:
+            InvestigationResult(**kw)
+        self.assertIn("exceeds maximum", str(ctx.exception))
+
+    def test_summary_at_max_length_passes(self) -> None:
+        """Verify summary of exactly MAX_SUMMARY_LENGTH characters is accepted."""
+        kw = self._valid_kwargs()
+        kw["summary"] = "x" * MAX_SUMMARY_LENGTH
+        result = InvestigationResult(**kw)
+        self.assertEqual(len(result.summary), MAX_SUMMARY_LENGTH)
+
+    def test_recommended_step_too_long_fails(self) -> None:
+        """Proof: recommended_next_step exceeding MAX_RECOMMENDED_STEP_LENGTH fails closed."""
+        kw = self._valid_kwargs()
+        kw["recommended_next_step"] = "x" * (MAX_RECOMMENDED_STEP_LENGTH + 1)
+        with self.assertRaises(SchemaValidationError) as ctx:
+            InvestigationResult(**kw)
+        self.assertIn("exceeds maximum", str(ctx.exception))
+
+    def test_observations_count_too_many_fails(self) -> None:
+        """Proof: more than MAX_OBSERVATIONS items in observations fails closed."""
+        kw = self._valid_kwargs()
+        kw["observations"] = [f"obs{i}" for i in range(MAX_OBSERVATIONS + 1)]
+        with self.assertRaises(SchemaValidationError) as ctx:
+            InvestigationResult(**kw)
+        self.assertIn("maximum", str(ctx.exception))
+
+    def test_observation_element_too_long_fails(self) -> None:
+        """Proof: individual observation string exceeding MAX_OBSERVATION_LENGTH fails closed."""
+        kw = self._valid_kwargs()
+        kw["observations"] = ["x" * (MAX_OBSERVATION_LENGTH + 1)]
+        with self.assertRaises(SchemaValidationError) as ctx:
+            InvestigationResult(**kw)
+        self.assertIn("exceeds maximum", str(ctx.exception))
+
+    def test_suspicious_indicators_count_too_many_fails(self) -> None:
+        """Proof: more than MAX_SUSPICIOUS_INDICATORS items fails closed."""
+        kw = self._valid_kwargs()
+        kw["suspicious_indicators"] = [f"ind{i}" for i in range(MAX_SUSPICIOUS_INDICATORS + 1)]
+        with self.assertRaises(SchemaValidationError) as ctx:
+            InvestigationResult(**kw)
+        self.assertIn("maximum", str(ctx.exception))
+
+    def test_evidence_refs_count_too_many_fails(self) -> None:
+        """Proof: more than MAX_EVIDENCE_REFS items fails closed."""
+        kw = self._valid_kwargs()
+        kw["evidence_refs"] = [f"ref{i}" for i in range(MAX_EVIDENCE_REFS + 1)]
+        with self.assertRaises(SchemaValidationError) as ctx:
+            InvestigationResult(**kw)
+        self.assertIn("maximum", str(ctx.exception))
 
 
 if __name__ == "__main__":

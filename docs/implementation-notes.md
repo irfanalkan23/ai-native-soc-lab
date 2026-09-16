@@ -239,10 +239,63 @@ A total of 56 unit tests across 4 test suites were executed and verified:
 
 ---
 
-## 11. Next Milestone
+## 11. Milestone 3B-1: Provider-Neutral LLM Interface & Bounded Orchestration
 
-* **Next Step (Milestone 3B)**: Integrate an LLM investigator using structured tool calling over the deterministic `ToolRouter` and `InvestigationResult` schema.
-* **Scope Restriction**: Read-only investigation only; no autonomous containment, no shell execution, no destructive tools.
+### Overview
+Milestone 3B-1 builds the complete AI-investigator orchestration boundary without connecting to any live LLM provider. The architecture enforces the principle *AI proposes / interprets; deterministic code validates, routes, limits, and enforces*. No external APIs, no network model calls, and no third-party dependencies are introduced.
 
+### Implemented Components
+1. **Provider-Neutral Model Interface (`investigator/model.py`)**:
+   - `INVESTIGATOR_SYSTEM_INSTRUCTIONS`: Static constant defining the untrusted-data boundary, permitted tools, unavailable capabilities, and final-response contract for any future LLM provider.
+   - `DecisionType` enum: `TOOL_REQUEST`, `FINAL_RESULT`.
+   - `ToolRequest` (frozen dataclass): Model-generated tool invocation. Arguments are validated as JSON-safe primitives only (`str`, `int`, `bool`, `None`); nested dicts/lists are rejected at the model boundary. Arguments are stored as `MappingProxyType` (immutable copy of the caller's dict), preventing post-construction mutation.
+   - `ModelDecision` (frozen dataclass): Discriminated union enforcing exactly one branch — either `tool_request` or `final_result`, never both, never neither.
+   - `ModelRequest` (frozen dataclass): Input to the model containing system instructions, the alert input, accumulated (sanitized) tool results, and remaining tool budget. Budget must be a non-negative `int` (booleans rejected).
+2. **Structured Tool Result Envelope (`investigator/tool_result.py`)**:
+   - `ToolResultEnvelope` (frozen dataclass): Sanitized, bounded wrapper for tool output. `result_text` is enforced to `MAX_RESULT_TEXT_LENGTH = 4096` characters. No raw Python exceptions or secrets permitted.
+3. **In-Memory Audit Log (`investigator/audit.py`)**:
+   - `AuditEventType` enum: `MODEL_REQUESTED`, `TOOL_REQUESTED`, `TOOL_ALLOWED`, `TOOL_REJECTED`, `TOOL_COMPLETED`, `FINAL_RESULT_ACCEPTED`, `INVESTIGATION_FAILED`.
+   - `AuditEvent` (frozen dataclass): Structured record with no raw telemetry, decoded scripts, or secrets.
+   - `AuditLog`: Append-only in-memory log. `events()` returns an immutable tuple snapshot in deterministic order.
+4. **Deterministic Fake Model (`investigator/fake_model.py`)**:
+   - `FakeModel`: Pre-configured with a fixed `list[ModelDecision]` sequence. Returns decisions in order; raises `FakeModelExhaustedError` when exhausted. No network, no randomness, no dynamic imports.
+5. **Bounded Investigation Orchestrator (`investigator/orchestrator.py`)**:
+   - `MAX_TOOL_CALLS = 3` and `MAX_MODEL_DECISIONS = MAX_TOOL_CALLS + 1 = 4` (independent counters).
+   - Explicit `for` loop — no recursion, no unbounded iteration.
+   - Invalid/forbidden tool requests (`ToolValidationError`: unknown tool, arbitrary SPL, arbitrary URL, bad arguments) terminate the investigation immediately (`OrchestratorError`).
+   - Allowed-tool execution failures (`ToolExecutionError`) produce a `success=False` `ToolResultEnvelope`; the model may still produce a final result within its remaining budget.
+   - Tool output is serialized deterministically to JSON via `_serialize_tool_result()`. If output exceeds `MAX_RESULT_TEXT_LENGTH`, a sanitized `error_code="RESULT_TOO_LARGE"` envelope is produced.
+   - Model never receives Python callables, Splunk clients, or raw exceptions.
+   - `InvestigationResult` validation (including size bounds) is enforced at schema construction time.
+6. **`investigator/schemas.py` — Output Size Bounds**:
+   - `MAX_SUMMARY_LENGTH = 2000`, `MAX_RECOMMENDED_STEP_LENGTH = 500`
+   - `MAX_OBSERVATIONS = 20`, `MAX_OBSERVATION_LENGTH = 500`
+   - `MAX_SUSPICIOUS_INDICATORS = 20`, `MAX_EVIDENCE_REFS = 20`
+   - All enforced in `InvestigationResult.__post_init__` with `SchemaValidationError`.
+
+### Not Yet Implemented (Planned)
+- Live LLM provider integration (e.g., OpenAI, Anthropic, Gemini)
+- External threat-intelligence API lookups
+- Numeric risk scoring
+- Persistent audit log (JSONL to disk)
+- Policy gate for response actions
+- Human approval workflow
+- Simulated response executor
+
+### Unit Test Verification
+A total of 129 unit tests across 5 test modules were executed and verified:
+* `tests/test_gateway_policy.py`: 15 tests (Milestone 2 query validation)
+* `tests/test_splunk_search.py`: 14 tests (Milestone 2 search client)
+* `tests/test_investigator_schemas.py`: 14 tests (Milestone 3A schemas + Milestone 3B-1 size bounds)
+* `tests/test_investigator_tools.py`: 20 tests (Milestone 3A tools and router)
+* `tests/test_investigator_orchestrator.py`: 66 tests (Milestone 3B-1 model interface, fake model, orchestrator, audit validation, ToolResultEnvelope invariants, model return-type guards, oversized-result audit detail, prompt-injection inertness in all evidence fields, static audit detail code regression)
+* **Result**: **129 tests passed, 0 failures, 0 errors** (`Ran 129 tests in 0.395s, OK`).
+
+---
+
+## 12. Next Milestone
+
+* **Next Step (Milestone 3B-2)**: Connect a real LLM provider (e.g., Gemini via Python SDK) as a concrete implementation of the model interface, with the orchestrator unchanged.
+* **Scope Restriction**: Read-only investigation only; no autonomous containment, no shell execution, no destructive tools. Provider credentials must not be committed to the repository.
 
 
