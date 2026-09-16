@@ -274,7 +274,6 @@ Milestone 3B-1 builds the complete AI-investigator orchestration boundary withou
    - All enforced in `InvestigationResult.__post_init__` with `SchemaValidationError`.
 
 ### Not Yet Implemented (Planned)
-- Live LLM provider integration (e.g., OpenAI, Anthropic, Gemini)
 - External threat-intelligence API lookups
 - Numeric risk scoring
 - Persistent audit log (JSONL to disk)
@@ -293,9 +292,113 @@ A total of 129 unit tests across 5 test modules were executed and verified:
 
 ---
 
-## 12. Next Milestone
+## 12. Milestone 3B-2 — OpenAI Responses API Provider Adapter
 
-* **Next Step (Milestone 3B-2)**: Connect a real LLM provider (e.g., Gemini via Python SDK) as a concrete implementation of the model interface, with the orchestrator unchanged.
-* **Scope Restriction**: Read-only investigation only; no autonomous containment, no shell execution, no destructive tools. Provider credentials must not be committed to the repository.
+**Status**: IMPLEMENTED · UNIT TESTED · LIVE TESTED
 
+### Components
+
+#### [NEW] `investigator/providers/__init__.py`
+Package declaration for the provider layer.
+
+#### [NEW] `investigator/providers/openai_provider.py`
+OpenAI Responses API provider adapter implementing the provider-neutral model interface.
+
+**Architecture guarantee**: Pure translator only.
+```
+ModelRequest → OpenAI Responses API → validated ModelDecision
+```
+The adapter never invokes `ToolRouter`, `SplunkSearchClient`, `subprocess`, or any investigator tool directly.
+
+**Configuration** (read from `os.environ` only, never from `.env` directly):
+- `OPENAI_API_KEY` — non-empty str, no pattern validation, never logged
+- `OPENAI_MODEL` — non-empty str, max 128 chars
+
+**Bounds**:
+- `MAX_OUTPUT_TOKENS = 1024` — intentional operational cap for concise investigation decisions. The local `InvestigationResult` schema permits larger theoretical maximum payloads, but the provider is deliberately constrained to produce substantially smaller practical responses.
+- `REQUEST_TIMEOUT = 30.0` seconds
+- `MAX_RETRIES = 2` (transient network/provider errors only)
+- `MAX_RAW_RESPONSE_LENGTH = 8192` characters
+
+**Prompt-injection boundary**:
+- `instructions=` parameter: trusted static system instructions + JSON output contract (provider-specific)
+- `input=` parameter: untrusted serialized `InvestigationInput` + prior tool results (labelled `UNTRUSTED_EVIDENCE_JSON`)
+- All 10 `InvestigationInput` fields explicitly labelled as untrusted data
+- Evidence never concatenated into the trusted instruction string
+
+**Response parsing**: Bounded JSON mode (`text.format.type = json_object`). Every field validated deterministically into local dataclasses. No SDK objects returned to caller.
+
+**Error sanitization**: All exceptions carry short machine-readable codes only. No API key, HTTP headers, or raw response body ever appears in exceptions.
+
+**Sanitized exception classes**:
+- `OpenAIConfigurationError` — env var missing, empty, or out-of-bounds
+- `OpenAIRequestError` — timeout, auth failure, rate limit, HTTP error
+- `OpenAIResponseError` — empty output, malformed JSON, unknown decision_type, etc.
+
+#### [NEW] `tests/test_openai_provider.py`
+54-test offline suite. Zero live API calls (all SDK interactions mocked).
+
+#### [NEW] `tests/live/test_openai_smoke.py`
+Live smoke tests — skipped automatically when credentials are absent.
+
+#### [NEW] `requirements.txt`
+Declares the single third-party dependency introduced by Milestone 3B-2:
+```
+openai==2.16.0
+```
+`python-dotenv` is **not** added. The core adapter reads `os.environ` directly; `.env` loading is the caller's responsibility (e.g., shell `source .env` or IDE launch configuration).
+
+#### [MODIFIED] `.env.example`
+Added `OPENAI_API_KEY=` and `OPENAI_MODEL=` placeholders. `.env` remains Git-ignored.
+
+### Live Test Results
+
+**Connectivity smoke test** (`gpt-5.6-sol`):
+- Status: **PASS**
+- Decision type returned: `TOOL_REQUEST`
+- Tool requested: `decode_base64_powershell` with correct encoded argument
+- No secrets printed; no raw headers exposed
+
+**Live orchestrated investigation** (`INC-SMOKE-001`):
+- Status: **PASS** (21.7 seconds, 4 model decisions)
+- Confidence: `medium`
+- Summary: *"PowerShell was launched on DC01 under SOCLAB\\Administrator by cmd.exe using non-interactive, no-profile, Base64-encoded execution..."*
+- **Splunk**: `bounded_splunk_search` was served by a `MagicMock` returning `[]`. This is **not** a test of real Splunk connectivity.
+- **`execution_failed` at seq=11**: This came from the **real local `map_mitre_technique` tool** raising `MitreMappingError` (fail_closed=True) when the model passed an unrecognised detection reference. It is not a Splunk failure. The model recovered and produced `FINAL_RESULT`.
+
+**Sanitized audit trail** (14 events):
+```
+seq=00  MODEL_REQUESTED               decision_idx=0
+seq=01  TOOL_REQUESTED                tool_requested
+seq=02  TOOL_ALLOWED                  tool_allowed
+seq=03  TOOL_COMPLETED                ok
+seq=04  MODEL_REQUESTED               decision_idx=1
+seq=05  TOOL_REQUESTED                tool_requested
+seq=06  TOOL_ALLOWED                  tool_allowed
+seq=07  TOOL_COMPLETED                ok
+seq=08  MODEL_REQUESTED               decision_idx=2
+seq=09  TOOL_REQUESTED                tool_requested
+seq=10  TOOL_ALLOWED                  tool_allowed
+seq=11  TOOL_COMPLETED                execution_failed
+seq=12  MODEL_REQUESTED               decision_idx=3
+seq=13  FINAL_RESULT_ACCEPTED         ok
+```
+All audit detail codes are static — no model-supplied strings, URLs, or decoded content in any event.
+
+### Unit Test Verification
+A total of 183 unit tests across 6 test modules were executed and verified:
+* `tests/test_gateway_policy.py`: 15 tests (Milestone 2 query validation)
+* `tests/test_splunk_search.py`: 14 tests (Milestone 2 search client)
+* `tests/test_investigator_schemas.py`: 14 tests (Milestone 3A schemas + 3B-1 size bounds)
+* `tests/test_investigator_tools.py`: 20 tests (Milestone 3A tools and router)
+* `tests/test_investigator_orchestrator.py`: 66 tests (Milestone 3B-1 orchestrator + all hardening passes)
+* `tests/test_openai_provider.py`: 54 tests (Milestone 3B-2 provider adapter — offline, zero live calls)
+* **Result**: **183 tests passed, 0 failures, 0 errors** (`Ran 183 tests in 1.023s, OK`).
+
+---
+
+## 13. Next Milestone
+
+* **Next Step (Milestone 3B-3 / 3C)**: Persistent JSONL audit logging, policy gate for response actions, or human approval workflow.
+* **Scope Restriction**: Read-only investigation only; no autonomous containment, no shell execution, no destructive tools.
 
