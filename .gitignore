@@ -28,3 +28,4 @@ incidents/private/
 screenshots/raw/
 logs/*.log
 *.log
+artifacts/audit/*.jsonl

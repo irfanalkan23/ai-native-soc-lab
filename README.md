@@ -71,7 +71,8 @@ The initial incident scenario covers an execution attempt using obfuscated Power
 | **Sigma Rule (`.yml`)** | Detection Engineering | **IMPLEMENTED, UNVALIDATED** | Rule defined; automated pipeline conversion pending. |
 | **Bounded Splunk Search Client** | Local Integration & Python Gateway | **IMPLEMENTED + TESTED** | Hardened local client; 29 unit tests pass; verified live against Splunk Free localhost export endpoint. |
 | **Investigator Scaffolding & Tool Router** | Triage Scaffolding & Routing | **IMPLEMENTED + UNIT TESTED** | Deterministic schemas, UTF-16LE Base64 decoder, static MITRE mapper, allowlisted tool router. |
-| **AI Investigator Agent (LLM Integration)** | Automation & LLM | **PLANNED** | Tool-calling model integration planned for Milestone 3B. |
+| **AI Investigator Agent & Orchestrator** | Automation & LLM | **IMPLEMENTED + TESTED** | Bounded orchestrator, FakeModel, OpenAI Responses API adapter; offline test coverage. |
+| **Audit Logging (JSONL)** | Audit & Observability | **IMPLEMENTED + TESTED** | Local append-only JSONL audit trail with strict field allowlist and exact-type checks. |
 | **Policy Engine & Gate** | Security Controls | **PLANNED** | Deterministic rule-checking framework not yet built. |
 | **Response Actions** | SOAR / Containment | **PLANNED (SIMULATED)** | No real containment exists; future response actions will be simulated. |
 
@@ -127,7 +128,7 @@ Located in [`detections/sigma/suspicious_encoded_powershell.yml`](detections/sig
 
 - [x] **Milestone 1**: Lab environment deployment, Sysmon telemetry verification, controlled adversary-tradecraft simulation (benign test), and SPL detection engineering.
 - [x] **Milestone 2**: Bounded read-only Splunk search client (Python) operating under least-privilege principles and verified end-to-end against live telemetry.
-- [ ] **Milestone 3**: AI investigation engine (Milestone 3A contract scaffolding complete; LLM tool-calling agent pending).
+- [x] **Milestone 3**: AI investigation engine (3A: deterministic tool router; 3B: bounded orchestrator & OpenAI adapter; 3C: local append-only JSONL audit trail).
 - [ ] **Milestone 4**: Deterministic policy enforcement layer and human-approval workflow.
 - [ ] **Milestone 5**: Simulated response executor and structured incident report generator.
-- [ ] **Milestone 6**: Prompt injection testing, adversarial robustness evaluation, and audit logging.
+- [ ] **Milestone 6**: Adversarial robustness evaluation and prompt injection testing.

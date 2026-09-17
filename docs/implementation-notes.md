@@ -1,4 +1,4 @@
-# AI-Native SOC Lab — Implementation Notes (Milestones 1–3A)
+# AI-Native SOC Lab — Implementation Notes (Milestones 1–3C)
 
 ## Overview
 
@@ -397,8 +397,98 @@ A total of 183 unit tests across 6 test modules were executed and verified:
 
 ---
 
-## 13. Next Milestone
+## 13. Milestone 3C — Persistent JSONL Audit Logging
 
-* **Next Step (Milestone 3B-3 / 3C)**: Persistent JSONL audit logging, policy gate for response actions, or human approval workflow.
+### Architectural Principle
+```
+AI proposes → deterministic orchestration / tool controls →
+audit events generated → sanitized structured events persisted
+```
+
+The persistent audit sink consumes strictly validated in-memory `AuditEvent` instances. It does not introduce any new untrusted-data channel.
+
+### Artifact Status Matrix
+
+| Component | Role | Security Invariant | Status |
+| :--- | :--- | :--- | :--- |
+| `JsonlAuditWriter` | Append-only JSONL audit sink | Consumes strictly validated `AuditEvent` (exact-type check `type(event) is AuditEvent`) | **IMPLEMENTED + UNIT TESTED** |
+| Explicit Field Allowlist | Schema boundary enforcement | Persists only `sequence`, `event_type`, `incident_id`, `detail_code` | **IMPLEMENTED + UNIT TESTED** |
+| Append-Only Semantics | Audit persistence integrity | Opened in `"a"` mode; existing records never truncated or overwritten | **IMPLEMENTED + UNIT TESTED** |
+| Batch Pre-Validation | Failure atomicity in `write_events` | Validates and serializes all items before opening file; fails closed on any invalid record | **IMPLEMENTED + UNIT TESTED** |
+| Sanitized Writer Errors | Information-leakage prevention | Static codes (`audit_invalid_event`, `audit_invalid_path`, `audit_write_failed`); no OS errors leaked | **IMPLEMENTED + UNIT TESTED** |
+| Git Runtime Exclusion | Hygiene and secret prevention | `artifacts/audit/*.jsonl` excluded in `.gitignore` | **IMPLEMENTED + TESTED** |
+| Offline Smoke Script | End-to-end verification | `scripts/run_audit_smoke.py` uses `FakeModel` only; persists 6 events | **IMPLEMENTED + TESTED** |
+
+### Implementation Details
+
+#### [NEW] `investigator/audit_writer.py`
+Persistent JSONL audit writer module:
+- `DEFAULT_AUDIT_LOG_PATH = Path("artifacts/audit/agent_audit.jsonl")`
+- `JsonlAuditWriter.__init__(path)`: Validates path (rejects empty strings, non-path types, directory paths, and empty filenames).
+- `JsonlAuditWriter.write_event(event)`: Validates `type(event) is AuditEvent`, serializes via explicit allowlist, creates parent directory if needed, appends one JSON line with `\n`, closes file.
+- `JsonlAuditWriter.write_events(events)`: Materializes iterable, validates every item is strictly `AuditEvent`, serializes all records first, then opens file once and appends all lines. Fails closed if any item is invalid.
+- Deterministic formatting: `sort_keys=True`, `separators=(',', ':')`, `ensure_ascii=False`.
+- Sanitized exceptions: `AuditWriterError`, `AuditPathError`, `AuditWriteError`.
+
+#### [NEW] `tests/test_audit_writer.py`
+28-test comprehensive offline suite:
+- Single event write, multiple events write, append preservation, valid JSON per line.
+- Allowlisted fields only, `event_type` string serialization, sequence preservation.
+- Validation: Rejection of `dict`, `None`, arbitrary object, string, non-iterable.
+- Exact-type validation regression test: `AuditEvent` subclasses rejected.
+- All-or-nothing batch validation test: Mixed batch with invalid item writes zero lines.
+- Path validation: Empty paths, directories, and invalid types rejected.
+- Security: No `__dict__` or extra fields serialized; no raw telemetry or commands; no `OPENAI_API_KEY` accessed; no `subprocess`/shell imported or used; no `gateway` imported.
+- Failure handling: Sanitized `AuditWriteError` on I/O failure without OS error text.
+- Determinism: Stable sorted keys and compact formatting.
+- Integration: Full offline orchestrator pipeline with `FakeModel` + `ToolRouter` + `AuditLog` + `JsonlAuditWriter` verified 1-to-1 against reopened JSONL.
+
+#### [NEW] `scripts/run_audit_smoke.py`
+Standalone offline smoke test:
+- Uses `FakeModel` only (zero live model calls, zero secrets).
+- Runs benign investigation against local `ToolRouter`.
+- Persists audit events to `artifacts/audit/agent_audit.jsonl`.
+- Outputs summary only (event count, destination path, status). Never prints audit contents or secrets.
+
+#### [MODIFIED] `.gitignore`
+Added `artifacts/audit/*.jsonl` to ensure runtime audit trails are ignored while preserving the `artifacts/` folder structure for future fixtures.
+
+#### [MODIFIED] `README.md`
+Updated status table and roadmap to reflect Milestone 3 completion and local append-only JSONL audit trail without overstating guarantees.
+
+### Explicit Limitations (Milestone 3C)
+- **Local JSONL Only**: Log records are persisted strictly to the local filesystem.
+- **No Cryptographic Integrity**: No cryptographic signing, HMAC, or hash chains are implemented in V1.
+- **No Log Rotation**: No log rotation framework is included; files are append-only.
+- **No Remote Forwarding**: No syslog, Splunk forwarding, cloud logging, or SIEM ingestion.
+- **No Deduplication / Idempotency**: If the caller invokes write operations multiple times for the same event, duplicate lines will be recorded.
+- **Durability Guarantee**: V1 closes the file after each append operation, providing simple local durability appropriate for this lab. Crash-proof journaling is not claimed.
+
+### Planned / Not Yet Implemented
+- Numeric risk scoring
+- Deterministic response policy engine
+- Human-in-the-loop authorization gate
+- Simulated response executor
+- Jira ticket creation
+- Threat Intelligence (TI) enrichment
+- Automated benchmark evaluation
+- Signed / tamper-evident audit logs
+
+### Unit Test Verification
+A total of 211 unit tests across 7 test modules were executed and verified:
+* `tests/test_gateway_policy.py`: 15 tests (Milestone 2 query validation)
+* `tests/test_splunk_search.py`: 14 tests (Milestone 2 search client)
+* `tests/test_investigator_schemas.py`: 14 tests (Milestone 3A schemas + 3B-1 size bounds)
+* `tests/test_investigator_tools.py`: 20 tests (Milestone 3A tools and router)
+* `tests/test_investigator_orchestrator.py`: 66 tests (Milestone 3B-1 orchestrator + all hardening passes)
+* `tests/test_openai_provider.py`: 54 tests (Milestone 3B-2 provider adapter — offline, zero live calls)
+* `tests/test_audit_writer.py`: 28 tests (Milestone 3C persistent JSONL audit writer)
+* **Result**: **211 tests passed, 0 failures, 0 errors** (`Ran 211 tests in 1.127s, OK`).
+
+---
+
+## 14. Next Milestone
+
+* **Next Step (Milestone 4)**: Deterministic policy enforcement engine and human-in-the-loop approval workflow.
 * **Scope Restriction**: Read-only investigation only; no autonomous containment, no shell execution, no destructive tools.
 
