@@ -671,7 +671,66 @@ A total of 305 unit tests across 10 test modules were executed and verified:
 
 ---
 
-## 16. Next Milestone
+## 16. Milestone 4 Integration Slice — End-to-End Demo Harness
+
+### Overview
+The End-to-End Demo Integration Harness (`scripts/run_end_to_end_demo.py`) stitches together all implemented and tested components from Milestones 1 through 4 into a single, cohesive, interview-friendly command-line workflow. It provides a complete demonstration of the security architecture:
+
+$$\text{Detection / Telemetry} \longrightarrow \text{Bounded Splunk Retrieval} \longrightarrow \text{Deterministic Tools} \longrightarrow \text{AI Investigation} \longrightarrow \text{Risk Policy Engine} \longrightarrow \text{Human Approval Gate} \longrightarrow \text{Simulated Response} \longrightarrow \text{Audit Trail} \longrightarrow \text{Safe Summary}$$
+
+### Architectural & Security Invariants
+* **Zero New Authority**: Pure composition-only orchestration over existing modules (`gateway/`, `investigator/`). Zero new tools, policy rules, action types, or model authorities.
+* **Bounded Splunk Free Boundary**:
+  * Live mode targets local Splunk Free on `https://localhost:8089/services/search/jobs/export`.
+  * Designed to run directly on **Splunk-Server (`192.168.1.101`)**.
+  * Rejects arbitrary SPL, URL overrides, or remote REST logins.
+* **Exact Benign Fixture Matching & Ordering**:
+  * In `--mode live-benign`, bounded search retrieves up to 5 events from DC01.
+  * Events are locally sorted by timestamp (newest first). Unparseable timestamps are safely ignored.
+  * The newest event whose deterministic Base64 decoding exactly matches `Write-Host 'AI-NativeSOC-LAB-TEST'` is selected.
+  * If zero events are returned or no returned event matches the exact fixture, the harness fails closed with exit code 1.
+* **Deterministic Synthetic-Critical Mode**:
+  * In `--mode synthetic-critical`, `--provider` is disallowed; the harness strictly uses a deterministic `FakeModel`.
+  * Exercises `ToolRouter` sequentially (`decode_base64_powershell` $\rightarrow$ `map_mitre_technique` $\rightarrow$ `InvestigationResult`).
+  * Reaches deterministic `risk_score = 80`, `CRITICAL`, `APPROVAL_REQUIRED`, `SIMULATE_ENDPOINT_ISOLATION`.
+  * Prompts the operator via `request_cli_approval`:
+    * `approve` $\longrightarrow$ `SimulationStatus.SIMULATED` (`detail_code = "simulated_endpoint_isolation"`).
+    * `deny` (or EOF / invalid retries) $\longrightarrow$ `SimulationStatus.NOT_EXECUTED` (`detail_code = "simulation_blocked_denied"`).
+* **Audit Persistence Semantics (Zero Transactional Rollback Claim)**:
+  * In-memory authorization events (`APPROVAL_GRANTED`, `SIMULATION_COMPLETED`) are required fail-closed security controls.
+  * Optional `--persist-audit` appends events to `artifacts/audit/agent_audit.jsonl` using the existing `JsonlAuditWriter` at the higher-level demo layer.
+  * If writing to JSONL fails, the script exits code 1 with `audit_persistence_failed`, without claiming transactional rollback of the completed in-memory simulation.
+* **Zero Endpoint Mutation**:
+  * All containment remains simulated only. The banner `SIMULATED ONLY — NO ENDPOINT ACTION PERFORMED` is rendered on all executions.
+
+### Artifact Status Matrix
+
+| Component | Role | Security Invariant | Status |
+| :--- | :--- | :--- | :--- |
+| `scripts/run_end_to_end_demo.py` | Integration Demo Harness | Composition-only orchestration; zero new authority | **IMPLEMENTED + TESTED** |
+| `tests/test_end_to_end_demo.py` | Integration Test Suite | 17 comprehensive unit tests covering all modes and edge cases | **IMPLEMENTED + TESTED** |
+| Exact Fixture Selector | Benign Lab Verification | Time-ordered candidate search; exact string matching | **IMPLEMENTED + TESTED** |
+| Deterministic Critical Mode | Human Gate Verification | Pre-configured `FakeModel` exercising `ToolRouter` and reaching score 80 | **IMPLEMENTED + TESTED** |
+| Fail-Closed Boundary | Safe Failure Modes | 0 events, missing fixture, I/O errors, denial $\rightarrow$ fail closed | **IMPLEMENTED + TESTED** |
+
+### Unit Test Verification
+A total of 322 unit tests across 11 test modules were executed and verified:
+* `tests/test_gateway_policy.py`: 15 tests (Milestone 2 query validation)
+* `tests/test_splunk_search.py`: 14 tests (Milestone 2 search client)
+* `tests/test_investigator_schemas.py`: 14 tests (Milestone 3A schemas + 3B-1 size bounds)
+* `tests/test_investigator_tools.py`: 20 tests (Milestone 3A tools and router)
+* `tests/test_investigator_orchestrator.py`: 66 tests (Milestone 3B-1 orchestrator + all hardening passes)
+* `tests/test_openai_provider.py`: 54 tests (Milestone 3B-2 provider adapter — offline, zero live calls)
+* `tests/test_audit_writer.py`: 28 tests (Milestone 3C persistent JSONL audit writer)
+* `tests/test_risk_policy.py`: 44 tests (Milestone 3D deterministic risk & action policy engine)
+* `tests/test_human_approval.py`: 27 tests (Milestone 4 human approval gate and authorization context)
+* `tests/test_simulated_response.py`: 23 tests (Milestone 4 simulated response execution and security isolation)
+* `tests/test_end_to_end_demo.py`: 17 tests (Milestone 4 integration demo harness and boundary tests)
+* **Result**: **322 tests passed, 0 failures, 0 errors**.
+
+---
+
+## 17. Next Milestone
 
 * **Next Step (Milestone 5)**: Structured incident reporting, SOAR artifact generation, and workflow integration.
 * **Scope Restriction**: Read-only investigation, governance, and simulated response; no live endpoint containment, no shell execution, no destructive tools.

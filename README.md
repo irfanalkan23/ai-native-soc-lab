@@ -76,11 +76,51 @@ The initial incident scenario covers an execution attempt using obfuscated Power
 | **Policy Engine & Gate** | Security Controls | **IMPLEMENTED + TESTED** | Deterministic risk and action-policy evaluation; bounded scoring and action mapping. |
 | **Human Approval Gate** | Security Controls / HITL | **IMPLEMENTED + TESTED** | CLI approval gate for consequential actions; bounded retries, exact-type checks, fail-closed denial. |
 | **Simulated Response Executor** | SOAR / Simulation | **IMPLEMENTED + TESTED** | Deterministic authorization binding; records simulated endpoint isolation; zero live execution. |
+| **End-to-End Demo Harness** | Integration / Demo | **IMPLEMENTED + TESTED** | Complete pipeline script (`scripts/run_end_to_end_demo.py`); 17 integration tests pass. |
 | **Response Actions** | Containment Safety | **SIMULATED ONLY** | No real containment exists; endpoint isolation is simulated; zero subprocess, shell, or system mutation. |
+| **Threat-Intelligence Lookups** | Threat Intelligence | **NOT IMPLEMENTED** | External reputation and IOC lookups are planned for future milestones. |
+| **Ticketing Integration (Jira)** | SOAR / Case Management | **NOT IMPLEMENTED** | Automated ticket dispatch is planned for future milestones. |
 
 ---
 
-## 4. Current Verified Lab Infrastructure
+## 4. End-to-End Demo Integration Harness
+
+The integration harness (`scripts/run_end_to_end_demo.py`) stitches together all implemented components into a single interview-friendly workflow without adding new authority or changing existing security boundaries:
+
+```
+detection / incident input
+    -> bounded Splunk evidence retrieval (localhost:8089 on Splunk-Server)
+    -> deterministic decoding & MITRE mapping
+    -> AI investigation (governed by ToolRouter)
+    -> deterministic risk & action policy
+    -> human approval gate (when required)
+    -> simulated response only
+    -> structured audit events
+    -> safe final summary
+```
+
+### Supported Execution Modes
+
+1. **Deterministic Synthetic-Critical Mode** (Run anywhere / offline):
+   ```bash
+   python scripts/run_end_to_end_demo.py --mode synthetic-critical
+   ```
+   * Exercises `ToolRouter`, `RiskPolicyEngine` (deterministic score 80, `CRITICAL`, `APPROVAL_REQUIRED`, `SIMULATE_ENDPOINT_ISOLATION`), interactive human approval (`[approve/deny]`), and response simulation (`SIMULATED` on approve, `NOT_EXECUTED` on deny).
+   * Optional persistence: `--persist-audit` appends the session trail to `artifacts/audit/agent_audit.jsonl`.
+
+2. **Live Benign Lab Mode** (Run locally on Splunk-Server):
+   ```bash
+   python scripts/run_end_to_end_demo.py --mode live-benign --provider fake
+   python scripts/run_end_to_end_demo.py --mode live-benign --provider openai
+   ```
+   * Queries `https://localhost:8089` for up to 5 events from DC01 within lookback window (`--minutes 15`).
+   * Orders results by timestamp (newest first) and selects the exact benign fixture (`Write-Host 'AI-NativeSOC-LAB-TEST'`).
+   * Evaluates to `risk_score = 0`, `LOW`, `NO_ACTION`. Never prompts for human approval.
+   * Fails closed with exit code 1 if the exact fixture is not found in the bounded window.
+
+---
+
+## 5. Current Verified Lab Infrastructure
 
 The physical/virtual infrastructure exists outside this repository in an isolated VirtualBox environment:
 
@@ -99,7 +139,7 @@ The physical/virtual infrastructure exists outside this repository in an isolate
 
 ---
 
-## 5. Telemetry & Detection Status
+## 6. Telemetry & Detection Status
 
 ### Splunk Telemetry Profile
 * **Index**: `main`
@@ -126,7 +166,7 @@ Located in [`detections/sigma/suspicious_encoded_powershell.yml`](detections/sig
 
 ---
 
-## 6. High-Level Project Roadmap
+## 7. High-Level Project Roadmap
 
 - [x] **Milestone 1**: Lab environment deployment, Sysmon telemetry verification, controlled adversary-tradecraft simulation (benign test), and SPL detection engineering.
 - [x] **Milestone 2**: Bounded read-only Splunk search client (Python) operating under least-privilege principles and verified end-to-end against live telemetry.
