@@ -1,4 +1,4 @@
-# AI-Native SOC Lab — Implementation Notes (Milestones 1–3C)
+# AI-Native SOC Lab — Implementation Notes (Milestones 1–3D)
 
 ## Overview
 
@@ -487,8 +487,131 @@ A total of 211 unit tests across 7 test modules were executed and verified:
 
 ---
 
-## 14. Next Milestone
+## 14. Milestone 3D — Deterministic Risk and Action Policy Engine
 
-* **Next Step (Milestone 4)**: Deterministic policy enforcement engine and human-in-the-loop approval workflow.
-* **Scope Restriction**: Read-only investigation only; no autonomous containment, no shell execution, no destructive tools.
+### Architectural Principle
+```
+AI proposes (advisory only)
+  → deterministic context & risk evaluation
+  → deterministic action policy
+  → human approval gate for consequential actions
+  → simulated execution (Milestone 4)
+  → persistent audit logging
+```
+
+The LLM has zero authority over final risk score, thresholds, approval requirements, benign suppression, or action execution.
+
+### Trust Model & Evidence Boundary
+* **STRUCTURALLY VALIDATED BUT UNTRUSTED**:
+  * `InvestigationInput`: raw telemetry strings, user, host, command line, alert-supplied detection identity.
+  * `InvestigationResult`: model hypotheses, confidence rating, suspicious indicators, model-supplied decoded command.
+* **TRUSTED DETERMINISTIC POLICY FACTS**:
+  * `verified_detection_id`: canonical detection identity established by deterministic detection/bootstrap logic (`DET-POWERSHELL-001`).
+  * `deterministic_decoded_command`: output produced directly by the deterministic Base64 decoder tool.
+  * `mitre_technique_id`: output from deterministic mapping rules (`T1059.001`).
+  * `tool_failure_or_incomplete_evidence`: boolean flag indicating whether required tools failed or evidence is incomplete.
+
+### Artifact Status Matrix
+
+| Component | Role | Security Invariant | Status |
+| :--- | :--- | :--- | :--- |
+| `PolicyContext` | Context container | Separates untrusted alert evidence from trusted deterministic facts | **IMPLEMENTED + UNIT TESTED** |
+| `RiskPolicyEngine` | Deterministic risk scoring & policy | Rule-based integer scoring (0–100); LLM has zero authority | **IMPLEMENTED + UNIT TESTED** |
+| Exact Benign Lab Conjunction | Controlled test suppression | Strict conjunction of `verified_detection_id`, exact command, and complete evidence | **IMPLEMENTED + UNIT TESTED** |
+| Action Policy Mapping | Deterministic governance | Strict mapping from risk level / evidence state to allowlisted proposed actions | **IMPLEMENTED + UNIT TESTED** |
+| Consequential Action Boundary | Containment protection | `SIMULATE_ENDPOINT_ISOLATION` strictly mandates human approval (`APPROVAL_REQUIRED`) | **IMPLEMENTED + UNIT TESTED** |
+| Fail-Closed Incomplete Evidence | Escalation safety | Incomplete evidence or tool failure forces minimum `HUMAN_REVIEW`, blocking `NO_ACTION` | **IMPLEMENTED + UNIT TESTED** |
+| Policy Audit Integration | Audit logging | Records `POLICY_EVALUATED` and `APPROVAL_REQUIRED` to in-memory & JSONL audit stream | **IMPLEMENTED + UNIT TESTED** |
+| Offline Policy Smoke Script | End-to-end verification | `scripts/run_policy_smoke.py` tests Scenario A (benign lab) and Scenario B (suspicious) | **TESTED** |
+
+### Implementation Details
+
+#### [NEW] `investigator/policy.py`
+Deterministic risk evaluation and action recommendation policy engine:
+- **Enums**:
+  - `RiskLevel`: `LOW`, `MEDIUM`, `HIGH`, `CRITICAL`
+  - `ActionDisposition`: `NO_ACTION`, `MONITOR`, `HUMAN_REVIEW`, `APPROVAL_REQUIRED`, `BLOCKED`
+  - `ProposedAction`: `NO_ACTION`, `MONITOR`, `CREATE_INCIDENT_RECORD`, `REQUEST_HUMAN_REVIEW`, `SIMULATE_ENDPOINT_ISOLATION`
+- **Constants**:
+  - `BENIGN_LAB_DETECTION_ID = "DET-POWERSHELL-001"`
+  - `EXACT_BENIGN_COMMAND = "Write-Host 'AI-NativeSOC-LAB-TEST'"`
+  - `CONSEQUENTIAL_ACTIONS = frozenset({ProposedAction.SIMULATE_ENDPOINT_ISOLATION})`
+- **Exact Scoring Formula**:
+  - `verified_detection_id == BENIGN_LAB_DETECTION_ID`: +25 (`encoded_powershell_detected`)
+  - `deterministic_decoded_command` available: +10 (`decoded_command_present`)
+  - `mitre_technique_id == "T1059.001"`: +10 (`mitre_t1059_001`)
+  - `tool_failure_or_incomplete_evidence`: +15 (`incomplete_evidence_uncertainty`)
+  - Advisory model signals (strictly additive, escalating only):
+    - $\ge 1$ suspicious indicators: +20 (`suspicious_indicators_present`)
+    - $> 1$ suspicious indicators: +5 (`multiple_suspicious_indicators`)
+    - High model confidence: +10 (`model_confidence_high`)
+    - Medium model confidence: +5 (`model_confidence_medium`)
+    - Low model confidence: +0 (never reduces score)
+  - `risk_score = min(sum(points), 100)` (overridden to `0` if `is_trusted_benign_lab`).
+- **Exact Thresholds**:
+  - `0–24`: `LOW`
+  - `25–49`: `MEDIUM`
+  - `50–74`: `HIGH`
+  - `75–100`: `CRITICAL`
+- **Exact Benign Lab Conjunction**:
+  ```python
+  is_trusted_benign_lab = (
+      context.verified_detection_id == BENIGN_LAB_DETECTION_ID
+      and context.deterministic_decoded_command == EXACT_BENIGN_COMMAND
+      and not context.tool_failure_or_incomplete_evidence
+  )
+  ```
+  Matches strictly override score to `0`, `RiskLevel.LOW`, `ProposedAction.NO_ACTION`, `ActionDisposition.NO_ACTION`, `requires_human_approval = False`.
+- **Exact Action Mapping**:
+  - Trusted Benign Lab: `NO_ACTION` / `NO_ACTION` (approval: False)
+  - LOW (non-benign): `MONITOR` / `MONITOR` (approval: False)
+  - MEDIUM: `REQUEST_HUMAN_REVIEW` / `HUMAN_REVIEW` (approval: False)
+  - HIGH: `CREATE_INCIDENT_RECORD` / `HUMAN_REVIEW` (approval: False)
+  - CRITICAL: `SIMULATE_ENDPOINT_ISOLATION` / `APPROVAL_REQUIRED` (approval: True)
+- **Fail-Closed Incomplete Evidence**:
+  If `tool_failure_or_incomplete_evidence` is True, `NO_ACTION` and `MONITOR` are strictly forbidden; policy enforces at minimum `REQUEST_HUMAN_REVIEW` / `HUMAN_REVIEW` (`fail_closed_incomplete_evidence`).
+
+#### [MODIFY] `investigator/audit.py`
+Added `POLICY_EVALUATED = "POLICY_EVALUATED"` and `APPROVAL_REQUIRED = "APPROVAL_REQUIRED"` to `AuditEventType`.
+
+#### [NEW] `tests/test_risk_policy.py`
+41-test offline suite verifying trust boundaries, exact benign conjunction, scoring bounds, threshold edges, fail-closed enforcement, schema validation, security isolation, audit integration, and end-to-end integration scenarios.
+
+#### [NEW] `scripts/run_policy_smoke.py`
+Offline smoke test evaluating Scenario A (controlled benign lab) and Scenario B (suspicious encoded execution).
+
+### Distinction Between Model Confidence and Deterministic Risk
+* **Model Confidence** (`InvestigationResult.confidence_level`): Evaluates how certain the model is regarding its analytical hypothesis given retrieved evidence.
+* **Deterministic Risk** (`PolicyDecision.risk_score`): Quantifies potential security severity and impact based on policy rules. High confidence on a verified benign test yields `risk_score = 0` (LOW); low confidence on unverified encoded execution increases uncertainty, preventing low-risk suppression.
+
+### Limitations (Milestone 3D)
+* **No Action Execution**: Policy decisions produce recommendations and governance flags only. No automated containment or remediation executes in this milestone.
+* **No Human Approval UI**: Approval flags (`requires_human_approval = True`) are determined, but the interactive human review workflow is deferred to Milestone 4.
+* **No Real Containment**: Endpoint isolation, firewall changes, and account resets remain strictly prohibited.
+
+### Planned / Not Yet Implemented
+* Interactive human approval interface / CLI
+* Simulated response executor
+* Jira ticket integration
+* Threat Intelligence (TI) reputation enrichment
+* Automated adversarial benchmark evaluation
+
+### Unit Test Verification
+A total of 252 unit tests across 8 test modules were executed and verified:
+* `tests/test_gateway_policy.py`: 15 tests (Milestone 2 query validation)
+* `tests/test_splunk_search.py`: 14 tests (Milestone 2 search client)
+* `tests/test_investigator_schemas.py`: 14 tests (Milestone 3A schemas + 3B-1 size bounds)
+* `tests/test_investigator_tools.py`: 20 tests (Milestone 3A tools and router)
+* `tests/test_investigator_orchestrator.py`: 66 tests (Milestone 3B-1 orchestrator + all hardening passes)
+* `tests/test_openai_provider.py`: 54 tests (Milestone 3B-2 provider adapter — offline, zero live calls)
+* `tests/test_audit_writer.py`: 28 tests (Milestone 3C persistent JSONL audit writer)
+* `tests/test_risk_policy.py`: 41 tests (Milestone 3D deterministic risk & action policy engine)
+* **Result**: **252 tests passed, 0 failures, 0 errors** (`Ran 252 tests in 1.189s, OK`).
+
+---
+
+## 15. Next Milestone
+
+* **Next Step (Milestone 4)**: Human-in-the-loop approval workflow and simulated response action execution.
+* **Scope Restriction**: Read-only investigation and policy recommendation; no live endpoint containment, no shell execution, no destructive tools.
 
