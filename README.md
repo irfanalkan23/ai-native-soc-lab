@@ -50,14 +50,14 @@ The initial incident scenario covers an execution attempt using obfuscated Power
 2. **Telemetry Generation**: Microsoft Sysmon captures Process Create (Event ID 1).
 3. **SIEM Ingestion**: Splunk Universal Forwarder delivers events to a dedicated Splunk indexer.
 4. **Detection**: Custom SPL detection identifies the encoded execution.
-5. **AI Investigation *(Planned)***: Automated triage parsing command line parameters and parent process ancestry.
-6. **IOC Enrichment *(Planned)***: Automated reputation checks on extracted artifacts.
-7. **MITRE Mapping**: Current detection is manually mapped to ATT&CK Technique T1059.001 (automated mapping planned during agent triage phase).
-8. **Risk & Confidence Assessment *(Planned)***: Scoring severity based on execution context.
-9. **Policy Gate *(Planned)***: Deterministic evaluation of recommended actions.
-10. **Human Approval *(Planned)***: Operator review before executing response workflows.
-11. **Simulated Response *(Planned)***: Mock containment action record without live endpoint disruption.
-12. **Incident Record *(Planned)***: Comprehensive auditable incident artifact generated.
+5. **AI Investigation**: **IMPLEMENTED / TESTED** — Bounded AI investigator and deterministic ToolRouter for process and command-line triage.
+6. **IOC Enrichment *(Planned)***: Threat-intelligence enrichment not yet implemented.
+7. **MITRE Mapping**: **IMPLEMENTED** — Deterministic local mapping of detections to ATT&CK techniques (broader enrichment remains future work).
+8. **Risk & Confidence Assessment**: **IMPLEMENTED / TESTED** — Advisory model confidence combined with deterministic policy risk scoring.
+9. **Policy Gate**: **IMPLEMENTED / TESTED** — Deterministic risk evaluation and allowlisted action recommendation engine.
+10. **Human Approval**: **IMPLEMENTED / TESTED** — Interactive CLI approval gate requiring explicit authorization for consequential actions.
+11. **Simulated Response**: **IMPLEMENTED / TESTED (SIMULATED ONLY)** — Deterministic response simulation recording mock endpoint isolation; zero real containment.
+12. **Incident Record *(Planned)***: Comprehensive auditable incident artifact generator.
 
 ---
 
@@ -74,7 +74,9 @@ The initial incident scenario covers an execution attempt using obfuscated Power
 | **AI Investigator Agent & Orchestrator** | Automation & LLM | **IMPLEMENTED + TESTED** | Bounded orchestrator, FakeModel, OpenAI Responses API adapter; offline test coverage. |
 | **Audit Logging (JSONL)** | Audit & Observability | **IMPLEMENTED + TESTED** | Local append-only JSONL audit trail with strict field allowlist and exact-type checks. |
 | **Policy Engine & Gate** | Security Controls | **IMPLEMENTED + TESTED** | Deterministic risk and action-policy evaluation; bounded scoring and action mapping. |
-| **Response Actions** | SOAR / Containment | **PLANNED (SIMULATED)** | No real containment exists; future response actions will be simulated. |
+| **Human Approval Gate** | Security Controls / HITL | **IMPLEMENTED + TESTED** | CLI approval gate for consequential actions; bounded retries, exact-type checks, fail-closed denial. |
+| **Simulated Response Executor** | SOAR / Simulation | **IMPLEMENTED + TESTED** | Deterministic authorization binding; records simulated endpoint isolation; zero live execution. |
+| **Response Actions** | Containment Safety | **SIMULATED ONLY** | No real containment exists; endpoint isolation is simulated; zero subprocess, shell, or system mutation. |
 
 ---
 
@@ -128,7 +130,7 @@ Located in [`detections/sigma/suspicious_encoded_powershell.yml`](detections/sig
 
 - [x] **Milestone 1**: Lab environment deployment, Sysmon telemetry verification, controlled adversary-tradecraft simulation (benign test), and SPL detection engineering.
 - [x] **Milestone 2**: Bounded read-only Splunk search client (Python) operating under least-privilege principles and verified end-to-end against live telemetry.
-- [x] **Milestone 3**: AI investigation engine (3A: deterministic tool router; 3B: bounded orchestrator & OpenAI adapter; 3C: local append-only JSONL audit trail; 3D: deterministic risk and action-policy evaluation).
-- [ ] **Milestone 4**: Human-in-the-loop approval workflow and simulated response execution.
-- [ ] **Milestone 5**: Simulated response executor and structured incident report generator.
+- [x] **Milestone 3**: AI investigation engine (3A: deterministic tools/router; 3B: bounded orchestration + OpenAI provider; 3C: persistent local JSONL audit; 3D: deterministic risk and action policy).
+- [x] **Milestone 4**: Human-in-the-loop approval workflow and simulated response execution.
+- [ ] **Milestone 5**: Structured incident report generator and workflow integration.
 - [ ] **Milestone 6**: Adversarial robustness evaluation and prompt injection testing.

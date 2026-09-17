@@ -1,8 +1,8 @@
-# AI-Native SOC Lab — Implementation Notes (Milestones 1–3D)
+# AI-Native SOC Lab — Implementation Notes (Milestones 1–4)
 
 ## Overview
 
-This document records the verification of the initial lab infrastructure, telemetry ingestion pipeline, baseline observation, controlled security tests, SPL detection engineering, bounded Splunk integration, deterministic investigator tools and router, provider-neutral orchestration, OpenAI provider adapter, persistent JSONL audit logging, and deterministic risk/action policy engine for the AI-Native SOC & Agentic Security Engineering Lab (Milestones 1 through 3D). Human approval workflows and simulated response action execution remain planned for Milestone 4.
+This document records the verification of the initial lab infrastructure, telemetry ingestion pipeline, baseline observation, controlled security tests, SPL detection engineering, bounded Splunk integration, deterministic investigator tools and router, provider-neutral orchestration, OpenAI provider adapter, persistent JSONL audit logging, deterministic risk/action policy engine, human-in-the-loop approval gate, and simulated response execution for the AI-Native SOC & Agentic Security Engineering Lab (Milestones 1 through 4). All response containment remains strictly simulated.
 
 ---
 
@@ -138,8 +138,9 @@ index=main sourcetype="XmlWinEventLog:Microsoft-Windows-Sysmon/Operational" "<Ev
 | Threat-Intelligence Integration | Enrichment | **NOT YET IMPLEMENTED** | External reputation lookups planned for future milestone. |
 | Numeric Risk Scoring | Risk Scoring | **IMPLEMENTED + UNIT TESTED** | Deterministic risk scoring (0–100) combining trusted facts and additive model signals. |
 | Action Policy Engine & Gate | Security Controls | **IMPLEMENTED + UNIT TESTED** | Deterministic policy engine mapping risk and evidence state to allowlisted proposed actions. |
-| Human Approval Workflow | Authorization | **NOT YET IMPLEMENTED** | Interactive human-in-the-loop approval gate planned for Milestone 4. |
-| Response Actions | SOAR / Containment | **PLANNED (SIMULATED)** | Containment/response will be simulated only; no destructive actions or real endpoint containment. |
+| Human Approval Gate (`investigator/approval.py`) | Security Controls / HITL | **IMPLEMENTED + TESTED** | Interactive CLI approval gate with preconditions, bounded retries, exact-type checks, and audit fail-closed rules. |
+| Simulated Response Executor (`investigator/simulator.py`) | SOAR / Simulation | **IMPLEMENTED + TESTED** | Deterministic authorization metadata binding; records simulated endpoint isolation; zero live execution. |
+| Response Actions | Containment Safety | **SIMULATED ONLY** | Containment/response simulated only; no destructive actions or real endpoint containment. |
 
 ---
 
@@ -597,7 +598,7 @@ Offline smoke test evaluating Scenario A (controlled benign lab) and Scenario B 
 * **No Human Approval UI**: Approval flags (`requires_human_approval = True`) are determined, but the interactive human review workflow is deferred to Milestone 4.
 * **No Real Containment**: Endpoint isolation, firewall changes, and account resets remain strictly prohibited.
 
-### Planned / Not Yet Implemented
+### State at completion of Milestone 3D — Planned at that time
 * Interactive human approval interface / CLI
 * Simulated response executor
 * Jira ticket integration
@@ -618,8 +619,60 @@ A total of 255 unit tests across 8 test modules were executed and verified:
 
 ---
 
-## 15. Next Milestone
+## 15. Milestone 4 — Human-in-the-Loop Approval & Simulated Response Execution
 
-* **Next Step (Milestone 4)**: Human-in-the-loop approval workflow and simulated response action execution.
-* **Scope Restriction**: Read-only investigation and policy recommendation; no live endpoint containment, no shell execution, no destructive tools.
+### Overview
+Milestone 4 establishes the governance and execution boundary between automated policy evaluation and response actions. For consequential actions (`SIMULATE_ENDPOINT_ISOLATION`), the system mandates explicit human authorization via an interactive CLI approval gate. The response executor enforces deterministic authorization metadata binding between the incident, policy decision, and human approval record before recording a simulated response.
+
+### Verified Architecture & Security Invariants
+* **Deterministic Metadata Binding (No Cryptography Claimed)**: Milestone 4 proves deterministic application workflow binding only; it does not claim cryptographic provenance, digital signatures, HMACs, or authenticated operator identity. The approver label (`"human_operator"`) is a bounded local label.
+* **Precondition Enforcement**: The approval gate (`request_cli_approval`) verifies that the policy decision strictly mandates approval (`SIMULATE_ENDPOINT_ISOLATION` + `APPROVAL_REQUIRED` + `requires_human_approval=True`). Non-consequential outcomes (`NO_ACTION`, `MONITOR`, `HUMAN_REVIEW`, `CREATE_INCIDENT_RECORD`) immediately raise `ApprovalGateError("approval_not_required")` without prompting.
+* **Bounded CLI Retries**: Accepts strictly normalized `"approve"` or `"deny"`. Up to 3 attempts total (initial attempt + 2 retries) are permitted for terminal typos before failing closed to `DENIED` (`approval_invalid_input`).
+* **Specific I/O Fail-Closed Handling**: `EOFError`, `KeyboardInterrupt`, `io.UnsupportedOperation`, `BrokenPipeError`, and `OSError` immediately fail closed to `DENIED` (`approval_denied`).
+* **Approval Decision / Reason Consistency**:
+  - `APPROVED` strictly requires `approval_granted`.
+  - `DENIED` strictly requires `approval_denied` or `approval_invalid_input`.
+  - Inconsistent pairs (e.g. `APPROVED` with `approval_denied`) are rejected with `ValueError`.
+* **Exact-Type Validation**: `ActionAuthorizationContext`, `PolicyDecision`, `ApprovalRecord`, `SimulationResult`, and enums enforce `type(x) is T`; subclasses and arbitrary object substitutions are rejected.
+* **Action Derivation**: The executor derives target actions strictly from `authorization_context.policy_decision.proposed_action`. Callers cannot pass an arbitrary action to execute.
+* **Non-Consequential Policy Outcomes**: Non-consequential actions return `SimulationStatus.NOT_EXECUTED` with appropriate static detail codes (`simulation_not_required`, `human_review_required`, `incident_record_deferred`) without executing simulation machinery.
+* **Mandatory Audit Fail-Closed Semantics**:
+  - For `request_cli_approval`: if human enters "approve", `APPROVAL_GRANTED` must be recorded BEFORE returning the approved record. If audit recording fails, it raises `ApprovalGateError` and does NOT return an approved record.
+  - For `SimulatedResponseExecutor`: if recording `SIMULATION_COMPLETED` fails, it raises `SimulationError` and does NOT return `SIMULATED`.
+* **Audit Event Generation vs. JSONL Persistence Boundary**: Milestone 4 (`approval.py` and `simulator.py`) generates validated in-memory `AuditEvent` records to `AuditLog` compatible with the existing JSONL persistence layer (`JsonlAuditWriter`). The modules do not directly write to disk; JSONL persistence remains a separate higher-level operation.
+* **Narrow Module Boundary (Zero Real Containment)**:
+  - Modules `investigator/approval.py` and `investigator/simulator.py` import and invoke zero subprocess, shell, socket, network, WinRM, SSH, EDR, or firewall APIs.
+  - Containment is simulated only; output `SIMULATED` records that endpoint isolation would have been requested in production.
+
+### Verified Deliverables
+| Deliverable | Purpose | Details | Status |
+| :--- | :--- | :--- | :--- |
+| `investigator/approval.py` | Human Approval Gate | `ActionAuthorizationContext`, `ApprovalRecord`, `request_cli_approval` | **IMPLEMENTED + TESTED** |
+| `investigator/simulator.py` | Simulated Response Executor | `SimulationStatus`, `SimulationResult`, `SimulatedResponseExecutor` | **IMPLEMENTED + TESTED** |
+| `investigator/audit.py` | Audit Event Expansion | Added 5 event types (`APPROVAL_REQUESTED`, `APPROVAL_GRANTED`, `APPROVAL_DENIED`, `SIMULATION_COMPLETED`, `SIMULATION_NOT_EXECUTED`) | **IMPLEMENTED + TESTED** |
+| `tests/test_human_approval.py` | Approval Gate Test Suite | 27 tests covering schemas, consistency, preconditions, CLI retries, I/O errors, audit fail-closed rules | **TESTED** |
+| `tests/test_simulated_response.py` | Simulator Test Suite | 23 tests covering metadata binding, simulation outcomes, audit integration, and security isolation | **TESTED** |
+| `scripts/run_approval_smoke.py` | Non-interactive Smoke Test | Programmatic Scenario A (denial -> NOT_EXECUTED) and Scenario B (approval -> SIMULATED) | **TESTED** |
+| `scripts/run_approval_demo.py` | Interactive CLI Demo | Terminal demo showing safe summary display, prompt, execution outcome, and audit trail | **TESTED** |
+
+### Unit Test Verification
+A total of 305 unit tests across 10 test modules were executed and verified:
+* `tests/test_gateway_policy.py`: 15 tests (Milestone 2 query validation)
+* `tests/test_splunk_search.py`: 14 tests (Milestone 2 search client)
+* `tests/test_investigator_schemas.py`: 14 tests (Milestone 3A schemas + 3B-1 size bounds)
+* `tests/test_investigator_tools.py`: 20 tests (Milestone 3A tools and router)
+* `tests/test_investigator_orchestrator.py`: 66 tests (Milestone 3B-1 orchestrator + all hardening passes)
+* `tests/test_openai_provider.py`: 54 tests (Milestone 3B-2 provider adapter — offline, zero live calls)
+* `tests/test_audit_writer.py`: 28 tests (Milestone 3C persistent JSONL audit writer)
+* `tests/test_risk_policy.py`: 44 tests (Milestone 3D deterministic risk & action policy engine)
+* `tests/test_human_approval.py`: 27 tests (Milestone 4 human approval gate and authorization context)
+* `tests/test_simulated_response.py`: 23 tests (Milestone 4 simulated response execution and security isolation)
+* **Result**: **305 tests passed, 0 failures, 0 errors**.
+
+---
+
+## 16. Next Milestone
+
+* **Next Step (Milestone 5)**: Structured incident reporting, SOAR artifact generation, and workflow integration.
+* **Scope Restriction**: Read-only investigation, governance, and simulated response; no live endpoint containment, no shell execution, no destructive tools.
 
