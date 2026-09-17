@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document records the verification of the initial lab infrastructure, telemetry ingestion pipeline, baseline observation, controlled security tests, SPL detection engineering, bounded Splunk integration, and Milestone 3A investigator contract scaffolding for the AI-Native SOC & Agentic Security Engineering Lab.
+This document records the verification of the initial lab infrastructure, telemetry ingestion pipeline, baseline observation, controlled security tests, SPL detection engineering, bounded Splunk integration, deterministic investigator tools and router, provider-neutral orchestration, OpenAI provider adapter, persistent JSONL audit logging, and deterministic risk/action policy engine for the AI-Native SOC & Agentic Security Engineering Lab (Milestones 1 through 3D). Human approval workflows and simulated response action execution remain planned for Milestone 4.
 
 ---
 
@@ -133,12 +133,13 @@ index=main sourcetype="XmlWinEventLog:Microsoft-Windows-Sysmon/Operational" "<Ev
 | `investigator/tools/base64_decoder.py` | Local Base64 Decoder Tool | **IMPLEMENTED + UNIT TESTED** | Bounded UTF-16LE decoder for PowerShell -EncodedCommand payloads. |
 | `investigator/tools/mitre_mapper.py` | Local MITRE Mapper Tool | **IMPLEMENTED + UNIT TESTED** | Static local lookup mapping detections to ATT&CK techniques. |
 | `investigator/tool_router.py` | Deterministic Tool Router | **IMPLEMENTED + UNIT TESTED** | Strict allowlist router wrapping local tools and bounded Splunk search. |
-| AI Investigator Agent (LLM Integration) | Automation & LLM | **NOT YET IMPLEMENTED** | Tool-calling model integration planned for Milestone 3B. |
+| AI Investigator / LLM Integration | Automation & LLM | **IMPLEMENTED + UNIT TESTED + LIVE PROVIDER TESTED** | Bounded provider-neutral orchestration with live OpenAI adapter; ToolRouter remains deterministic authority. |
+| `investigator/audit_writer.py` | Persistent Audit Logging (JSONL) | **IMPLEMENTED + UNIT/SMOKE TESTED** | Append-only local JSONL audit trail logging orchestrator and policy events. |
 | Threat-Intelligence Integration | Enrichment | **NOT YET IMPLEMENTED** | External reputation lookups planned for future milestone. |
-| Numeric Risk / Confidence Scoring | Risk Scoring | **NOT YET IMPLEMENTED** | Qualitative ratings (`low`/`medium`/`high`) enforced in V1. |
-| Action Policy Engine & Gate | Security Controls | **NOT YET IMPLEMENTED** | Consequential action authorization engine planned for future milestone. |
-| Human Approval Workflow | Authorization | **NOT YET IMPLEMENTED** | Interactive human-in-the-loop approval gate planned. |
-| Response Actions | SOAR / Containment | **PLANNED (SIMULATED)** | Containment/response will be simulated only; no destructive actions. |
+| Numeric Risk Scoring | Risk Scoring | **IMPLEMENTED + UNIT TESTED** | Deterministic risk scoring (0–100) combining trusted facts and additive model signals. |
+| Action Policy Engine & Gate | Security Controls | **IMPLEMENTED + UNIT TESTED** | Deterministic policy engine mapping risk and evidence state to allowlisted proposed actions. |
+| Human Approval Workflow | Authorization | **NOT YET IMPLEMENTED** | Interactive human-in-the-loop approval gate planned for Milestone 4. |
+| Response Actions | SOAR / Containment | **PLANNED (SIMULATED)** | Containment/response will be simulated only; no destructive actions or real endpoint containment. |
 
 ---
 
@@ -273,7 +274,7 @@ Milestone 3B-1 builds the complete AI-investigator orchestration boundary withou
    - `MAX_SUSPICIOUS_INDICATORS = 20`, `MAX_EVIDENCE_REFS = 20`
    - All enforced in `InvestigationResult.__post_init__` with `SchemaValidationError`.
 
-### Not Yet Implemented (Planned)
+### State at completion of Milestone 3B-1 — Not Yet Implemented at that time
 - External threat-intelligence API lookups
 - Numeric risk scoring
 - Persistent audit log (JSONL to disk)
@@ -464,7 +465,7 @@ Updated status table and roadmap to reflect Milestone 3 completion and local app
 - **No Deduplication / Idempotency**: If the caller invokes write operations multiple times for the same event, duplicate lines will be recorded.
 - **Durability Guarantee**: V1 closes the file after each append operation, providing simple local durability appropriate for this lab. Crash-proof journaling is not claimed.
 
-### Planned / Not Yet Implemented
+### State at completion of Milestone 3C — Planned at that time
 - Numeric risk scoring
 - Deterministic response policy engine
 - Human-in-the-loop authorization gate
@@ -536,6 +537,13 @@ Deterministic risk evaluation and action recommendation policy engine:
   - `BENIGN_LAB_DETECTION_ID = "DET-POWERSHELL-001"`
   - `EXACT_BENIGN_COMMAND = "Write-Host 'AI-NativeSOC-LAB-TEST'"`
   - `CONSEQUENTIAL_ACTIONS = frozenset({ProposedAction.SIMULATE_ENDPOINT_ISOLATION})`
+  - `MAX_POLICY_REASONS = 16`
+  - `POLICY_REASON_CODES`: Explicit allowlist of static machine reason codes (rejects unknown codes, rejects model prose).
+- **Reason Code Hardening**:
+  - `PolicyDecision.reasons` is bounded to `MAX_POLICY_REASONS = 16`.
+  - All reason values must come strictly from the explicit `POLICY_REASON_CODES` allowlist.
+  - Unknown or arbitrary reason strings are rejected with `ValueError`.
+  - No model or caller prose is permitted in policy reason codes.
 - **Exact Scoring Formula**:
   - `verified_detection_id == BENIGN_LAB_DETECTION_ID`: +25 (`encoded_powershell_detected`)
   - `deterministic_decoded_command` available: +10 (`decoded_command_present`)
@@ -575,14 +583,14 @@ Deterministic risk evaluation and action recommendation policy engine:
 Added `POLICY_EVALUATED = "POLICY_EVALUATED"` and `APPROVAL_REQUIRED = "APPROVAL_REQUIRED"` to `AuditEventType`.
 
 #### [NEW] `tests/test_risk_policy.py`
-41-test offline suite verifying trust boundaries, exact benign conjunction, scoring bounds, threshold edges, fail-closed enforcement, schema validation, security isolation, audit integration, and end-to-end integration scenarios.
+44-test offline suite verifying trust boundaries, exact benign conjunction, scoring bounds, threshold edges, fail-closed enforcement, schema validation, reason code allowlist and size bounding, security isolation, audit integration, and end-to-end integration scenarios.
 
 #### [NEW] `scripts/run_policy_smoke.py`
 Offline smoke test evaluating Scenario A (controlled benign lab) and Scenario B (suspicious encoded execution).
 
 ### Distinction Between Model Confidence and Deterministic Risk
-* **Model Confidence** (`InvestigationResult.confidence_level`): Evaluates how certain the model is regarding its analytical hypothesis given retrieved evidence.
-* **Deterministic Risk** (`PolicyDecision.risk_score`): Quantifies potential security severity and impact based on policy rules. High confidence on a verified benign test yields `risk_score = 0` (LOW); low confidence on unverified encoded execution increases uncertainty, preventing low-risk suppression.
+* **Model Confidence** (`InvestigationResult.confidence_level`): Evaluates how certain the model is regarding its analytical hypothesis given retrieved evidence. In policy evaluation, high confidence adds +10, medium confidence adds +5, and low confidence adds 0. Model confidence never reduces risk.
+* **Deterministic Risk** (`PolicyDecision.risk_score`): Quantifies potential security severity and impact based on policy rules. Low model confidence does not reduce risk. Incomplete or failed deterministic evidence is what adds uncertainty points (+15) and forces at least `HUMAN_REVIEW` (fail-closed escalation). On a verified benign test, the trusted benign lab conjunction strictly overrides risk to `0` (LOW).
 
 ### Limitations (Milestone 3D)
 * **No Action Execution**: Policy decisions produce recommendations and governance flags only. No automated containment or remediation executes in this milestone.
@@ -597,7 +605,7 @@ Offline smoke test evaluating Scenario A (controlled benign lab) and Scenario B 
 * Automated adversarial benchmark evaluation
 
 ### Unit Test Verification
-A total of 252 unit tests across 8 test modules were executed and verified:
+A total of 255 unit tests across 8 test modules were executed and verified:
 * `tests/test_gateway_policy.py`: 15 tests (Milestone 2 query validation)
 * `tests/test_splunk_search.py`: 14 tests (Milestone 2 search client)
 * `tests/test_investigator_schemas.py`: 14 tests (Milestone 3A schemas + 3B-1 size bounds)
@@ -605,8 +613,8 @@ A total of 252 unit tests across 8 test modules were executed and verified:
 * `tests/test_investigator_orchestrator.py`: 66 tests (Milestone 3B-1 orchestrator + all hardening passes)
 * `tests/test_openai_provider.py`: 54 tests (Milestone 3B-2 provider adapter — offline, zero live calls)
 * `tests/test_audit_writer.py`: 28 tests (Milestone 3C persistent JSONL audit writer)
-* `tests/test_risk_policy.py`: 41 tests (Milestone 3D deterministic risk & action policy engine)
-* **Result**: **252 tests passed, 0 failures, 0 errors** (`Ran 252 tests in 1.189s, OK`).
+* `tests/test_risk_policy.py`: 44 tests (Milestone 3D deterministic risk & action policy engine)
+* **Result**: **255 tests passed, 0 failures, 0 errors**.
 
 ---
 
