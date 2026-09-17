@@ -107,8 +107,13 @@ def _parse_event_timestamp(time_str: str) -> Optional[datetime]:
     """Safely parse a Splunk _time string into a UTC datetime using standard library only."""
     if not isinstance(time_str, str) or not time_str.strip():
         return None
+    cleaned = time_str.strip()
+    if cleaned.endswith(" UTC"):
+        cleaned = cleaned[:-4].rstrip() + "+00:00"
+    elif cleaned.endswith("Z"):
+        cleaned = cleaned[:-1] + "+00:00"
+
     try:
-        cleaned = time_str.strip().replace("Z", "+00:00")
         dt = datetime.fromisoformat(cleaned)
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)

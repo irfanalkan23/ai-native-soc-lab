@@ -12,6 +12,7 @@ Verifies:
 """
 
 import base64
+from datetime import datetime, timezone
 import io
 from pathlib import Path
 import tempfile
@@ -254,6 +255,57 @@ class TestEndToEndDemoHarness(unittest.TestCase):
         output = out_stream.getvalue()
         self.assertIn("Splunk connection error: Connection refused", output)
         self.assertIn("live-benign requires running locally on Splunk-Server", output)
+
+    def test_parse_event_timestamp_formats(self) -> None:
+        """Verify _parse_event_timestamp handles real Splunk UTC and ISO formats while rejecting malformed inputs."""
+        # 1. Real Splunk format observed live: "2026-09-17 14:51:09.779 UTC"
+        dt_splunk = _parse_event_timestamp("2026-09-17 14:51:09.779 UTC")
+        self.assertIsNotNone(dt_splunk)
+        self.assertEqual(dt_splunk, datetime(2026, 9, 17, 14, 51, 9, 779000, tzinfo=timezone.utc))
+
+        # 2. ISO format with trailing "Z"
+        dt_z = _parse_event_timestamp("2026-09-17T14:51:09.779Z")
+        self.assertIsNotNone(dt_z)
+        self.assertEqual(dt_z, datetime(2026, 9, 17, 14, 51, 9, 779000, tzinfo=timezone.utc))
+
+        # 3. Standard ISO format with "+00:00" offset
+        dt_iso = _parse_event_timestamp("2026-09-17T14:51:09.779+00:00")
+        self.assertIsNotNone(dt_iso)
+        self.assertEqual(dt_iso, datetime(2026, 9, 17, 14, 51, 9, 779000, tzinfo=timezone.utc))
+
+        # 4. Malformed timezone strings remain rejected (return None)
+        self.assertIsNone(_parse_event_timestamp("2026-09-17 14:51:09.779 EST"))
+        self.assertIsNone(_parse_event_timestamp("2026-09-17 14:51:09.779 GMT"))
+        self.assertIsNone(_parse_event_timestamp("2026-09-17 14:51:09.779 +0500"))
+        self.assertIsNone(_parse_event_timestamp("not-a-timestamp"))
+        self.assertIsNone(_parse_event_timestamp(""))
+
+    def test_live_benign_mode_real_splunk_utc_timestamp_format(self) -> None:
+        """Live-benign fixture selection succeeds with real Splunk '... UTC' timestamp format."""
+        splunk_record_utc = dict(self.benign_splunk_record)
+        splunk_record_utc["_time"] = "2026-09-17 14:51:09.779 UTC"
+
+        mock_splunk = MagicMock(spec=SplunkSearchClient)
+        mock_splunk.search_encoded_powershell.return_value = [splunk_record_utc]
+
+        out_stream = io.StringIO()
+        code = run_demo(
+            mode="live-benign",
+            provider="fake",
+            minutes=15,
+            persist_audit=False,
+            stream_in=io.StringIO(),
+            stream_out=out_stream,
+            splunk_client=mock_splunk,
+        )
+
+        self.assertEqual(code, 0)
+        output = out_stream.getvalue()
+        self.assertIn("AI-Native SOC Lab -- End-to-End Demo Outcome", output)
+        self.assertIn("Risk Score:        0 / 100", output)
+        self.assertIn("Risk Level:        LOW", output)
+        self.assertIn("Disposition:       NO_ACTION", output)
+        self.assertIn("Write-Host 'AI-NativeSOC-LAB-TEST'", output)
 
     # -----------------------------------------------------------------------
     # Synthetic-Critical Tests
