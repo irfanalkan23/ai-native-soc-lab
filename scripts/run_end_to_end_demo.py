@@ -61,6 +61,14 @@ from investigator.audit_writer import (
     JsonlAuditWriter,
 )
 from investigator.fake_model import FakeModel
+from investigator.incident_record import (
+    DEFAULT_INCIDENTS_DIR,
+    IncidentConsistencyError,
+    IncidentJsonWriter,
+    IncidentRecordError,
+    IncidentWriterError,
+    build_incident_record,
+)
 from investigator.model import (
     DecisionType,
     ModelDecision,
@@ -252,6 +260,7 @@ def _render_safe_summary(
     sim_result: SimulationResult,
     audit_log: AuditLog,
     persisted_path: Optional[Path] = None,
+    written_incident_path: Optional[Path] = None,
 ) -> None:
     """Render structured, safe demo metadata without secrets or unbounded payloads."""
     stream.write("\n" + "=" * 64 + "\n")
@@ -318,6 +327,13 @@ def _render_safe_summary(
     if persisted_path is not None:
         stream.write(f"  Persisted JSONL:   {persisted_path}\n")
 
+    if written_incident_path is not None:
+        try:
+            rel_incident = written_incident_path.relative_to(Path.cwd())
+        except ValueError:
+            rel_incident = written_incident_path
+        stream.write(f"  Incident Record:   {rel_incident}\n")
+
     stream.write("=" * 64 + "\n\n")
     stream.flush()
 
@@ -327,10 +343,12 @@ def run_demo(
     provider: Optional[str] = None,
     minutes: int = 15,
     persist_audit: bool = False,
+    write_incident: bool = False,
     stream_in: Optional[TextIO] = None,
     stream_out: Optional[TextIO] = None,
     splunk_client: Optional[SplunkSearchClient] = None,
     audit_log_path: Optional[Path] = None,
+    incidents_dir: Optional[Path] = None,
 ) -> int:
     """Execute the end-to-end integration demo workflow.
 
@@ -377,7 +395,7 @@ def run_demo(
             return 1
 
         selected_record, deterministic_decoded = fixture_match
-        clean_time_id = selected_record["_time"].replace(":", "").replace("-", "").replace(" ", "T").replace("+", "")
+        clean_time_id = selected_record["_time"].replace(":", "").replace("-", "").replace(" ", "T").replace("+", "").replace(".", "")
         # Keep incident_id strictly ASCII alphanumeric and <= 64 chars
         incident_id = f"INC-LIVE-DC01-{clean_time_id}"[:60]
 
@@ -538,7 +556,30 @@ def run_demo(
             return 1
 
     # -----------------------------------------------------------------------
-    # Step 8: Safe Final Summary
+    # Step 8: Optional Incident Record Persistence (Reporting Artifact Only)
+    # -----------------------------------------------------------------------
+    written_incident_path: Optional[Path] = None
+    if write_incident:
+        try:
+            incident_rec = build_incident_record(
+                investigation_input=incident,
+                investigation_result=inv_result,
+                policy_decision=policy_decision,
+                simulation_result=sim_result,
+                approval_record=approval_record,
+                evidence_source=evidence_source,
+                deterministic_decoded_command=deterministic_decoded,
+                mitre_technique_id=mitre_id,
+            )
+            target_incidents_dir = incidents_dir or DEFAULT_INCIDENTS_DIR
+            writer = IncidentJsonWriter(target_incidents_dir)
+            written_incident_path = writer.write_record(incident_rec)
+        except (IncidentRecordError, IncidentConsistencyError, IncidentWriterError) as err:
+            out_stream.write(f"[!] incident_record_persistence_failed: {err}\n")
+            return 1
+
+    # -----------------------------------------------------------------------
+    # Step 9: Safe Final Summary
     # -----------------------------------------------------------------------
     _render_safe_summary(
         stream=out_stream,
@@ -553,6 +594,7 @@ def run_demo(
         sim_result=sim_result,
         audit_log=audit_log,
         persisted_path=target_audit_path,
+        written_incident_path=written_incident_path,
     )
 
     return 0
@@ -586,6 +628,11 @@ def main() -> int:
         action="store_true",
         help="Persist audit trail to JSONL via JsonlAuditWriter.",
     )
+    parser.add_argument(
+        "--write-incident",
+        action="store_true",
+        help="Generate and persist deterministic IncidentRecord artifact to JSON.",
+    )
 
     args = parser.parse_args()
 
@@ -606,6 +653,7 @@ def main() -> int:
         provider=provider,
         minutes=args.minutes,
         persist_audit=args.persist_audit,
+        write_incident=args.write_incident,
     )
 
 

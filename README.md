@@ -57,7 +57,7 @@ The initial incident scenario covers an execution attempt using obfuscated Power
 9. **Policy Gate**: **IMPLEMENTED / TESTED** — Deterministic risk evaluation and allowlisted action recommendation engine.
 10. **Human Approval**: **IMPLEMENTED / TESTED** — Interactive CLI approval gate requiring explicit authorization for consequential actions.
 11. **Simulated Response**: **IMPLEMENTED / TESTED (SIMULATED ONLY)** — Deterministic response simulation recording mock endpoint isolation; zero real containment.
-12. **Incident Record *(Planned)***: Comprehensive auditable incident artifact generator.
+12. **Incident Record**: **IMPLEMENTED / TESTED (Milestone 5A)** — Deterministic, bounded, local structured incident-record reporting artifact (`artifacts/incidents/<incident_id>.json`). Reporting artifact only; zero response authority.
 
 ---
 
@@ -76,7 +76,8 @@ The initial incident scenario covers an execution attempt using obfuscated Power
 | **Policy Engine & Gate** | Security Controls | **IMPLEMENTED + TESTED** | Deterministic risk and action-policy evaluation; bounded scoring and action mapping. |
 | **Human Approval Gate** | Security Controls / HITL | **IMPLEMENTED + TESTED** | CLI approval gate for consequential actions; bounded retries, exact-type checks, fail-closed denial. |
 | **Simulated Response Executor** | SOAR / Simulation | **IMPLEMENTED + TESTED** | Deterministic authorization binding; records simulated endpoint isolation; zero live execution. |
-| **End-to-End Demo Harness** | Integration / Demo | **IMPLEMENTED + TESTED** | Complete pipeline script (`scripts/run_end_to_end_demo.py`); 17 integration tests pass. |
+| **End-to-End Demo Harness** | Integration / Demo | **IMPLEMENTED + TESTED** | Complete pipeline script (`scripts/run_end_to_end_demo.py`); 24 integration tests pass. |
+| **Structured Incident Artifact** | Reporting Artifact | **IMPLEMENTED + TESTED** | Local structured JSON artifact generator (`investigator/incident_record.py`); 36 unit tests pass; reporting only with zero action authority. |
 | **Response Actions** | Containment Safety | **SIMULATED ONLY** | No real containment exists; endpoint isolation is simulated; zero subprocess, shell, or system mutation. |
 | **Threat-Intelligence Lookups** | Threat Intelligence | **NOT IMPLEMENTED** | External reputation and IOC lookups are planned for future milestones. |
 | **Ticketing Integration (Jira)** | SOAR / Case Management | **NOT IMPLEMENTED** | Automated ticket dispatch is planned for future milestones. |
@@ -107,6 +108,7 @@ detection / incident input
    ```
    * Exercises `ToolRouter`, `RiskPolicyEngine` (deterministic score 80, `CRITICAL`, `APPROVAL_REQUIRED`, `SIMULATE_ENDPOINT_ISOLATION`), interactive human approval (`[approve/deny]`), and response simulation (`SIMULATED` on approve, `NOT_EXECUTED` on deny).
    * Optional persistence: `--persist-audit` appends the session trail to `artifacts/audit/agent_audit.jsonl`.
+   * Optional incident record: `--write-incident` generates and persists a deterministic `IncidentRecord` artifact to `artifacts/incidents/<incident_id>.json`.
 
 2. **Live Benign Lab Mode** (Run locally on Splunk-Server):
    ```bash
@@ -172,5 +174,6 @@ Located in [`detections/sigma/suspicious_encoded_powershell.yml`](detections/sig
 - [x] **Milestone 2**: Bounded read-only Splunk search client (Python) operating under least-privilege principles and verified end-to-end against live telemetry.
 - [x] **Milestone 3**: AI investigation engine (3A: deterministic tools/router; 3B: bounded orchestration + OpenAI provider; 3C: persistent local JSONL audit; 3D: deterministic risk and action policy).
 - [x] **Milestone 4**: Human-in-the-loop approval workflow and simulated response execution.
-- [ ] **Milestone 5**: Structured incident report generator and workflow integration.
+- [x] **Milestone 5A**: Deterministic structured incident-record reporting artifact (reporting only, zero action authority).
+- [ ] **Milestone 5B**: Jira / external ticketing integration and remote incident sinks (planned).
 - [ ] **Milestone 6**: Adversarial robustness evaluation and prompt injection testing.

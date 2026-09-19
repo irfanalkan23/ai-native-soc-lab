@@ -14,6 +14,7 @@ Verifies:
 import base64
 from datetime import datetime, timezone
 import io
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -455,6 +456,163 @@ class TestEndToEndDemoHarness(unittest.TestCase):
             output = out_stream.getvalue()
             self.assertIn("[!] audit_persistence_failed", output)
             self.assertNotIn("rollback", output.lower())
+
+    # -----------------------------------------------------------------------
+    # Incident Record Artifact Integration Tests (Milestone 5A)
+    # -----------------------------------------------------------------------
+
+    def test_demo_write_incident_benign_success(self) -> None:
+        """When --write-incident is enabled, benign mode writes valid JSON record with NOT_REQUIRED approval."""
+        mock_splunk = MagicMock(spec=SplunkSearchClient)
+        mock_splunk.search_encoded_powershell.return_value = [self.benign_splunk_record]
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            incidents_path = Path(tmp_dir)
+            out_stream = io.StringIO()
+            in_stream = io.StringIO()
+
+            code = run_demo(
+                mode="live-benign",
+                provider="fake",
+                minutes=15,
+                write_incident=True,
+                stream_in=in_stream,
+                stream_out=out_stream,
+                splunk_client=mock_splunk,
+                incidents_dir=incidents_path,
+            )
+
+            self.assertEqual(code, 0)
+            output = out_stream.getvalue()
+            self.assertIn("Incident Record:", output)
+
+            files = list(incidents_path.glob("*.json"))
+            self.assertEqual(len(files), 1)
+
+            data = json.loads(files[0].read_text(encoding="utf-8"))
+            self.assertEqual(data["schema_version"], "1.0.0")
+            self.assertEqual(data["risk_score"], 0)
+            self.assertEqual(data["risk_level"], "LOW")
+            self.assertEqual(data["disposition"], "NO_ACTION")
+            self.assertEqual(data["proposed_action"], "no_action")
+            self.assertFalse(data["requires_human_approval"])
+            self.assertEqual(data["approval_status"], "NOT_REQUIRED")
+            self.assertIsNone(data["approval_reason_code"])
+            self.assertEqual(data["simulation_status"], "NOT_EXECUTED")
+            self.assertEqual(data["simulation_detail_code"], "simulation_not_required")
+
+    def test_demo_write_incident_synthetic_critical_approved(self) -> None:
+        """Synthetic critical mode with operator approval writes APPROVED and SIMULATED incident record."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            incidents_path = Path(tmp_dir)
+            out_stream = io.StringIO()
+            in_stream = io.StringIO("approve\n")
+
+            code = run_demo(
+                mode="synthetic-critical",
+                provider=None,
+                write_incident=True,
+                stream_in=in_stream,
+                stream_out=out_stream,
+                incidents_dir=incidents_path,
+            )
+
+            self.assertEqual(code, 0)
+            output = out_stream.getvalue()
+            self.assertIn("Incident Record:", output)
+
+            files = list(incidents_path.glob("*.json"))
+            self.assertEqual(len(files), 1)
+
+            data = json.loads(files[0].read_text(encoding="utf-8"))
+            self.assertEqual(data["incident_id"], "INC-DEMO-CRIT-2026-001")
+            self.assertEqual(data["risk_score"], 80)
+            self.assertEqual(data["risk_level"], "CRITICAL")
+            self.assertEqual(data["disposition"], "APPROVAL_REQUIRED")
+            self.assertEqual(data["proposed_action"], "simulate_endpoint_isolation")
+            self.assertTrue(data["requires_human_approval"])
+            self.assertEqual(data["approval_status"], "APPROVED")
+            self.assertEqual(data["approval_reason_code"], "approval_granted")
+            self.assertEqual(data["simulation_status"], "SIMULATED")
+            self.assertEqual(data["simulation_detail_code"], "simulated_endpoint_isolation")
+
+    def test_demo_write_incident_synthetic_critical_denied(self) -> None:
+        """Synthetic critical mode with operator denial writes DENIED and NOT_EXECUTED incident record."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            incidents_path = Path(tmp_dir)
+            out_stream = io.StringIO()
+            in_stream = io.StringIO("deny\n")
+
+            code = run_demo(
+                mode="synthetic-critical",
+                provider=None,
+                write_incident=True,
+                stream_in=in_stream,
+                stream_out=out_stream,
+                incidents_dir=incidents_path,
+            )
+
+            self.assertEqual(code, 0)
+            output = out_stream.getvalue()
+            self.assertIn("Incident Record:", output)
+
+            files = list(incidents_path.glob("*.json"))
+            self.assertEqual(len(files), 1)
+
+            data = json.loads(files[0].read_text(encoding="utf-8"))
+            self.assertEqual(data["incident_id"], "INC-DEMO-CRIT-2026-001")
+            self.assertEqual(data["risk_score"], 80)
+            self.assertEqual(data["risk_level"], "CRITICAL")
+            self.assertTrue(data["requires_human_approval"])
+            self.assertEqual(data["approval_status"], "DENIED")
+            self.assertEqual(data["approval_reason_code"], "approval_denied")
+            self.assertEqual(data["simulation_status"], "NOT_EXECUTED")
+            self.assertEqual(data["simulation_detail_code"], "simulation_blocked_denied")
+
+    def test_demo_without_write_incident_creates_no_file(self) -> None:
+        """When write_incident is False (default), no incident file is written."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            incidents_path = Path(tmp_dir)
+            out_stream = io.StringIO()
+            in_stream = io.StringIO("deny\n")
+
+            code = run_demo(
+                mode="synthetic-critical",
+                provider=None,
+                write_incident=False,
+                stream_in=in_stream,
+                stream_out=out_stream,
+                incidents_dir=incidents_path,
+            )
+
+            self.assertEqual(code, 0)
+            output = out_stream.getvalue()
+            self.assertNotIn("Incident Record:", output)
+            files = list(incidents_path.glob("*.json"))
+            self.assertEqual(len(files), 0)
+
+    def test_demo_write_incident_failure_fails_closed(self) -> None:
+        """When incident record persistence fails, reports sanitized error and returns exit code 1."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            # Pointing directory to an existing file causes IncidentPathError
+            dummy_file = Path(tmp_dir) / "not_a_dir"
+            dummy_file.write_text("blocked", encoding="utf-8")
+
+            out_stream = io.StringIO()
+            in_stream = io.StringIO("deny\n")
+
+            code = run_demo(
+                mode="synthetic-critical",
+                provider=None,
+                write_incident=True,
+                stream_in=in_stream,
+                stream_out=out_stream,
+                incidents_dir=dummy_file,
+            )
+
+            self.assertEqual(code, 1)
+            output = out_stream.getvalue()
+            self.assertIn("[!] incident_record_persistence_failed", output)
 
     # -----------------------------------------------------------------------
     # Security Boundary & Invariant Tests

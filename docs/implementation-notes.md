@@ -1,8 +1,8 @@
-# AI-Native SOC Lab — Implementation Notes (Milestones 1–4)
+# AI-Native SOC Lab — Implementation Notes (Milestones 1–5A)
 
 ## Overview
 
-This document records the verification of the initial lab infrastructure, telemetry ingestion pipeline, baseline observation, controlled security tests, SPL detection engineering, bounded Splunk integration, deterministic investigator tools and router, provider-neutral orchestration, OpenAI provider adapter, persistent JSONL audit logging, deterministic risk/action policy engine, human-in-the-loop approval gate, and simulated response execution for the AI-Native SOC & Agentic Security Engineering Lab (Milestones 1 through 4). All response containment remains strictly simulated.
+This document records the verification of the initial lab infrastructure, telemetry ingestion pipeline, baseline observation, controlled security tests, SPL detection engineering, bounded Splunk integration, deterministic investigator tools and router, provider-neutral orchestration, OpenAI provider adapter, persistent JSONL audit logging, deterministic risk/action policy engine, human-in-the-loop approval gate, simulated response execution, and deterministic structured incident-record reporting artifact generation for the AI-Native SOC & Agentic Security Engineering Lab (Milestones 1 through 5A). All response containment remains strictly simulated.
 
 ---
 
@@ -708,13 +708,13 @@ $$\text{Detection / Telemetry} \longrightarrow \text{Bounded Splunk Retrieval} \
 | Component | Role | Security Invariant | Status |
 | :--- | :--- | :--- | :--- |
 | `scripts/run_end_to_end_demo.py` | Integration Demo Harness | Composition-only orchestration; zero new authority | **IMPLEMENTED + TESTED** |
-| `tests/test_end_to_end_demo.py` | Integration Test Suite | 17 comprehensive unit tests covering all modes and edge cases | **IMPLEMENTED + TESTED** |
+| `tests/test_end_to_end_demo.py` | Integration Test Suite | 24 comprehensive unit tests covering all modes and edge cases | **IMPLEMENTED + TESTED** |
 | Exact Fixture Selector | Benign Lab Verification | Time-ordered candidate search; exact string matching | **IMPLEMENTED + TESTED** |
 | Deterministic Critical Mode | Human Gate Verification | Pre-configured `FakeModel` exercising `ToolRouter` and reaching score 80 | **IMPLEMENTED + TESTED** |
 | Fail-Closed Boundary | Safe Failure Modes | 0 events, missing fixture, I/O errors, denial $\rightarrow$ fail closed | **IMPLEMENTED + TESTED** |
 
 ### Unit Test Verification
-A total of 322 unit tests across 11 test modules were executed and verified:
+A total of 365 unit tests across 12 test modules were executed and verified:
 * `tests/test_gateway_policy.py`: 15 tests (Milestone 2 query validation)
 * `tests/test_splunk_search.py`: 14 tests (Milestone 2 search client)
 * `tests/test_investigator_schemas.py`: 14 tests (Milestone 3A schemas + 3B-1 size bounds)
@@ -725,13 +725,72 @@ A total of 322 unit tests across 11 test modules were executed and verified:
 * `tests/test_risk_policy.py`: 44 tests (Milestone 3D deterministic risk & action policy engine)
 * `tests/test_human_approval.py`: 27 tests (Milestone 4 human approval gate and authorization context)
 * `tests/test_simulated_response.py`: 23 tests (Milestone 4 simulated response execution and security isolation)
-* `tests/test_end_to_end_demo.py`: 17 tests (Milestone 4 integration demo harness and boundary tests)
-* **Result**: **322 tests passed, 0 failures, 0 errors**.
+* `tests/test_end_to_end_demo.py`: 24 tests (Milestone 4 & 5A integration demo harness and boundary tests)
+* `tests/test_incident_record.py`: 36 tests (Milestone 5A incident record schema, consistency, writer, and boundary tests)
+* **Result**: **365 tests passed, 0 failures, 0 errors**.
 
 ---
 
-## 17. Next Milestone
+## 17. Milestone 5A — Structured Incident-Record Reporting Artifact & Local JSON Persistence
 
-* **Next Step (Milestone 5)**: Structured incident reporting, SOAR artifact generation, and workflow integration.
+### Architectural Purpose & Security Invariants
+* **Reporting Artifact Only**: The generated `IncidentRecord` artifact is strictly a post-workflow reporting/output artifact. It possesses **zero action authority** and is never read back by the policy engine, approval gate, or simulator as a source of execution authority.
+* **No Telemetry Dumps / No Secrets / Inert URLs**: The record never includes raw Splunk JSON, raw Sysmon XML, full telemetry dumps, API keys, environment variables, raw model prompts, model responses, or system instructions. No separate arbitrary URL field is accepted; `decoded_command` persists bounded untrusted evidence which may contain URL text (e.g. download cradles), where any URL text is strictly inert data with zero execution authority.
+* **Fail-Closed Cross-Object Consistency**: `build_incident_record` cross-validates all trusted pipeline objects (`InvestigationInput`, `InvestigationResult`, `PolicyDecision`, `SimulationResult`, and optional `ApprovalRecord`). Discrepancies in `incident_id`, `proposed_action`, `approval_status`, or `simulation_status` immediately raise `IncidentConsistencyError`.
+* **Bounded Schema**: Strict bounds on all string lengths, collection sizes, and allowlists for risk levels, dispositions, proposed actions, policy reason codes, approval reason codes, and simulation detail codes.
+* **Atomic, Path-Safe JSON Persistence & Trust Boundary**:
+  * Fixed Default Path: Normal runtime output path is fixed to `artifacts/incidents/<incident_id>.json`. The AI model and incident contents cannot choose or influence destination paths.
+  * Dependency Injection Isolation: `incidents_dir` exists exclusively as a trusted application bootstrap and test isolation injection hook; untrusted or model-controlled values must never be passed into it. No CLI path parameter is exposed.
+  * Sanitized identifier validation via `SAFE_INCIDENT_ID_PATTERN` (`^[A-Za-z0-9_-]{1,64}$`). Rejects path traversal (`..`, slashes, non-ASCII).
+  * Writes to a `.tmp` file in the destination directory first, flushes and calls `os.fsync` before commit to improve local durability. (Note: No crash-proof, filesystem-independent, forensic-grade, or cryptographic durability guarantee is claimed).
+  * Overwrite protection & concurrency: fails closed by default if the target incident JSON already exists. Relies on standard-library hard-link creation (`os.link`) where supported for `overwrite=False` to enforce atomic create-if-absent semantics without check-then-replace (TOCTOU) races. If atomic linking is unavailable or unsupported, incident persistence fails closed with an error rather than weakening no-overwrite semantics or falling back to non-atomic replacement. Explicit `overwrite=True` permits atomic replacement via `os.replace`.
+  * Sanitized error handling: wraps OS/filesystem exceptions without exposing raw OS error messages.
+* **Truthful Status Labeling**:
+  * **IMPLEMENTED**: Local deterministic structured incident-record generation and atomic persistence (`investigator/incident_record.py`).
+  * **TESTED**: 36 unit tests in `tests/test_incident_record.py` and 5 integration tests in `tests/test_end_to_end_demo.py` pass.
+  * **SIMULATED**: Response actions remain simulated only (`SIMULATED` vs `NOT_EXECUTED`). Zero live endpoint containment.
+  * **PLANNED**: Jira / external ticketing integration, remote incident sinks, cryptographic signing, and production SOAR response actions.
+
+### Schema Fields
+1. `schema_version`: `"1.0.0"`
+2. `incident_id`: str (<= 64 chars, safe chars only)
+3. `created_at_utc`: str (timezone-aware ISO 8601 UTC timestamp with offset exactly zero: +00:00 or Z)
+4. `detection_id`: str (<= 64 chars)
+5. `detection_name`: str (<= 128 chars)
+6. `target_host`: str (<= 64 chars)
+7. `target_user`: str (<= 64 chars)
+8. `evidence_source`: str (<= 128 chars)
+9. `decoded_command`: Optional[str] (<= 4096 chars)
+10. `mitre_technique_id`: Optional[str] (<= 32 chars)
+11. `investigation_summary`: str (<= 1000 chars)
+12. `confidence_level`: str (`HIGH`, `MEDIUM`, `LOW`)
+13. `suspicious_indicator_count`: int (>= 0)
+14. `recommended_next_step`: str (<= 500 chars)
+15. `risk_score`: int (0 to 100)
+16. `risk_level`: str (`LOW`, `MEDIUM`, `HIGH`, `CRITICAL`)
+17. `disposition`: str (`NO_ACTION`, `MONITOR`, `HUMAN_REVIEW`, `APPROVAL_REQUIRED`, `BLOCKED`)
+18. `proposed_action`: str (`no_action`, `monitor`, `create_incident_record`, `request_human_review`, `simulate_endpoint_isolation`)
+19. `requires_human_approval`: bool
+20. `policy_reason_codes`: Tuple[str, ...] (copied strictly from validated `PolicyDecision.reasons`)
+21. `approval_status`: str (`NOT_REQUIRED`, `APPROVED`, `DENIED`)
+22. `approval_reason_code`: Optional[str]
+23. `simulation_status`: str (`SIMULATED`, `NOT_EXECUTED`)
+24. `simulation_detail_code`: str
+
+### Artifact Status Matrix
+
+| Component | Role | Security Invariant | Status |
+| :--- | :--- | :--- | :--- |
+| `investigator/incident_record.py` | Reporting Artifact Model & Builder | Immutable schema, fail-closed consistency, zero action authority | **IMPLEMENTED + TESTED** |
+| `IncidentJsonWriter` | Persistence Writer | Atomic file replacement, path traversal protection, overwrite check | **IMPLEMENTED + TESTED** |
+| `tests/test_incident_record.py` | Schema & Writer Tests | 36 tests covering schema, consistency, writer safety, and module isolation | **IMPLEMENTED + TESTED** |
+| `scripts/run_end_to_end_demo.py` (`--write-incident`) | Demo Integration | Optional flag to persist structured record after pipeline completion | **IMPLEMENTED + TESTED** |
+
+---
+
+## 18. Next Milestones (5B & 6)
+
+* **Next Step (Milestone 5B)**: Remote incident storage, Jira/external ticketing integration, and cryptographic signing/tamper-evident hashing.
+* **Next Step (Milestone 6)**: Adversarial robustness evaluation, prompt injection resilience, and evaluation benchmark suites.
 * **Scope Restriction**: Read-only investigation, governance, and simulated response; no live endpoint containment, no shell execution, no destructive tools.
 
