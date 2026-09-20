@@ -76,11 +76,12 @@ The initial incident scenario covers an execution attempt using obfuscated Power
 | **Policy Engine & Gate** | Security Controls | **IMPLEMENTED + TESTED** | Deterministic risk and action-policy evaluation; bounded scoring and action mapping. |
 | **Human Approval Gate** | Security Controls / HITL | **IMPLEMENTED + TESTED** | CLI approval gate for consequential actions; bounded retries, exact-type checks, fail-closed denial. |
 | **Simulated Response Executor** | SOAR / Simulation | **IMPLEMENTED + TESTED** | Deterministic authorization binding; records simulated endpoint isolation; zero live execution. |
-| **End-to-End Demo Harness** | Integration / Demo | **IMPLEMENTED + TESTED** | Complete pipeline script (`scripts/run_end_to_end_demo.py`); 24 integration tests pass. |
+| **End-to-End Demo Harness** | Integration / Demo | **IMPLEMENTED + TESTED** | Complete pipeline script (`scripts/run_end_to_end_demo.py`); 29 integration tests pass. |
 | **Structured Incident Artifact** | Reporting Artifact | **IMPLEMENTED + TESTED** | Local structured JSON artifact generator (`investigator/incident_record.py`); 36 unit tests pass; reporting only with zero action authority. |
 | **Response Actions** | Containment Safety | **SIMULATED ONLY** | No real containment exists; endpoint isolation is simulated; zero subprocess, shell, or system mutation. |
+| **Ticketing Integration (Local Contract / Fake Client)** | SOAR / Reporting | **IMPLEMENTED + TESTED** | Deterministic contract (`investigator/ticketing.py`) & fake client; 40 unit tests pass; offline simulation only; zero response authority. |
 | **Threat-Intelligence Lookups** | Threat Intelligence | **NOT IMPLEMENTED** | External reputation and IOC lookups are planned for future milestones. |
-| **Ticketing Integration (Jira)** | SOAR / Case Management | **NOT IMPLEMENTED** | Automated ticket dispatch is planned for future milestones. |
+| **Live Jira API Integration** | SOAR / Case Management | **NOT IMPLEMENTED** | Live Jira Cloud API integration is planned for Milestone 5B-2. |
 
 ---
 
@@ -175,5 +176,6 @@ Located in [`detections/sigma/suspicious_encoded_powershell.yml`](detections/sig
 - [x] **Milestone 3**: AI investigation engine (3A: deterministic tools/router; 3B: bounded orchestration + OpenAI provider; 3C: persistent local JSONL audit; 3D: deterministic risk and action policy).
 - [x] **Milestone 4**: Human-in-the-loop approval workflow and simulated response execution.
 - [x] **Milestone 5A**: Deterministic structured incident-record reporting artifact (reporting only, zero action authority).
-- [ ] **Milestone 5B**: Jira / external ticketing integration and remote incident sinks (planned).
+- [x] **Milestone 5B-1**: Deterministic ticketing contract and local fake ticket workflow (reporting only, zero action authority).
+- [ ] **Milestone 5B-2**: Live Jira Cloud API integration and remote ticketing dispatch (planned).
 - [ ] **Milestone 6**: Adversarial robustness evaluation and prompt injection testing.

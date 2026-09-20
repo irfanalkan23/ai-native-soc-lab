@@ -788,9 +788,100 @@ A total of 365 unit tests across 12 test modules were executed and verified:
 
 ---
 
-## 18. Next Milestones (5B & 6)
+## 18. Milestone 5B-1 — Deterministic Ticketing Contract & Local Fake Ticket Workflow
 
-* **Next Step (Milestone 5B)**: Remote incident storage, Jira/external ticketing integration, and cryptographic signing/tamper-evident hashing.
+### Architectural Purpose & Security Invariants
+* **Zero Response Authority**: Downstream ticketing is strictly a synchronous, in-memory notification and tracking channel. Ticket creation, update, or existence has **zero influence** on policy evaluation, risk scoring, human approval decisions, or response execution.
+* **Provider-Neutral Contract**:
+  * `TicketPriority` defines strictly provider-neutral priorities: `LOW`, `MEDIUM`, `HIGH`, `CRITICAL`.
+  * `IncidentRecord` risk level maps 1-to-1 (`LOW` -> `LOW`, `MEDIUM` -> `MEDIUM`, `HIGH` -> `HIGH`, `CRITICAL` -> `CRITICAL`). Jira-specific terminology (e.g. `Lowest`, `Highest`) is prohibited at this contract boundary and deferred to future adapter mappings.
+  * Canonical ticket request schema (`TicketRequest`) and execution outcome schema (`TicketResult`) are immutable and provider-agnostic.
+* **Tightened Deterministic Label Derivation**:
+  * Standard baseline label: `ai-native-soc`.
+  * Technology label `"powershell"`: strictly derived when `mitre_technique_id == "T1059.001"`. Untrusted detection names containing "powershell" or PowerShell substrings cannot independently derive this label.
+  * Lab test label `"benign-test"`: strictly derived when validated `policy_reason_codes` contains `"benign_lab_fixture_matched"`. A risk score of 0 alone does not derive this label.
+  * Governance labels: `"human-approved"` (when `approval_status == "APPROVED"`), `"human-denied"` (when `approval_status == "DENIED"`), `"approval-not-required"` (when `approval_status == "NOT_REQUIRED"`), `"simulated-containment"` (when `simulation_status == "SIMULATED"`), `"action-not-executed"` (when `simulation_status == "NOT_EXECUTED"`).
+* **Hardened Ticket Configuration (`TicketConfig`)**:
+  * Strict validation: `project_key` (uppercase regex `^[A-Z][A-Z0-9_]{1,31}$`), `issue_type` (regex `^[A-Za-z][A-Za-z0-9 _-]{1,31}$`).
+  * `allowed_labels`: strictly requires `type is tuple`, each element `type is str`, all elements in `ALLOWED_TICKET_LABELS`, maximum count <= 8 (`MAX_LABELS_COUNT`), no duplicates. Fails closed with `TicketConfigError`.
+  * `include_decoded_command`: defaults to `False`. Decoded command evidence is omitted unless explicitly enabled by trusted configuration.
+* **Trust-Boundary Labeling & Marker-Preserving Truncation (No Prompt Injection Defense Claimed)**:
+  * Decoded-evidence exact invariants:
+    - `include_decoded_command=False`: no evidence block is included.
+    - `include_decoded_command=True` AND evidence block is included:
+      `--- BEGIN UNTRUSTED EVIDENCE (INERT TEXT ONLY) ---` must be present,
+      `--- END UNTRUSTED EVIDENCE ---` must be present,
+      and final `description <= 4096` (`MAX_DESCRIPTION_LENGTH`).
+      Maximum-sized evidence is truncated within its own bounded evidence budget before final description assembly, ensuring structural markers are never destroyed by blind truncation.
+    - If there is insufficient budget even for the structural evidence block:
+      the evidence block is omitted entirely rather than emitting malformed or partially bounded evidence.
+  * Documented strictly as human-facing trust-boundary labeling; no claim is made that banners prevent prompt injection or LLM manipulation.
+* **Decoupled Audit Architecture & Sanitized Failure Handling**:
+  * `TicketClient` protocol defines `create_ticket(request: TicketRequest) -> TicketResult` without receiving or mutating `AuditLog`.
+  * Audit events (`TICKET_REQUESTED`, `TICKET_CREATED`, `TICKET_FAILED`) are emitted strictly by higher-level workflow orchestration layers (`scripts/run_end_to_end_demo.py`).
+  * Ticket failures output a static sanitized message (`[!] ticket_creation_failed`) without exposing raw exception text, tokens, or provider bodies. When `--persist-audit` is enabled, `TICKET_REQUESTED` and `TICKET_FAILED` are persisted to JSONL before returning exit code 1.
+  * If audit persistence itself fails, it outputs a static sanitized message (`[!] audit_persistence_failed`) without exposing filesystem paths, OS error text, provider data, secrets, or arbitrary exception text.
+* **Local In-Memory Fake Client (`FakeTicketClient`)**:
+  * Offline, deterministic, synchronous in-memory implementation with zero external dependencies.
+  * Thread-safe sequential ticket key generation derived strictly from `request.project_key` (e.g. `SEC-0001`). No caller key prefix override is permitted.
+  * Strict validation of result contract: `success=True` requires non-empty `ticket_key`, valid `created_at_utc` (UTC offset exactly zero), and `detail_code="ticket_created_fake"`; `success=False` requires `ticket_key=None` and an allowlisted failure detail code.
+* **Zero Live Jira / Zero Sockets / Zero Network**:
+  * Zero imports of `requests`, `urllib`, `http`, `socket`, or Jira SDKs.
+  * Zero credential ingestion or configuration. Live Jira Cloud integration is planned exclusively for Milestone 5B-2.
+
+### Schema Fields & Bounds
+
+#### `TicketRequest`
+1. `incident_id`: str (1 to 64 chars, `^[A-Za-z0-9_-]{1,64}$`)
+2. `project_key`: str (1 to 32 chars, `^[A-Z][A-Z0-9_]{1,31}$`)
+3. `issue_type`: str (1 to 32 chars, `^[A-Za-z][A-Za-z0-9 _-]{1,31}$`)
+4. `summary`: str (1 to 255 chars, single-line)
+5. `description`: str (1 to 4096 chars)
+6. `priority`: `TicketPriority` (`LOW`, `MEDIUM`, `HIGH`, `CRITICAL`)
+7. `labels`: Tuple[str, ...] (0 to 8 items, each item <= 32 chars, allowlisted)
+8. `external_reference`: str (1 to 64 chars, e.g. detection ID)
+
+#### `TicketResult`
+1. `success`: bool
+2. `provider`: str (1 to 64 chars, `^[A-Za-z0-9_-]{1,64}$`, e.g. `"fake_ticket_client"`)
+3. `ticket_key`: Optional[str] (e.g. `SEC-0001`, required if `success=True`, `None` if `success=False`)
+4. `detail_code`: str (allowlisted code, e.g. `"ticket_created_fake"`, `"ticket_dispatch_failed"`)
+5. `created_at_utc`: str (ISO 8601 UTC timestamp with offset exactly zero: `+00:00` or `Z`)
+
+### Artifact Status Matrix
+
+| Component | Role | Security Invariant | Status |
+| :--- | :--- | :--- | :--- |
+| `investigator/ticketing.py` | Ticketing Schema, Builder & Fake Client | Provider-neutral, tightened labels, fail-closed validation, zero network | **IMPLEMENTED + TESTED** |
+| `investigator/audit.py` | Audit Event Expansion | Added `TICKET_REQUESTED`, `TICKET_CREATED`, `TICKET_FAILED` | **IMPLEMENTED + TESTED** |
+| `tests/test_ticketing.py` | Ticketing Unit & Security Test Suite | 44 tests covering schemas, label derivation, config hardening, truncation safety, AST network isolation | **IMPLEMENTED + TESTED** |
+| `scripts/run_end_to_end_demo.py` (`--create-ticket`) | Demo Workflow Integration | Emits audit events, dispatches to `FakeTicketClient`, sanitizes failures, renders section 6 | **IMPLEMENTED + TESTED** |
+| `tests/test_end_to_end_demo.py` | Demo Integration Tests | 31 tests covering CLI `--create-ticket` workflows, sanitized failure, audit persistence, and security invariants | **IMPLEMENTED + TESTED** |
+
+---
+
+## 19. Unit Test Verification (Comprehensive Suite)
+
+A total of **416 unit tests across 13 test modules** were executed and verified:
+* `tests/test_gateway_policy.py`: 15 tests (Milestone 2 query validation)
+* `tests/test_splunk_search.py`: 14 tests (Milestone 2 search client)
+* `tests/test_investigator_schemas.py`: 14 tests (Milestone 3A schemas + 3B-1 size bounds)
+* `tests/test_investigator_tools.py`: 20 tests (Milestone 3A tools and router)
+* `tests/test_investigator_orchestrator.py`: 66 tests (Milestone 3B-1 orchestrator + all hardening passes)
+* `tests/test_openai_provider.py`: 54 tests (Milestone 3B-2 provider adapter — offline, zero live calls)
+* `tests/test_audit_writer.py`: 28 tests (Milestone 3C persistent JSONL audit writer)
+* `tests/test_risk_policy.py`: 44 tests (Milestone 3D deterministic risk & action policy engine)
+* `tests/test_human_approval.py`: 27 tests (Milestone 4 human approval gate and authorization context)
+* `tests/test_simulated_response.py`: 23 tests (Milestone 4 simulated response execution and security isolation)
+* `tests/test_incident_record.py`: 36 tests (Milestone 5A incident record schema, consistency, writer, and boundary tests)
+* `tests/test_ticketing.py`: 44 tests (Milestone 5B-1 provider-neutral ticketing, builder, labels, fake client, truncation safety, security isolation)
+* `tests/test_end_to_end_demo.py`: 31 tests (Milestone 4, 5A & 5B-1 integration demo harness, ticketing CLI, sanitized failure, and audit persistence)
+* **Result**: **416 tests passed, 0 failures, 0 errors**.
+
+---
+
+## 20. Next Milestones (5B-2 & 6)
+
+* **Next Step (Milestone 5B-2)**: Jira Cloud REST adapter mapping provider-neutral `TicketRequest` to Jira schema (with optional custom fields and priority mapping `CRITICAL` -> `Highest`), credential hygiene (`JIRA_API_TOKEN`), rate limiting, and circuit breaker.
 * **Next Step (Milestone 6)**: Adversarial robustness evaluation, prompt injection resilience, and evaluation benchmark suites.
-* **Scope Restriction**: Read-only investigation, governance, and simulated response; no live endpoint containment, no shell execution, no destructive tools.
-
+* **Scope Restriction**: Read-only investigation, governance, simulated response, and downstream tracking; zero live endpoint containment, zero shell execution, zero destructive tools, zero ticket system response authority.

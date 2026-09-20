@@ -31,6 +31,7 @@ from investigator.approval import (
     DEFAULT_APPROVER,
 )
 from investigator.audit import AuditEventType
+from investigator.audit_writer import AuditWriteError
 from investigator.policy import (
     ActionDisposition,
     PolicyDecision,
@@ -436,10 +437,9 @@ class TestEndToEndDemoHarness(unittest.TestCase):
             self.assertIn("SIMULATION_COMPLETED", content[-1])
 
     def test_optional_jsonl_persistence_failure_reports_sanitized_error(self) -> None:
-        """When JSONL persistence fails, reports sanitized error, exits code 1, and makes no rollback claim."""
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            # Pointing to an existing directory path causes AuditPathError
-            bad_path = Path(tmp_dir)
+        """When JSONL persistence fails, reports sanitized error without leaking sensitive paths or tokens."""
+        sensitive_error = "SECRET_PATH=C:\\sensitive\\audit.jsonl token=abc123"
+        with patch("scripts.run_end_to_end_demo.JsonlAuditWriter.write_events", side_effect=AuditWriteError(sensitive_error)):
             in_stream = io.StringIO("approve\n")
             out_stream = io.StringIO()
 
@@ -449,13 +449,41 @@ class TestEndToEndDemoHarness(unittest.TestCase):
                 persist_audit=True,
                 stream_in=in_stream,
                 stream_out=out_stream,
-                audit_log_path=bad_path,
+                audit_log_path=Path("dummy_audit.jsonl"),
             )
 
             self.assertEqual(code, 1)
             output = out_stream.getvalue()
-            self.assertIn("[!] audit_persistence_failed", output)
+            self.assertIn("audit_persistence_failed", output)
+            self.assertNotIn("SECRET_PATH", output)
+            self.assertNotIn("sensitive", output)
+            self.assertNotIn("abc123", output)
             self.assertNotIn("rollback", output.lower())
+
+    def test_ticket_failure_audit_persistence_failure_reports_sanitized_error(self) -> None:
+        """When audit persistence fails during ticket failure handling, output remains sanitized."""
+        sensitive_err = "SECRET_PATH=C:\\sensitive\\audit.jsonl token=abc123"
+        with patch("investigator.ticketing.FakeTicketClient.create_ticket", side_effect=Exception("ticket_failed")):
+            with patch("scripts.run_end_to_end_demo.JsonlAuditWriter.write_events", side_effect=AuditWriteError(sensitive_err)):
+                in_stream = io.StringIO("approve\n")
+                out_stream = io.StringIO()
+
+                code = run_demo(
+                    mode="synthetic-critical",
+                    provider=None,
+                    persist_audit=True,
+                    create_ticket=True,
+                    stream_in=in_stream,
+                    stream_out=out_stream,
+                    audit_log_path=Path("dummy_audit.jsonl"),
+                )
+
+                self.assertEqual(code, 1)
+                output = out_stream.getvalue()
+                self.assertIn("audit_persistence_failed", output)
+                self.assertNotIn("SECRET_PATH", output)
+                self.assertNotIn("sensitive", output)
+                self.assertNotIn("abc123", output)
 
     # -----------------------------------------------------------------------
     # Incident Record Artifact Integration Tests (Milestone 5A)
@@ -613,6 +641,155 @@ class TestEndToEndDemoHarness(unittest.TestCase):
             self.assertEqual(code, 1)
             output = out_stream.getvalue()
             self.assertIn("[!] incident_record_persistence_failed", output)
+
+    # -----------------------------------------------------------------------
+    # Downstream Ticketing Integration Tests (Milestone 5B-1)
+    # -----------------------------------------------------------------------
+
+    def test_demo_create_ticket_benign_success(self) -> None:
+        """When create_ticket is True, benign mode dispatches fake ticket and renders section 6."""
+        mock_splunk = MagicMock(spec=SplunkSearchClient)
+        mock_splunk.search_encoded_powershell.return_value = [self.benign_splunk_record]
+
+        out_stream = io.StringIO()
+        code = run_demo(
+            mode="live-benign",
+            provider="fake",
+            minutes=15,
+            create_ticket=True,
+            stream_in=io.StringIO(),
+            stream_out=out_stream,
+            splunk_client=mock_splunk,
+        )
+
+        self.assertEqual(code, 0)
+        output = out_stream.getvalue()
+        self.assertIn("[6. DOWNSTREAM TICKETING (LOCAL FAKE WORKFLOW)]", output)
+        self.assertIn("Provider:          fake_ticket_client (offline simulation)", output)
+        self.assertIn("Ticket Key:        SEC-0001", output)
+        self.assertIn("Detail Code:       ticket_created_fake", output)
+        self.assertIn("TICKET_REQUESTED", output)
+        self.assertIn("TICKET_CREATED", output)
+
+    def test_demo_create_ticket_synthetic_critical_approved(self) -> None:
+        """Synthetic critical mode with operator approval creates fake ticket."""
+        out_stream = io.StringIO()
+        in_stream = io.StringIO("approve\n")
+
+        code = run_demo(
+            mode="synthetic-critical",
+            provider=None,
+            create_ticket=True,
+            stream_in=in_stream,
+            stream_out=out_stream,
+        )
+
+        self.assertEqual(code, 0)
+        output = out_stream.getvalue()
+        self.assertIn("[6. DOWNSTREAM TICKETING (LOCAL FAKE WORKFLOW)]", output)
+        self.assertIn("Ticket Key:        SEC-0001", output)
+        self.assertIn("SIMULATED CONTAINMENT RECORDED", output)
+        self.assertIn("TICKET_CREATED", output)
+
+    def test_demo_create_ticket_synthetic_critical_denied(self) -> None:
+        """Synthetic critical mode with operator denial creates fake ticket with denied outcome."""
+        out_stream = io.StringIO()
+        in_stream = io.StringIO("deny\n")
+
+        code = run_demo(
+            mode="synthetic-critical",
+            provider=None,
+            create_ticket=True,
+            stream_in=in_stream,
+            stream_out=out_stream,
+        )
+
+        self.assertEqual(code, 0)
+        output = out_stream.getvalue()
+        self.assertIn("[6. DOWNSTREAM TICKETING (LOCAL FAKE WORKFLOW)]", output)
+        self.assertIn("Ticket Key:        SEC-0001", output)
+        self.assertIn("ACTION NOT EXECUTED", output)
+        self.assertIn("TICKET_CREATED", output)
+
+    def test_demo_create_ticket_failure_fails_closed(self) -> None:
+        """When ticket creation fails, reports sanitized error and returns exit code 1 without leaking exception text."""
+        sensitive_error = "SECRET_TOKEN=abc123 raw-provider-body"
+        with patch("investigator.ticketing.FakeTicketClient.create_ticket", side_effect=Exception(sensitive_error)):
+            out_stream = io.StringIO()
+            in_stream = io.StringIO("approve\n")
+
+            code = run_demo(
+                mode="synthetic-critical",
+                provider=None,
+                create_ticket=True,
+                stream_in=in_stream,
+                stream_out=out_stream,
+            )
+
+            self.assertEqual(code, 1)
+            output = out_stream.getvalue()
+            self.assertIn("ticket_creation_failed", output)
+            self.assertNotIn("SECRET_TOKEN", output)
+            self.assertNotIn("abc123", output)
+            self.assertNotIn("raw-provider-body", output)
+
+    def test_demo_create_ticket_failure_with_persist_audit_records_failure_event(self) -> None:
+        """When ticket creation fails with persist_audit enabled, TICKET_REQUESTED and TICKET_FAILED are persisted to JSONL."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            audit_file = Path(tmp_dir) / "test_audit_ticket_failure.jsonl"
+            out_stream = io.StringIO()
+            in_stream = io.StringIO("approve\n")
+            sensitive_error = "SECRET_TOKEN=abc123 raw-provider-body"
+
+            with patch("investigator.ticketing.FakeTicketClient.create_ticket", side_effect=Exception(sensitive_error)):
+                code = run_demo(
+                    mode="synthetic-critical",
+                    provider=None,
+                    persist_audit=True,
+                    create_ticket=True,
+                    stream_in=in_stream,
+                    stream_out=out_stream,
+                    audit_log_path=audit_file,
+                )
+
+            self.assertEqual(code, 1)
+            output = out_stream.getvalue()
+            self.assertIn("ticket_creation_failed", output)
+            self.assertNotIn("SECRET_TOKEN", output)
+            self.assertNotIn("abc123", output)
+            self.assertNotIn("raw-provider-body", output)
+
+            self.assertTrue(audit_file.exists())
+            raw_audit_text = audit_file.read_text(encoding="utf-8")
+            self.assertIn("TICKET_REQUESTED", raw_audit_text)
+            self.assertIn("TICKET_FAILED", raw_audit_text)
+            self.assertNotIn("TICKET_CREATED", raw_audit_text)
+            self.assertNotIn("SECRET_TOKEN", raw_audit_text)
+            self.assertNotIn("abc123", raw_audit_text)
+            self.assertNotIn("raw-provider-body", raw_audit_text)
+
+    def test_demo_create_ticket_with_persist_audit_records_ticket_events(self) -> None:
+        """When both persist_audit and create_ticket are set, ticket events are saved to JSONL."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            audit_file = Path(tmp_dir) / "test_audit_ticket.jsonl"
+            out_stream = io.StringIO()
+            in_stream = io.StringIO("approve\n")
+
+            code = run_demo(
+                mode="synthetic-critical",
+                provider=None,
+                persist_audit=True,
+                create_ticket=True,
+                stream_in=in_stream,
+                stream_out=out_stream,
+                audit_log_path=audit_file,
+            )
+
+            self.assertEqual(code, 0)
+            self.assertTrue(audit_file.exists())
+            content = audit_file.read_text(encoding="utf-8").strip().splitlines()
+            self.assertIn("TICKET_REQUESTED", content[-2])
+            self.assertIn("TICKET_CREATED", content[-1])
 
     # -----------------------------------------------------------------------
     # Security Boundary & Invariant Tests

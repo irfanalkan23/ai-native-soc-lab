@@ -65,6 +65,7 @@ from investigator.incident_record import (
     DEFAULT_INCIDENTS_DIR,
     IncidentConsistencyError,
     IncidentJsonWriter,
+    IncidentRecord,
     IncidentRecordError,
     IncidentWriterError,
     build_incident_record,
@@ -87,6 +88,14 @@ from investigator.policy import (
     ProposedAction,
     RiskLevel,
     RiskPolicyEngine,
+)
+from investigator.ticketing import (
+    ALLOWED_TICKET_LABELS,
+    FakeTicketClient,
+    TicketConfig,
+    TicketResult,
+    TicketingError,
+    build_ticket_request,
 )
 from investigator.simulator import (
     SimulatedResponseExecutor,
@@ -261,6 +270,7 @@ def _render_safe_summary(
     audit_log: AuditLog,
     persisted_path: Optional[Path] = None,
     written_incident_path: Optional[Path] = None,
+    ticket_result: Optional[TicketResult] = None,
 ) -> None:
     """Render structured, safe demo metadata without secrets or unbounded payloads."""
     stream.write("\n" + "=" * 64 + "\n")
@@ -334,6 +344,13 @@ def _render_safe_summary(
             rel_incident = written_incident_path
         stream.write(f"  Incident Record:   {rel_incident}\n")
 
+    if ticket_result is not None:
+        stream.write("\n[6. DOWNSTREAM TICKETING (LOCAL FAKE WORKFLOW)]\n")
+        stream.write(f"  Provider:          {ticket_result.provider} (offline simulation)\n")
+        stream.write(f"  Ticket Key:        {ticket_result.ticket_key}\n")
+        stream.write(f"  Detail Code:       {ticket_result.detail_code}\n")
+        stream.write(f"  Created At:        {ticket_result.created_at_utc}\n")
+
     stream.write("=" * 64 + "\n\n")
     stream.flush()
 
@@ -344,6 +361,7 @@ def run_demo(
     minutes: int = 15,
     persist_audit: bool = False,
     write_incident: bool = False,
+    create_ticket: bool = False,
     stream_in: Optional[TextIO] = None,
     stream_out: Optional[TextIO] = None,
     splunk_client: Optional[SplunkSearchClient] = None,
@@ -543,23 +561,11 @@ def run_demo(
         return 1
 
     # -----------------------------------------------------------------------
-    # Step 7: Optional JSONL Persistence (Post-Workflow Higher-Level Sink)
+    # Step 7: Optional Incident Record Composition & Persistence (Reporting Artifact)
     # -----------------------------------------------------------------------
-    target_audit_path: Optional[Path] = None
-    if persist_audit:
-        target_audit_path = audit_log_path or DEFAULT_AUDIT_LOG_PATH
-        try:
-            writer = JsonlAuditWriter(target_audit_path)
-            writer.write_events(audit_log.events())
-        except (AuditWriterError, AuditPathError, AuditWriteError) as err:
-            out_stream.write(f"[!] audit_persistence_failed: {err}\n")
-            return 1
-
-    # -----------------------------------------------------------------------
-    # Step 8: Optional Incident Record Persistence (Reporting Artifact Only)
-    # -----------------------------------------------------------------------
+    incident_rec: Optional[IncidentRecord] = None
     written_incident_path: Optional[Path] = None
-    if write_incident:
+    if write_incident or create_ticket:
         try:
             incident_rec = build_incident_record(
                 investigation_input=incident,
@@ -571,15 +577,80 @@ def run_demo(
                 deterministic_decoded_command=deterministic_decoded,
                 mitre_technique_id=mitre_id,
             )
-            target_incidents_dir = incidents_dir or DEFAULT_INCIDENTS_DIR
-            writer = IncidentJsonWriter(target_incidents_dir)
-            written_incident_path = writer.write_record(incident_rec)
+            if write_incident:
+                target_incidents_dir = incidents_dir or DEFAULT_INCIDENTS_DIR
+                writer = IncidentJsonWriter(target_incidents_dir)
+                written_incident_path = writer.write_record(incident_rec)
         except (IncidentRecordError, IncidentConsistencyError, IncidentWriterError) as err:
             out_stream.write(f"[!] incident_record_persistence_failed: {err}\n")
             return 1
 
     # -----------------------------------------------------------------------
-    # Step 9: Safe Final Summary
+    # Step 8: Optional Downstream Ticketing (Local Fake Workflow)
+    # -----------------------------------------------------------------------
+    ticket_result: Optional[TicketResult] = None
+    if create_ticket:
+        seq = len(audit_log.events())
+        audit_log.append(AuditEvent(
+            event_type=AuditEventType.TICKET_REQUESTED,
+            incident_id=incident.incident_id,
+            sequence=seq,
+            detail_code="ticket_request_initiated",
+        ))
+
+        try:
+            ticket_config = TicketConfig(
+                project_key="SEC",
+                issue_type="Incident",
+                allowed_labels=tuple(sorted(ALLOWED_TICKET_LABELS)),
+                include_decoded_command=False,
+            )
+            ticket_req = build_ticket_request(incident_rec, ticket_config)
+            ticket_client = FakeTicketClient()
+            ticket_result = ticket_client.create_ticket(ticket_req)
+            if not ticket_result.success:
+                raise TicketingError("ticket_creation_failed")
+            seq = len(audit_log.events())
+            audit_log.append(AuditEvent(
+                event_type=AuditEventType.TICKET_CREATED,
+                incident_id=incident.incident_id,
+                sequence=seq,
+                detail_code=ticket_result.detail_code,
+            ))
+        except (TicketingError, Exception):
+            seq = len(audit_log.events())
+            audit_log.append(AuditEvent(
+                event_type=AuditEventType.TICKET_FAILED,
+                incident_id=incident.incident_id,
+                sequence=seq,
+                detail_code="ticket_dispatch_failed",
+            ))
+            out_stream.write("[!] ticket_creation_failed\n")
+            if persist_audit:
+                target_audit_path = audit_log_path or DEFAULT_AUDIT_LOG_PATH
+                try:
+                    writer = JsonlAuditWriter(target_audit_path)
+                    writer.write_events(audit_log.events())
+                except (AuditWriterError, AuditPathError, AuditWriteError):
+                    out_stream.write("[!] audit_persistence_failed\n")
+                    return 1
+            return 1
+
+    # -----------------------------------------------------------------------
+    # Step 9: Optional JSONL Persistence (Post-Workflow Higher-Level Sink)
+    # -----------------------------------------------------------------------
+    target_audit_path: Optional[Path] = None
+    if persist_audit:
+        target_audit_path = audit_log_path or DEFAULT_AUDIT_LOG_PATH
+        try:
+            writer = JsonlAuditWriter(target_audit_path)
+            writer.write_events(audit_log.events())
+        except (AuditWriterError, AuditPathError, AuditWriteError):
+            out_stream.write("[!] audit_persistence_failed\n")
+            return 1
+
+    # -----------------------------------------------------------------------
+    # Step 10: Safe Final Summary
     # -----------------------------------------------------------------------
     _render_safe_summary(
         stream=out_stream,
@@ -595,6 +666,7 @@ def run_demo(
         audit_log=audit_log,
         persisted_path=target_audit_path,
         written_incident_path=written_incident_path,
+        ticket_result=ticket_result,
     )
 
     return 0
@@ -633,6 +705,11 @@ def main() -> int:
         action="store_true",
         help="Generate and persist deterministic IncidentRecord artifact to JSON.",
     )
+    parser.add_argument(
+        "--create-ticket",
+        action="store_true",
+        help="Generate and dispatch deterministic ticket payload via FakeTicketClient.",
+    )
 
     args = parser.parse_args()
 
@@ -654,6 +731,7 @@ def main() -> int:
         minutes=args.minutes,
         persist_audit=args.persist_audit,
         write_incident=args.write_incident,
+        create_ticket=args.create_ticket,
     )
 
 
