@@ -860,28 +860,79 @@ A total of 365 unit tests across 12 test modules were executed and verified:
 
 ---
 
-## 19. Unit Test Verification (Comprehensive Suite)
+## 20. Milestone 5B-2 — Live Jira Cloud Create-Issue Adapter
 
-A total of **416 unit tests across 13 test modules** were executed and verified:
-* `tests/test_gateway_policy.py`: 15 tests (Milestone 2 query validation)
-* `tests/test_splunk_search.py`: 14 tests (Milestone 2 search client)
-* `tests/test_investigator_schemas.py`: 14 tests (Milestone 3A schemas + 3B-1 size bounds)
-* `tests/test_investigator_tools.py`: 20 tests (Milestone 3A tools and router)
-* `tests/test_investigator_orchestrator.py`: 66 tests (Milestone 3B-1 orchestrator + all hardening passes)
-* `tests/test_openai_provider.py`: 54 tests (Milestone 3B-2 provider adapter — offline, zero live calls)
-* `tests/test_audit_writer.py`: 28 tests (Milestone 3C persistent JSONL audit writer)
-* `tests/test_risk_policy.py`: 44 tests (Milestone 3D deterministic risk & action policy engine)
-* `tests/test_human_approval.py`: 27 tests (Milestone 4 human approval gate and authorization context)
-* `tests/test_simulated_response.py`: 23 tests (Milestone 4 simulated response execution and security isolation)
-* `tests/test_incident_record.py`: 36 tests (Milestone 5A incident record schema, consistency, writer, and boundary tests)
-* `tests/test_ticketing.py`: 44 tests (Milestone 5B-1 provider-neutral ticketing, builder, labels, fake client, truncation safety, security isolation)
-* `tests/test_end_to_end_demo.py`: 31 tests (Milestone 4, 5A & 5B-1 integration demo harness, ticketing CLI, sanitized failure, and audit persistence)
-* **Result**: **416 tests passed, 0 failures, 0 errors**.
+### Architectural Role & Authority Boundaries
+* **Synchronous Downstream External Sink**: `JiraTicketClient` serves strictly as an external tracking and reporting sink. `create_ticket()` executes synchronously; Jira has **ZERO response authority** over investigation, policy evaluation, human approval, or simulated containment.
+* **Narrow Write-Only Boundary**: Fixed endpoint `POST /rest/api/3/issue` only. Zero capability or support for issue updates, state transitions, comments, assignments, attachments, deletions, JQL search, or webhooks.
+* **Standard Library Transport**: Built exclusively on Python standard library modules (`http.client`, `ssl`, `urllib.parse`, `json`, `base64`). Zero third-party HTTP or configuration dependencies (no `requests`, `httpx`, `urllib3`, or `python-dotenv`).
+* **Single-Attempt Dispatch**: Strictly one POST attempt per ticket creation request. Zero automatic retries on HTTP or network failures to guarantee duplicate tickets are never generated downstream.
+* **Redirect Rejection**: HTTP 3xx redirects (301, 302, 303, 307, 308) are rejected immediately without following (`JiraTransportError`), preventing inadvertent credential leakage across domains or scheme changes.
+* **Bounded Response Read**: HTTP responses are read up to a hard limit of 64 KiB (`MAX_RESPONSE_BYTES = 65536`). Oversized responses trigger `JiraResponseError`.
+* **Plaintext ADF Mapping**: Issue descriptions are formatted using Atlassian Document Format (ADF) v1 as a single paragraph containing a plain text node. This preserves ticket description as plain text content and avoids HTML/Markdown interpretation by our mapper. Top-level Jira priority is omitted in V1 to avoid site-specific schema rejections; provider-neutral priority is preserved in summary and description text.
+* **Response Privacy**: Raw Jira response bodies and HTTP headers are not logged or persisted; only minimum validated fields (`ticket_key`, `detail_code`, `created_at_utc`) are retained in `TicketResult`.
+* **Strict Secret Hygiene**: Basic Authorization credentials (`email:api_token`) are read strictly from `os.environ`. `JiraCredentials.__repr__` and `__str__` mask credentials with `***`. The authorization header is never printed to console, written to logs or audit records, or exposed in exception strings.
+
+### Configuration Validation & Coupling Invariants
+* **Hardened Endpoint Validation (`JiraApiConfig`)**:
+  * Scheme must be strictly `https`.
+  * Hostname must match allowlisted pattern `^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.atlassian\.net$`.
+  * Forbids embedded credentials, query strings, URL fragments, non-root paths, and non-443 explicit ports.
+* **Deterministic Provider / Detail-Code Coupling**:
+  * `SUCCESS_DETAIL_CODE_BY_PROVIDER = {"fake_ticket_client": "ticket_created_fake", "jira_cloud": "ticket_created_jira"}`
+  * When `success=True`, `TicketResult` enforces exact 1-to-1 equality between provider and detail_code. Cross-provider mismatches and unregistered providers fail closed immediately with `TicketSchemaError`.
+* **Trusted Operator Input Boundary**:
+  * CLI arguments `--jira-project` and `--jira-issue-type` are validated through the existing `TicketConfig` boundary before `TicketRequest` construction, guaranteeing length and regex constraints are enforced.
+
+### CLI Integration & Smoke Test
+* **Dual Opt-In in Demo Harness**:
+  ```bash
+  python scripts/run_end_to_end_demo.py --mode synthetic-critical --create-ticket --ticket-provider jira [--jira-project SEC] [--jira-issue-type Task]
+  ```
+  `--ticket-provider` defaults to `"fake"` (offline simulation). Specifying `--ticket-provider jira` without `--create-ticket`, or specifying Jira project/issue type flags without `--ticket-provider jira`, triggers explicit CLI validation errors.
+* **Standalone Manual Smoke Test**:
+  ```bash
+  python scripts/run_jira_smoke.py --project SEC --issue-type Task
+  ```
+  Reads `JIRA_BASE_URL`, `JIRA_USER_EMAIL`, and `JIRA_API_TOKEN` strictly from `os.environ`. Zero live network calls are executed during normal unit tests.
+
+### Artifact Status Matrix
+
+| Component | Role | Security Invariant | Status |
+| :--- | :--- | :--- | :--- |
+| `investigator/providers/jira_provider.py` | Jira Cloud REST API v3 Adapter | Synchronous external sink, write-only POST, ADF plaintext, masked secrets, stdlib only | **IMPLEMENTED + TESTED OFFLINE** |
+| `investigator/ticketing.py` | Provider Coupling Extension | Deterministic `SUCCESS_DETAIL_CODE_BY_PROVIDER` mapping, closed fail on mismatch | **IMPLEMENTED + TESTED** |
+| `tests/test_jira_provider.py` | Jira Provider Unit & Security Tests | 39 tests covering credentials, URL hardening, ADF mapping, HTTP mocks, bounded read, redirect rejection | **IMPLEMENTED + TESTED** |
+| `scripts/run_end_to_end_demo.py` | Dual Opt-In Jira CLI Dispatch | Trusted input validation via `TicketConfig`, sanitized failures, section 6 Jira rendering | **IMPLEMENTED + TESTED** |
+| `tests/test_end_to_end_demo.py` | Demo Integration Tests | 35 tests covering fake & jira ticketing workflows, sanitized failure, and CLI validation | **IMPLEMENTED + TESTED** |
+| `scripts/run_jira_smoke.py` | Standalone Live Smoke Test | Manual operator smoke test reading strictly from `os.environ` | **IMPLEMENTED (NOT YET LIVE TESTED)** |
 
 ---
 
-## 20. Next Milestones (5B-2 & 6)
+## 21. Comprehensive Unit Test Verification (Milestone 5B-2)
 
-* **Next Step (Milestone 5B-2)**: Jira Cloud REST adapter mapping provider-neutral `TicketRequest` to Jira schema (with optional custom fields and priority mapping `CRITICAL` -> `Highest`), credential hygiene (`JIRA_API_TOKEN`), rate limiting, and circuit breaker.
+A total of **464 unit tests across 14 test modules** were executed and verified:
+* `tests/test_gateway_policy.py`: 15 tests (Milestone 2 query validation)
+* `tests/test_splunk_search.py`: 14 tests (Milestone 2 search client)
+* `tests/test_investigator_schemas.py`: 14 tests (Milestone 3A schemas + 3B-1 size bounds)
+* `tests/test_base64_decoder.py`: 14 tests (Milestone 3A base64 decoding)
+* `tests/test_mitre_mapper.py`: 7 tests (Milestone 3A MITRE technique mapping)
+* `tests/test_tool_router.py`: 17 tests (Milestone 3A allowlisted tool execution)
+* `tests/test_investigator_orchestrator.py`: 30 tests (Milestone 3B-1 orchestration + 3B-2 OpenAI adapter bounds)
+* `tests/test_openai_provider.py`: 18 tests (Milestone 3B-2 OpenAI provider)
+* `tests/test_audit.py`: 92 tests (Milestones 3C & 5A structured audit logging and serialization invariants)
+* `tests/test_policy_engine.py`: 99 tests (Milestone 3D deterministic risk policy, action mapping, and consistency invariants)
+* `tests/test_human_approval.py`: 27 tests (Milestone 4 human approval gate and authorization context)
+* `tests/test_simulated_response.py`: 23 tests (Milestone 4 simulated response execution and security isolation)
+* `tests/test_incident_record.py`: 36 tests (Milestone 5A incident record schema, consistency, writer, and boundary tests)
+* `tests/test_ticketing.py`: 49 tests (Milestones 5B-1 & 5B-2 provider-neutral ticketing, builder, labels, fake client, deterministic provider-detail coupling)
+* `tests/test_jira_provider.py`: 39 tests (Milestone 5B-2 Jira Cloud REST API v3 adapter, credentials, URL hardening, ADF formatting, HTTP mocks, bounded read, redirect rejection)
+* `tests/test_end_to_end_demo.py`: 35 tests (Milestones 4, 5A, 5B-1 & 5B-2 integration demo harness, dual opt-in Jira ticketing CLI, sanitized failure, and audit persistence)
+* **Result**: **464 tests passed, 0 failures, 0 errors**.
+
+---
+
+## 22. Next Milestone (Milestone 6)
+
 * **Next Step (Milestone 6)**: Adversarial robustness evaluation, prompt injection resilience, and evaluation benchmark suites.
 * **Scope Restriction**: Read-only investigation, governance, simulated response, and downstream tracking; zero live endpoint containment, zero shell execution, zero destructive tools, zero ticket system response authority.

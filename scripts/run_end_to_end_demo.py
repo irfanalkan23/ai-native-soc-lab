@@ -92,11 +92,14 @@ from investigator.policy import (
 from investigator.ticketing import (
     ALLOWED_TICKET_LABELS,
     FakeTicketClient,
+    TicketClient,
+    TicketClientError,
     TicketConfig,
     TicketResult,
     TicketingError,
     build_ticket_request,
 )
+from investigator.providers.jira_provider import JiraTicketClient
 from investigator.simulator import (
     SimulatedResponseExecutor,
     SimulationError,
@@ -345,8 +348,12 @@ def _render_safe_summary(
         stream.write(f"  Incident Record:   {rel_incident}\n")
 
     if ticket_result is not None:
-        stream.write("\n[6. DOWNSTREAM TICKETING (LOCAL FAKE WORKFLOW)]\n")
-        stream.write(f"  Provider:          {ticket_result.provider} (offline simulation)\n")
+        if ticket_result.provider == "jira_cloud":
+            stream.write("\n[6. DOWNSTREAM TICKETING (JIRA CLOUD WORKFLOW)]\n")
+            stream.write(f"  Provider:          {ticket_result.provider} (live cloud adapter)\n")
+        else:
+            stream.write("\n[6. DOWNSTREAM TICKETING (LOCAL FAKE WORKFLOW)]\n")
+            stream.write(f"  Provider:          {ticket_result.provider} (offline simulation)\n")
         stream.write(f"  Ticket Key:        {ticket_result.ticket_key}\n")
         stream.write(f"  Detail Code:       {ticket_result.detail_code}\n")
         stream.write(f"  Created At:        {ticket_result.created_at_utc}\n")
@@ -362,6 +369,10 @@ def run_demo(
     persist_audit: bool = False,
     write_incident: bool = False,
     create_ticket: bool = False,
+    ticket_provider: str = "fake",
+    jira_project: Optional[str] = None,
+    jira_issue_type: Optional[str] = None,
+    jira_client: Optional[TicketClient] = None,
     stream_in: Optional[TextIO] = None,
     stream_out: Optional[TextIO] = None,
     splunk_client: Optional[SplunkSearchClient] = None,
@@ -586,7 +597,7 @@ def run_demo(
             return 1
 
     # -----------------------------------------------------------------------
-    # Step 8: Optional Downstream Ticketing (Local Fake Workflow)
+    # Step 8: Optional Downstream Ticketing
     # -----------------------------------------------------------------------
     ticket_result: Optional[TicketResult] = None
     if create_ticket:
@@ -599,14 +610,28 @@ def run_demo(
         ))
 
         try:
+            if incident_rec is None:
+                raise TicketingError("IncidentRecord is required for ticket creation")
+
+            # Route trusted operator inputs strictly through TicketConfig validation boundary
+            project_key = jira_project if (ticket_provider == "jira" and jira_project) else "SEC"
+            issue_type = jira_issue_type if (ticket_provider == "jira" and jira_issue_type) else "Incident"
+
             ticket_config = TicketConfig(
-                project_key="SEC",
-                issue_type="Incident",
+                project_key=project_key,
+                issue_type=issue_type,
                 allowed_labels=tuple(sorted(ALLOWED_TICKET_LABELS)),
                 include_decoded_command=False,
             )
             ticket_req = build_ticket_request(incident_rec, ticket_config)
-            ticket_client = FakeTicketClient()
+
+            if ticket_provider == "fake":
+                ticket_client: TicketClient = FakeTicketClient()
+            elif ticket_provider == "jira":
+                ticket_client = jira_client or JiraTicketClient.from_env()
+            else:
+                raise TicketClientError(f"unsupported ticket provider: {ticket_provider}")
+
             ticket_result = ticket_client.create_ticket(ticket_req)
             if not ticket_result.success:
                 raise TicketingError("ticket_creation_failed")
@@ -708,7 +733,25 @@ def main() -> int:
     parser.add_argument(
         "--create-ticket",
         action="store_true",
-        help="Generate and dispatch deterministic ticket payload via FakeTicketClient.",
+        help="Generate and dispatch deterministic ticket payload (default: FakeTicketClient).",
+    )
+    parser.add_argument(
+        "--ticket-provider",
+        choices=["fake", "jira"],
+        default="fake",
+        help="Ticket provider for downstream ticketing (fake or jira, default: fake). Requires --create-ticket.",
+    )
+    parser.add_argument(
+        "--jira-project",
+        type=str,
+        default=None,
+        help="Target Jira Cloud project key (e.g. SEC). Requires --ticket-provider jira.",
+    )
+    parser.add_argument(
+        "--jira-issue-type",
+        type=str,
+        default=None,
+        help="Target Jira Cloud issue type (e.g. Incident or Task). Requires --ticket-provider jira.",
     )
 
     args = parser.parse_args()
@@ -725,6 +768,16 @@ def main() -> int:
     if not (1 <= args.minutes <= 60):
         parser.error("--minutes must be between 1 and 60")
 
+    # Jira dual opt-in and flag compatibility checks
+    if args.ticket_provider == "jira" and not args.create_ticket:
+        parser.error("--ticket-provider jira requires --create-ticket")
+
+    if args.jira_project is not None and (not args.create_ticket or args.ticket_provider != "jira"):
+        parser.error("--jira-project requires --create-ticket and --ticket-provider jira")
+
+    if args.jira_issue_type is not None and (not args.create_ticket or args.ticket_provider != "jira"):
+        parser.error("--jira-issue-type requires --create-ticket and --ticket-provider jira")
+
     return run_demo(
         mode=args.mode,
         provider=provider,
@@ -732,6 +785,9 @@ def main() -> int:
         persist_audit=args.persist_audit,
         write_incident=args.write_incident,
         create_ticket=args.create_ticket,
+        ticket_provider=args.ticket_provider,
+        jira_project=args.jira_project,
+        jira_issue_type=args.jira_issue_type,
     )
 
 

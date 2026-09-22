@@ -330,6 +330,59 @@ class TestTicketResultConsistency(unittest.TestCase):
                 created_at_utc="2026-09-20T12:00:00Z",
             )
 
+    def test_valid_jira_success_result(self) -> None:
+        result = TicketResult(
+            success=True,
+            provider="jira_cloud",
+            ticket_key="SEC-1234",
+            detail_code="ticket_created_jira",
+            created_at_utc="2026-09-22T12:00:00Z",
+        )
+        self.assertTrue(result.success)
+        self.assertEqual(result.provider, "jira_cloud")
+        self.assertEqual(result.ticket_key, "SEC-1234")
+        self.assertEqual(result.detail_code, "ticket_created_jira")
+
+    def test_mismatch_fake_provider_with_jira_code_fails_closed(self) -> None:
+        with self.assertRaises(TicketSchemaError):
+            TicketResult(
+                success=True,
+                provider="fake_ticket_client",
+                ticket_key="SEC-0001",
+                detail_code="ticket_created_jira",
+                created_at_utc="2026-09-20T12:00:00Z",
+            )
+
+    def test_mismatch_jira_provider_with_fake_code_fails_closed(self) -> None:
+        with self.assertRaises(TicketSchemaError):
+            TicketResult(
+                success=True,
+                provider="jira_cloud",
+                ticket_key="SEC-0001",
+                detail_code="ticket_created_fake",
+                created_at_utc="2026-09-20T12:00:00Z",
+            )
+
+    def test_unregistered_provider_success_fails_closed(self) -> None:
+        with self.assertRaises(TicketSchemaError):
+            TicketResult(
+                success=True,
+                provider="unregistered_provider",
+                ticket_key="SEC-0001",
+                detail_code="ticket_created_fake",
+                created_at_utc="2026-09-20T12:00:00Z",
+            )
+
+    def test_success_false_with_jira_success_code_fails_closed(self) -> None:
+        with self.assertRaises(TicketSchemaError):
+            TicketResult(
+                success=False,
+                provider="jira_cloud",
+                ticket_key=None,
+                detail_code="ticket_created_jira",
+                created_at_utc="2026-09-20T12:00:00Z",
+            )
+
     def test_created_at_utc_non_zero_offset_rejected(self) -> None:
         with self.assertRaises(TicketSchemaError):
             TicketResult(

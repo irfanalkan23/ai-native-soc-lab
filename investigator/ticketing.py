@@ -1,4 +1,4 @@
-"""Deterministic Ticketing Contract and Local Fake Ticket Workflow (Milestone 5B-1).
+"""Deterministic Ticketing Contract and Provider-Neutral Schemas.
 
 Architecture Principle:
     AI proposes
@@ -11,9 +11,10 @@ Architecture Principle:
 Trust & Scope Boundaries:
     - Downstream Reporting Only: Tickets are strictly downstream reporting artifacts.
       They possess ZERO action, policy, approval, or execution authority.
-    - Zero External Network / Zero Credentials: This module makes no network calls,
-      connects to no remote APIs, uses no API tokens, and imports no HTTP/socket libraries.
-      (Live Jira Cloud integration is deferred to Milestone 5B-2).
+    - Zero External Network / Zero Credentials: This module remains strictly provider-neutral,
+      makes zero network calls, connects to no remote APIs, uses no API tokens, and imports
+      no HTTP/socket libraries. The Jira network adapter is implemented separately in
+      investigator/providers/jira_provider.py.
     - Inert Evidence Demarcation: Decoded commands or evidence included in tickets are
       labeled with explicit trust boundaries and remain inert text data with zero execution capability.
     - Trusted Configuration: Project keys, issue types, and allowed labels originate
@@ -65,8 +66,14 @@ ALLOWED_TICKET_LABELS = frozenset({
     "action-not-executed",
 })
 
+SUCCESS_DETAIL_CODE_BY_PROVIDER = {
+    "fake_ticket_client": "ticket_created_fake",
+    "jira_cloud": "ticket_created_jira",
+}
+
 TICKET_DETAIL_CODES = frozenset({
     "ticket_created_fake",
+    "ticket_created_jira",
     "ticket_creation_failed",
     "ticket_payload_invalid",
     "ticket_client_error",
@@ -273,12 +280,13 @@ class TicketResult:
                 raise TicketSchemaError("success=True requires a valid ticket_key (e.g. 'SEC-0001')")
             if len(self.ticket_key) > MAX_TICKET_KEY_LENGTH:
                 raise TicketSchemaError(f"ticket_key exceeds maximum length {MAX_TICKET_KEY_LENGTH}")
-            if self.detail_code != "ticket_created_fake":
-                raise TicketSchemaError("success=True requires detail_code 'ticket_created_fake'")
+            expected_detail = SUCCESS_DETAIL_CODE_BY_PROVIDER.get(self.provider)
+            if expected_detail is None or self.detail_code != expected_detail:
+                raise TicketSchemaError("success=True requires detail_code matching provider")
         else:
             if self.ticket_key is not None:
                 raise TicketSchemaError("success=False requires ticket_key=None")
-            if self.detail_code == "ticket_created_fake":
+            if self.detail_code in SUCCESS_DETAIL_CODE_BY_PROVIDER.values():
                 raise TicketSchemaError("success=False cannot have success detail_code")
 
 

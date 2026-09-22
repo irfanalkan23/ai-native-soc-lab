@@ -76,12 +76,13 @@ The initial incident scenario covers an execution attempt using obfuscated Power
 | **Policy Engine & Gate** | Security Controls | **IMPLEMENTED + TESTED** | Deterministic risk and action-policy evaluation; bounded scoring and action mapping. |
 | **Human Approval Gate** | Security Controls / HITL | **IMPLEMENTED + TESTED** | CLI approval gate for consequential actions; bounded retries, exact-type checks, fail-closed denial. |
 | **Simulated Response Executor** | SOAR / Simulation | **IMPLEMENTED + TESTED** | Deterministic authorization binding; records simulated endpoint isolation; zero live execution. |
-| **End-to-End Demo Harness** | Integration / Demo | **IMPLEMENTED + TESTED** | Complete pipeline script (`scripts/run_end_to_end_demo.py`); 29 integration tests pass. |
+| **End-to-End Demo Harness** | Integration / Demo | **IMPLEMENTED + TESTED** | Complete pipeline script (`scripts/run_end_to_end_demo.py`); 35 integration tests pass. |
 | **Structured Incident Artifact** | Reporting Artifact | **IMPLEMENTED + TESTED** | Local structured JSON artifact generator (`investigator/incident_record.py`); 36 unit tests pass; reporting only with zero action authority. |
 | **Response Actions** | Containment Safety | **SIMULATED ONLY** | No real containment exists; endpoint isolation is simulated; zero subprocess, shell, or system mutation. |
-| **Ticketing Integration (Local Contract / Fake Client)** | SOAR / Reporting | **IMPLEMENTED + TESTED** | Deterministic contract (`investigator/ticketing.py`) & fake client; 40 unit tests pass; offline simulation only; zero response authority. |
+| **Ticketing Integration (Local Contract / Fake Client)** | SOAR / Reporting | **IMPLEMENTED + TESTED** | Deterministic contract (`investigator/ticketing.py`) & fake client; 49 unit tests pass; offline simulation only; zero response authority. |
 | **Threat-Intelligence Lookups** | Threat Intelligence | **NOT IMPLEMENTED** | External reputation and IOC lookups are planned for future milestones. |
-| **Live Jira API Integration** | SOAR / Case Management | **NOT IMPLEMENTED** | Live Jira Cloud API integration is planned for Milestone 5B-2. |
+| **Jira Cloud Create-Issue Adapter** | SOAR / Case Management | **IMPLEMENTED + TESTED OFFLINE** | Downstream tracking adapter (`investigator/providers/jira_provider.py`); 39 offline tests pass; zero response authority. |
+| **Live Jira Issue Creation** | SOAR / Case Management | **NOT YET LIVE TESTED** | Manual verification script (`scripts/run_jira_smoke.py`) available; requires operator process environment variables; pending live test. |
 
 ---
 
@@ -110,6 +111,9 @@ detection / incident input
    * Exercises `ToolRouter`, `RiskPolicyEngine` (deterministic score 80, `CRITICAL`, `APPROVAL_REQUIRED`, `SIMULATE_ENDPOINT_ISOLATION`), interactive human approval (`[approve/deny]`), and response simulation (`SIMULATED` on approve, `NOT_EXECUTED` on deny).
    * Optional persistence: `--persist-audit` appends the session trail to `artifacts/audit/agent_audit.jsonl`.
    * Optional incident record: `--write-incident` generates and persists a deterministic `IncidentRecord` artifact to `artifacts/incidents/<incident_id>.json`.
+   * Optional ticketing: `--create-ticket` generates and dispatches a bounded ticket. Defaults to `--ticket-provider fake` (offline simulation).
+   * Live Jira Cloud dispatch: `--create-ticket --ticket-provider jira [--jira-project SEC] [--jira-issue-type Task]` (adapter implemented + tested offline; live issue creation pending operator live validation).
+   * Standalone live smoke test: `python scripts/run_jira_smoke.py --project <KEY> --issue-type <TYPE>` (reads strictly from `os.environ`; manual verification harness, not yet live tested).
 
 2. **Live Benign Lab Mode** (Run locally on Splunk-Server):
    ```bash
@@ -177,5 +181,5 @@ Located in [`detections/sigma/suspicious_encoded_powershell.yml`](detections/sig
 - [x] **Milestone 4**: Human-in-the-loop approval workflow and simulated response execution.
 - [x] **Milestone 5A**: Deterministic structured incident-record reporting artifact (reporting only, zero action authority).
 - [x] **Milestone 5B-1**: Deterministic ticketing contract and local fake ticket workflow (reporting only, zero action authority).
-- [ ] **Milestone 5B-2**: Live Jira Cloud API integration and remote ticketing dispatch (planned).
+- [x] **Milestone 5B-2**: Live Jira Cloud REST API v3 create-issue adapter (downstream external tracking/reporting sink, zero response authority; adapter implemented + tested offline, live validation pending).
 - [ ] **Milestone 6**: Adversarial robustness evaluation and prompt injection testing.

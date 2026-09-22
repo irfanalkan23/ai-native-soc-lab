@@ -16,9 +16,15 @@ from datetime import datetime, timezone
 import io
 import json
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
+
+from investigator.ticketing import (
+    TicketResult,
+    TicketingError,
+)
 
 from gateway.splunk_search import (
     SplunkConnectionError,
@@ -866,6 +872,110 @@ class TestEndToEndDemoHarness(unittest.TestCase):
             self.assertNotIn("os.system", src)
             self.assertNotIn("import socket", src)
             self.assertNotIn("import urllib", src)
+
+    def test_demo_create_ticket_jira_success(self) -> None:
+        """When ticket_provider is 'jira', dispatches to JiraTicketClient and renders Jira section 6."""
+        mock_jira_client = MagicMock()
+        mock_jira_client.create_ticket.return_value = TicketResult(
+            success=True,
+            provider="jira_cloud",
+            ticket_key="SEC-8888",
+            detail_code="ticket_created_jira",
+            created_at_utc="2026-09-22T12:00:00Z",
+        )
+
+        in_stream = io.StringIO("approve\n")
+        out_stream = io.StringIO()
+
+        code = run_demo(
+            mode="synthetic-critical",
+            provider=None,
+            persist_audit=False,
+            create_ticket=True,
+            ticket_provider="jira",
+            jira_project="SEC",
+            jira_issue_type="Incident",
+            jira_client=mock_jira_client,
+            stream_in=in_stream,
+            stream_out=out_stream,
+        )
+
+        self.assertEqual(code, 0)
+        output = out_stream.getvalue()
+        self.assertIn("[6. DOWNSTREAM TICKETING (JIRA CLOUD WORKFLOW)]", output)
+        self.assertIn("Provider:          jira_cloud (live cloud adapter)", output)
+        self.assertIn("Ticket Key:        SEC-8888", output)
+        self.assertIn("Detail Code:       ticket_created_jira", output)
+        mock_jira_client.create_ticket.assert_called_once()
+
+    def test_demo_create_ticket_jira_failure_sanitized(self) -> None:
+        """When Jira ticket creation fails, sanitized error is output without leaking sensitive data."""
+        mock_jira_client = MagicMock()
+        mock_jira_client.create_ticket.side_effect = TicketingError("SECRET_AUTH_TOKEN=dGVzdDp0b2tlbg== HTTP 401")
+
+        in_stream = io.StringIO("approve\n")
+        out_stream = io.StringIO()
+
+        code = run_demo(
+            mode="synthetic-critical",
+            provider=None,
+            persist_audit=False,
+            create_ticket=True,
+            ticket_provider="jira",
+            jira_client=mock_jira_client,
+            stream_in=in_stream,
+            stream_out=out_stream,
+        )
+
+        self.assertEqual(code, 1)
+        output = out_stream.getvalue()
+        self.assertIn("[!] ticket_creation_failed", output)
+        self.assertNotIn("SECRET_AUTH_TOKEN", output)
+        self.assertNotIn("dGVzdDp0b2tlbg==", output)
+        self.assertNotIn("HTTP 401", output)
+
+    def test_jira_project_and_issue_type_validated_through_ticket_config(self) -> None:
+        """Operator inputs for --jira-project and --jira-issue-type pass through TicketConfig validation."""
+        in_stream = io.StringIO("approve\n")
+        out_stream = io.StringIO()
+
+        # Lowercase / invalid project key must be rejected by TicketConfig
+        code = run_demo(
+            mode="synthetic-critical",
+            provider=None,
+            persist_audit=False,
+            create_ticket=True,
+            ticket_provider="jira",
+            jira_project="invalid-lowercase-key",
+            stream_in=in_stream,
+            stream_out=out_stream,
+        )
+
+        self.assertEqual(code, 1)
+        output = out_stream.getvalue()
+        self.assertIn("[!] ticket_creation_failed", output)
+
+    def test_cli_flags_jira_dual_opt_in_validation(self) -> None:
+        """Verify argparse enforces dual opt-in and flag dependencies."""
+        from scripts.run_end_to_end_demo import main
+
+        # 1. --ticket-provider jira without --create-ticket
+        with patch.object(sys, "argv", ["run_end_to_end_demo.py", "--mode", "synthetic-critical", "--ticket-provider", "jira"]):
+            with self.assertRaises(SystemExit) as ctx:
+                main()
+            self.assertEqual(ctx.exception.code, 2)
+
+        # 2. --jira-project without --ticket-provider jira
+        with patch.object(sys, "argv", ["run_end_to_end_demo.py", "--mode", "synthetic-critical", "--create-ticket", "--jira-project", "SEC"]):
+            with self.assertRaises(SystemExit) as ctx:
+                main()
+            self.assertEqual(ctx.exception.code, 2)
+
+        # 3. --jira-issue-type without --ticket-provider jira
+        with patch.object(sys, "argv", ["run_end_to_end_demo.py", "--mode", "synthetic-critical", "--create-ticket", "--jira-issue-type", "Incident"]):
+            with self.assertRaises(SystemExit) as ctx:
+                main()
+            self.assertEqual(ctx.exception.code, 2)
 
 
 if __name__ == "__main__":
