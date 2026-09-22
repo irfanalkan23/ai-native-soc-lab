@@ -254,6 +254,39 @@ class TestSplunkSearchClient(unittest.TestCase):
         with self.assertRaises(ValueError):
             SplunkSearchClient(timeout=-5.0)
 
+    def test_spl_query_dispatch_payload_verification(self) -> None:
+        """Verify that the outgoing HTTP request body dispatches the updated allowlisted SPL."""
+        import urllib.parse
+        mock_export_stream = (
+            '{"preview":false,"offset":0,"lastrow":true,"result":{'
+            '"_time":"2026-09-15T12:00:00.000+00:00",'
+            '"host":"DC01",'
+            '"User":"SOCLAB\\\\Administrator",'
+            '"Image":"C:\\\\Windows\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe",'
+            '"CommandLine":"powershell.exe -NoProfile -EncodedCommand VwBy...",'
+            '"ParentImage":"C:\\\\Windows\\\\System32\\\\cmd.exe",'
+            '"ParentCommandLine":"\\"C:\\\\Windows\\\\system32\\\\cmd.exe\\""'
+            '}}\n'
+        )
+        with patch("urllib.request.urlopen") as mock_urlopen:
+            mock_urlopen.return_value = self._create_mock_response(mock_export_stream)
+            self.client.search_encoded_powershell(host="DC01", minutes=15, limit=10)
+
+            mock_urlopen.assert_called_once()
+            called_req = mock_urlopen.call_args[0][0]
+            parsed_body = urllib.parse.parse_qs(called_req.data.decode("utf-8"))
+            self.assertIn("search", parsed_body)
+            spl_sent = parsed_body["search"][0]
+
+            self.assertIn("<EventID>1</EventID>", spl_sent)
+            self.assertIn('rex field=_raw "<Data Name=[\'\\"]Image[\'\\"]>(?<Image>[^<]+)</Data>"', spl_sent)
+            self.assertIn('rex field=_raw "<Data Name=[\'\\"]CommandLine[\'\\"]>(?<CommandLine>[^<]+)</Data>"', spl_sent)
+            self.assertIn('where match(Image, "(?i)powershell[.]exe$")', spl_sent)
+            self.assertIn('where match(CommandLine, "(?i)(^|[[:space:]])-(encodedcommand|enc)([[:space:]]|$)")', spl_sent)
+            self.assertIn("| sort - _time", spl_sent)
+            self.assertIn("| head 10", spl_sent)
+            self.assertIn("| table _time host User Image CommandLine ParentImage ParentCommandLine", spl_sent)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,9 +1,9 @@
 index=main sourcetype="XmlWinEventLog:Microsoft-Windows-Sysmon/Operational" "<EventID>1</EventID>"
-| rex field=_raw "<Data Name='Image'>(?<Image>[^<]+)"
-| rex field=_raw "<Data Name='CommandLine'>(?<CommandLine>[^<]+)"
-| rex field=_raw "<Data Name='ParentImage'>(?<ParentImage>[^<]+)"
-| rex field=_raw "<Data Name='ParentCommandLine'>(?<ParentCommandLine>[^<]+)"
-| rex field=_raw "<Data Name='User'>(?<User>[^<]+)"
-| where match(Image, "(?i)\\\\powershell\.exe$")
-| where match(CommandLine, "(?i)(^|\\s)-(encodedcommand|enc)\\b")
+| rex field=_raw "<Data Name=['\"]Image['\"]>(?<Image>[^<]+)</Data>"
+| rex field=_raw "<Data Name=['\"]CommandLine['\"]>(?<CommandLine>[^<]+)</Data>"
+| rex field=_raw "<Data Name=['\"]ParentImage['\"]>(?<ParentImage>[^<]+)</Data>"
+| rex field=_raw "<Data Name=['\"]ParentCommandLine['\"]>(?<ParentCommandLine>[^<]+)</Data>"
+| rex field=_raw "<Data Name=['\"]User['\"]>(?<User>[^<]+)</Data>"
+| where match(Image, "(?i)powershell[.]exe$")
+| where match(CommandLine, "(?i)(^|[[:space:]])-(encodedcommand|enc)([[:space:]]|$)")
 | table _time host User Image CommandLine ParentImage ParentCommandLine
