@@ -911,9 +911,9 @@ A total of 365 unit tests across 12 test modules were executed and verified:
 
 ## 21. Comprehensive Unit Test Verification (Milestone 5B-2)
 
-A total of **464 unit tests across 14 test modules** were executed and verified:
-* `tests/test_gateway_policy.py`: 15 tests (Milestone 2 query validation)
-* `tests/test_splunk_search.py`: 14 tests (Milestone 2 search client)
+A total of **475 unit tests across 14 test modules** were executed and verified:
+* `tests/test_gateway_policy.py`: 25 tests (Milestone 2 query validation + raw XML extraction regression suite)
+* `tests/test_splunk_search.py`: 15 tests (Milestone 2 search client + HTTP payload dispatch verification)
 * `tests/test_investigator_schemas.py`: 14 tests (Milestone 3A schemas + 3B-1 size bounds)
 * `tests/test_base64_decoder.py`: 14 tests (Milestone 3A base64 decoding)
 * `tests/test_mitre_mapper.py`: 7 tests (Milestone 3A MITRE technique mapping)
@@ -928,7 +928,7 @@ A total of **464 unit tests across 14 test modules** were executed and verified:
 * `tests/test_ticketing.py`: 49 tests (Milestones 5B-1 & 5B-2 provider-neutral ticketing, builder, labels, fake client, deterministic provider-detail coupling)
 * `tests/test_jira_provider.py`: 39 tests (Milestone 5B-2 Jira Cloud REST API v3 adapter, credentials, URL hardening, ADF formatting, HTTP mocks, bounded read, redirect rejection)
 * `tests/test_end_to_end_demo.py`: 35 tests (Milestones 4, 5A, 5B-1 & 5B-2 integration demo harness, dual opt-in Jira ticketing CLI, sanitized failure, and audit persistence)
-* **Result**: **464 tests passed, 0 failures, 0 errors**.
+* **Result**: **475 tests passed, 0 failures, 0 errors**.
 
 ---
 
@@ -936,3 +936,118 @@ A total of **464 unit tests across 14 test modules** were executed and verified:
 
 * **Next Step (Milestone 6)**: Adversarial robustness evaluation, prompt injection resilience, and evaluation benchmark suites.
 * **Scope Restriction**: Read-only investigation, governance, simulated response, and downstream tracking; zero live endpoint containment, zero shell execution, zero destructive tools, zero ticket system response authority.
+
+---
+
+## 23. Live End-to-End Validation & Verification Sequence (2026-09-22)
+
+### A. Live Bounded Splunk Raw-XML Extraction Fix
+During live end-to-end testing against real Windows Server telemetry on the dedicated Splunk instance, an operational discrepancy was identified:
+- **Observed Behavior**: Controlled Sysmon Event ID 1 events executed on host `DC01` were successfully ingested and present in Splunk `_raw`. However, Splunk Free did not automatically index or expose top-level searchable fields (`EventID`, `Image`, `CommandLine`, `ParentImage`, `User`) for this sourcetype.
+- **Initial Impact**: The previous bounded query relied on pre-extracted fields (`EventID=1 Image="*\\powershell.exe"`), causing the live demo harness to report no matching events in the lookback window.
+- **Root Cause & Fix**:
+  - Implemented search-time regex (`rex`) extraction in `gateway/policy.py` targeting raw Sysmon XML tags: `Image`, `CommandLine`, `ParentImage`, `ParentCommandLine`, and `User`.
+  - Added support for both single-quoted (`Name='...'`) and double-quoted (`Name="..."`) XML attributes: `<Data Name=['\"][A-Za-z0-9]+['\"]>`.
+  - Restored strict PowerShell binary filtering: `| where match(Image, "(?i)powershell[.]exe$")`, avoiding backslash-escaping issues.
+  - Tightened `-EncodedCommand` token matching using POSIX character classes to prevent partial token prefixes (e.g. `-encoding` or `-encrypt`) while avoiding SPL string-literal escaping defects: `| where match(CommandLine, "(?i)(^|[[:space:]])-(encodedcommand|enc)([[:space:]]|$)")`.
+  - Enforced `| sort - _time` prior to `| head {request.limit}` and retained explicit field projection (`| table _time host User Image CommandLine ParentImage ParentCommandLine`).
+  - Synchronized `detections/splunk/suspicious_encoded_powershell.spl` to reflect the identical query contract.
+  - Committed in `05251fc fix: parse raw Sysmon XML in bounded Splunk search`.
+  - Full test suite after fix: **475/475 PASS**.
+
+### B. Successful Full Live Benign End-to-End Run
+A full live pipeline execution was conducted across the live infrastructure:
+* **Incident ID**: `INC-LIVE-DC01-20260922T165326031TUTC`
+* **Target Host**: `DC01`
+* **Target User**: `SOCLAB\Administrator`
+* **Detection Name**: `suspicious encoded powershell execution`
+* **Detection ID**: `DET-POWERSHELL-001`
+* **Evidence Source**: Real Splunk Server (`https://localhost:8089`)
+* **Events Retrieved**: 1 bounded event matching the controlled benign test window
+* **Decoded Command**: `Write-Host 'AI-NativeSOC-LAB-TEST'`
+* **MITRE ATT&CK Mapping**: `T1059.001`
+* **AI Provider**: `FakeModel` (configured advisory model; OpenAI was **NOT** used in this live run)
+* **AI Summary**: *"Controlled benign lab administrative test script executed on DC01."*
+* **Deterministic Governance Results**:
+  * Risk Score: `0 / 100`
+  * Risk Level: `LOW`
+  * Disposition: `NO_ACTION`
+  * Approval Required: `No`
+  * Policy Reason: `benign_lab_fixture_matched`
+* **Response Simulation**: `NOT_EXECUTED` (`simulation_not_required`); zero endpoint action executed
+* **Persisted Audit Trail**: Appended to `artifacts/audit/agent_audit.jsonl`
+* **Persisted Incident Record**: Written to `artifacts/incidents/INC-LIVE-DC01-20260922T165326031TUTC.json`
+* **Real Jira Cloud Ticket Created**:
+  * Ticket Key: **`KAN-5`**
+  * Provider: `jira_cloud`
+  * Detail Code: `ticket_created_jira`
+  * Clarification: Real Splunk + Real Jira Cloud were utilized; AI provider was `FakeModel`; zero endpoint containment occurred.
+
+### C. Human Approval DENY Demonstration
+An interactive execution was performed using synthetic critical mode to validate human governance under high risk:
+* **Synthetic Incident ID**: `INC-DEMO-CRIT-2026-001`
+* **Evidence Source**: Sanitized Local Synthetic Fixture
+* **Deterministic Risk Score**: `80 / 100` (`CRITICAL`)
+* **Disposition**: `APPROVAL_REQUIRED`
+* **Proposed Action**: `simulate_endpoint_isolation`
+* **Human Operator Input**: `deny`
+* **Execution Outcome**:
+  * Approval Decision: `DENIED` (`approval_denied`)
+  * Simulation Status: `NOT_EXECUTED` (`simulation_blocked_denied`)
+  * Endpoint Action: Zero containment executed.
+* **Audit Sequence**:
+  ```text
+  Seq 10: POLICY_EVALUATED
+  Seq 11: APPROVAL_REQUIRED
+  Seq 12: APPROVAL_REQUESTED
+  Seq 13: APPROVAL_DENIED
+  Seq 14: SIMULATION_NOT_EXECUTED
+  ```
+
+### D. Human Approval APPROVE Demonstration
+The identical synthetic critical scenario was exercised with human approval:
+* **Synthetic Incident ID**: `INC-DEMO-CRIT-2026-001`
+* **Human Operator Input**: `approve`
+* **Execution Outcome**:
+  * Approval Decision: `APPROVED` (`approval_granted`)
+  * Simulation Status: `SIMULATED` (`simulated_endpoint_isolation`)
+  * Endpoint Action: Simulated only; simulator recorded that an isolation request would have been issued; no network change or host modification occurred.
+* **Audit Sequence**:
+  ```text
+  Seq 10: POLICY_EVALUATED
+  Seq 11: APPROVAL_REQUIRED
+  Seq 12: APPROVAL_REQUESTED
+  Seq 13: APPROVAL_GRANTED
+  Seq 14: SIMULATION_COMPLETED
+  ```
+* **IncidentRecord Overwrite Protection Observation**:
+  * The initial DENY run generated and persisted `artifacts/incidents/INC-DEMO-CRIT-2026-001.json`.
+  * When the subsequent APPROVE test was run with `--write-incident`, the persistence writer correctly **failed closed** because the file already existed, enforcing fail-closed overwrite protection without overwriting existing files.
+  * The APPROVE demonstration was re-run without `--write-incident`, preserving the original DENY record unchanged.
+
+### E. Jira Credential Lifecycle
+* **Smoke Testing**: Temporary API token used for manual verification creating issue `KAN-4`.
+* **Live E2E Demo**: Temporary API token used for automated pipeline test creating issue `KAN-5`.
+* **Storage Hygiene**: Credentials were provided strictly via process environment variables (`JIRA_BASE_URL`, `JIRA_USER_EMAIL`, `JIRA_API_TOKEN`). No credentials were written to `.env`, disk, or Git.
+* **Revocation**: Jira credential environment variables were unset from the active shell/process environment after testing, and temporary API tokens were revoked through the Atlassian account API-token management page.
+
+### F. Current Truthful Capability Matrix
+
+| Capability / Flow | Verification Level | Details |
+| :--- | :--- | :--- |
+| **Real DC01 Telemetry** | **LIVE TESTED** | Benign encoded PowerShell on Windows Server 2022 |
+| **Sysmon → Splunk Ingestion** | **LIVE TESTED** | Sysmon Event ID 1 forwarded via Universal Forwarder to Splunk index `main` |
+| **Bounded Splunk Investigation** | **LIVE TESTED** | Localhost REST export query with strict bounds |
+| **Raw XML Regex Extraction** | **LIVE TESTED** | Extracts Image, CommandLine, ParentImage, ParentCommandLine, User |
+| **Base64 Decoding** | **LIVE TESTED** | Deterministic UTF-16LE decoding of `-EncodedCommand` payload |
+| **MITRE T1059.001 Mapping** | **LIVE TESTED** | Static technique mapping from verified detection ID |
+| **Deterministic Risk Policy** | **LIVE TESTED** | Rule-based 0-100 scoring and action governance |
+| **Local Audit Logging (JSONL)** | **LIVE TESTED** | Append-only trail in `artifacts/audit/agent_audit.jsonl` |
+| **IncidentRecord Persistence** | **LIVE TESTED** | Atomic, no-overwrite JSON artifact generation |
+| **Jira Cloud Create Issue** | **LIVE TESTED** | Real REST API v3 dispatch producing ticket **KAN-5** |
+| **Human Approval DENY Path** | **INTERACTIVELY DEMONSTRATED** | Interactive CLI denial blocking simulated action (`NOT_EXECUTED`) |
+| **Human Approval APPROVE Path** | **INTERACTIVELY DEMONSTRATED** | Interactive CLI approval authorizing simulation (`SIMULATED`) |
+| **FakeModel + Real Splunk + Real Jira** | **LIVE TESTED** | Executed in live lab validation creating ticket **KAN-5** |
+| **OpenAI + Real Splunk + Real Jira** | **NOT YET TESTED** | Components tested individually; integrated trio run pending |
+| **Endpoint Isolation** | **SIMULATED ONLY** | Recorded simulation record; zero network/host isolation |
+| **Real Endpoint Containment** | **NOT IMPLEMENTED** | Destructive actions explicitly excluded from V1 scope |
