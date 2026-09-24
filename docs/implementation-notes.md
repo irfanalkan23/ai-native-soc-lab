@@ -1051,3 +1051,44 @@ The identical synthetic critical scenario was exercised with human approval:
 | **OpenAI + Real Splunk + Real Jira** | **NOT YET TESTED** | Components tested individually; integrated trio run pending |
 | **Endpoint Isolation** | **SIMULATED ONLY** | Recorded simulation record; zero network/host isolation |
 | **Real Endpoint Containment** | **NOT IMPLEMENTED** | Destructive actions explicitly excluded from V1 scope |
+
+---
+
+## 24. Milestone 5C-1 — Provider-Neutral Threat Intelligence Contract & Local Fake Client
+
+### Architectural Purpose & Security Invariants
+* **Advisory Evidence Only**: Threat intelligence is strictly an advisory evidence channel. It possesses **zero authority** over risk scoring, deterministic policy evaluation, human approval decisions, or response action execution.
+* **Scope Restriction (IP Only)**: In V1, threat intelligence enrichment is strictly bounded to public IP addresses (`indicator_type == "ip"`). Domains, URLs, file hashes, CIDR blocks, host-port pairs, and arbitrary indicators are explicitly rejected.
+* **Public / Global IP Address Policy**:
+  * Threat intelligence enrichment is meaningful only for globally routable public IPs. Private, internal, or special-use addresses are rejected fail-closed.
+  * Only plain canonical IP literals are accepted; IPv6 scope or zone identifiers (`%`) are explicitly rejected fail-closed.
+  * Policy Note on Python `ipaddress`: In the Python standard library `ipaddress` module, `is_global` alone is insufficient for this project's external-enrichment policy; multicast addresses (such as `224.0.0.1` and `ff02::1`) report `is_global=True`. Therefore, the validation helper explicitly requires `is_global` and explicitly rejects `is_multicast`, `is_private` (which also covers RFC 5737 and RFC 3849 documentation IPs), `is_loopback`, `is_link_local`, `is_unspecified`, and `is_reserved`.
+* **Lower-Level Helper & Clean Exception Ownership**:
+  * `_canonicalize_public_ip(value: str) -> str` acts as the shared low-level validator and canonicalizer, raising `ValueError` on syntax or policy violations.
+  * Boundaries map this cleanly to domain-specific typed exceptions:
+    * `ThreatIntelRequest` validation raises `ThreatIntelRequestError`.
+    * `ThreatIntelResult` validation raises `ThreatIntelResultError`.
+    * `FakeThreatIntelClient` fixture configuration or lookup binding raises `ThreatIntelClientError`.
+* **Reputation Metric Omission in 5C-1**:
+  * Provider reputation metrics vary widely across vendors without universal semantics. Reputation is deliberately omitted from `ThreatIntelResult` in 5C-1 to avoid premature abstraction before provider adapter design.
+  * Normalized analysis engine counters (`malicious_count`, `suspicious_count`, `harmless_count`, `undetected_count`) provide concrete, verifiable factual data without semantic ambiguity.
+* **Timestamp & Detail Code Semantics**:
+  * `FOUND`: Analysis counters $\ge 0$ and $\le 256$; `last_analysis_utc` may be `None` or a validated ISO 8601 zero-offset UTC string; `detail_code = "ip_lookup_found"`.
+  * `NOT_FOUND`: All analysis counters must be strictly `0`; `last_analysis_utc = None`; `detail_code = "ip_lookup_not_found"`.
+* **Deterministic Local Fake Client (`FakeThreatIntelClient`)**:
+  * Accepts an injected mapping of IP string -> `ThreatIntelResult`.
+  * Fixture keys and results are strictly validated at construction time; mismatched keys or non-global IP keys raise `ThreatIntelClientError`.
+  * Before returning any lookup result, `FakeThreatIntelClient` defensively asserts `result.indicator_type == request.indicator_type` and `result.indicator_value == request.indicator_value`.
+  * Zero real-world reputation claims: fixture classifications are purely synthetic test cases.
+  * Zero network, zero credentials, zero filesystem access, zero subprocess or shell execution.
+
+### Artifact Status Matrix
+
+| Component | Role | Security Invariant | Status |
+| :--- | :--- | :--- | :--- |
+| `investigator/threat_intel.py` | Core Contract & Fake Client | Provider-neutral schema, strict public-IP predicate, frozen dataclasses, zero network | **IMPLEMENTED + TESTED OFFLINE** |
+| `tests/test_threat_intel.py` | Unit & Security Test Suite | 40 tests covering IP validation, schemas, fake client, defensive binding, and AST import boundaries | **IMPLEMENTED + TESTED OFFLINE** |
+
+### Unit Test Verification
+* `tests/test_threat_intel.py`: 40 tests passed.
+* Full test suite across all 15 modules: **515 tests passed, 0 failures, 0 errors**.
