@@ -36,6 +36,7 @@ MAX_INDICATOR_VALUE_LENGTH = 45  # Maximum length of standard IPv6 string repres
 
 ALLOWED_TI_PROVIDERS = frozenset({
     "fake_threat_intel",
+    "virustotal",
 })
 
 ALLOWED_TI_DETAIL_CODES = frozenset({

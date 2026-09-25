@@ -103,7 +103,8 @@ The initial incident scenario covers an execution attempt using obfuscated Power
 | **Response Actions** | Containment Safety | **SIMULATED ONLY** | No real containment exists; endpoint isolation is simulated; zero subprocess, shell, or system mutation. |
 | **Ticketing Integration (Local Contract / Fake Client)** | SOAR / Reporting | **IMPLEMENTED + TESTED** | Deterministic contract (`investigator/ticketing.py`) & fake client; 49 unit tests pass; offline simulation only; zero response authority. |
 | **Threat-Intelligence Contract & Fake Client** | Threat Intelligence / Advisory | **IMPLEMENTED + TESTED OFFLINE** | Provider-neutral IP schema (`investigator/threat_intel.py`) & `FakeThreatIntelClient`; 40 unit tests pass; advisory evidence only; zero response authority. |
-| **Live Threat-Intelligence Enrichment (VirusTotal)** | Threat Intelligence | **NOT IMPLEMENTED** | Real provider adapter deferred to Milestone 5C-2; live enrichment not yet tested. |
+| **VirusTotal Threat-Intelligence Adapter** | Threat Intelligence / Advisory | **IMPLEMENTED + TESTED OFFLINE** | Provider-specific REST API v3 IP adapter (`investigator/providers/virustotal_provider.py`); 44 offline unit/lifecycle/security tests pass; advisory evidence only; zero response authority. |
+| **Live Threat-Intelligence Enrichment (VirusTotal)** | Threat Intelligence | **NOT YET TESTED** | Real adapter implemented and offline-tested; live enrichment smoke test deferred to Milestone 5C-2b. |
 | **Jira Cloud Create-Issue Adapter** | SOAR / Case Management | **LIVE TESTED with KAN-5** | Downstream tracking adapter (`investigator/providers/jira_provider.py`); 39 offline tests pass; verified live via smoke script (`KAN-4`) and live E2E demo (`KAN-5`); zero response authority. |
 | **OpenAI + Real Splunk + Real Jira** | Full Integrated Pipeline | **NOT YET TESTED** | Components tested individually; integrated trio run pending. |
 | **Real Endpoint Containment** | Containment Safety | **NOT IMPLEMENTED** | Destructive containment actions explicitly excluded from V1 scope. |
@@ -209,5 +210,5 @@ Located in [`detections/sigma/suspicious_encoded_powershell.yml`](detections/sig
 - [x] **Milestone 5B-1**: Deterministic ticketing contract and local fake ticket workflow (reporting only, zero action authority).
 - [x] **Milestone 5B-2**: Live Jira Cloud REST API v3 create-issue adapter (downstream external tracking/reporting sink, zero response authority; adapter implemented, offline-tested, and verified live with tickets KAN-4 and KAN-5).
 - [x] **Milestone 5C-1**: Provider-neutral threat intelligence contract and local fake client (advisory evidence only, zero response authority; public IP validation, offline-tested).
-- [ ] **Milestone 5C-2**: Live VirusTotal API v3 provider adapter (offline mocked + live smoke test).
+- [x] **Milestone 5C-2**: VirusTotal REST API v3 IP provider adapter (advisory evidence only, zero response authority; offline mocked + tested; live smoke test deferred to 5C-2b).
 - [ ] **Milestone 6**: Adversarial robustness evaluation and prompt injection testing.

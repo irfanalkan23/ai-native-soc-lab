@@ -1092,3 +1092,51 @@ The identical synthetic critical scenario was exercised with human approval:
 ### Unit Test Verification
 * `tests/test_threat_intel.py`: 40 tests passed.
 * Full test suite across all 15 modules: **515 tests passed, 0 failures, 0 errors**.
+
+---
+
+## 25. Milestone 5C-2 — VirusTotal REST API v3 IP Provider Adapter
+
+### Architectural Purpose & Security Invariants
+* **Advisory Evidence Only**: Threat intelligence enrichment from VirusTotal remains strictly an advisory evidence channel. It possesses **zero authority** over risk scoring, deterministic policy evaluation, human approval decisions, or response action execution.
+* **Strict Public-IP Scope Only**: Bounded exclusively to public IP addresses (`indicator_type == "ip"`). Pre-validated and canonicalized via Milestone 5C-1's contract; non-global, private, loopback, multicast, or scoped addresses cannot reach the wire.
+* **Fixed Single-Endpoint Transport**:
+  * Destination host is hardcoded to `www.virustotal.com:443`.
+  * Endpoint path prefix is hardcoded to `/api/v3/ip_addresses/{canonical_ip}`.
+  * Standard library HTTPS (`http.client` + `ssl.create_default_context()`). Zero third-party dependencies (no `requests`, `httpx`, or `urllib3`).
+  * GET method only. Zero query parameters. Zero request body.
+  * Single-attempt dispatch with zero retries.
+  * HTTP 3xx redirects are rejected immediately without following (`vt_redirect_rejected`).
+* **Hard Response Size Cap & Non-Body-Reading Statuses**:
+  * Status is inspected immediately following `conn.getresponse()`.
+  * HTTP 3xx, 400, 401, 403, 429, 5xx, and unexpected statuses fail immediately with typed sanitized errors **without calling `resp.read()`**. Remote error bodies are never read, decoded, or parsed.
+  * Only statuses 200 and 404 proceed to `resp.read(max_bytes + 1)`.
+  * Maximum response body read is bounded to $\le 64\text{ KiB}$ (`max_response_bytes <= 65536`). Responses exceeding this limit fail closed immediately (`vt_response_too_large`).
+* **Ephemeral Body Processing**: Raw responses are parsed into normalized dataclass primitives and immediately discarded; raw JSON payloads and response headers are never logged or persisted.
+* **Secret Hygiene & Process Independence**:
+  * API keys are masked in `__repr__` and `__str__` as `'***'`.
+  * The provider module performs zero process environment lookups (`no os.environ`, `no getenv`, `no from_env()`) and zero filesystem access (`no open`, `no Path`).
+  * Keys are passed explicitly into `VirusTotalCredentials(api_key=...)`.
+* **Sanitized Transport Exceptions**:
+  * Low-level network, TLS, socket, or timeout exceptions are caught and re-raised strictly via `raise VirusTotalTransportError("vt_transport_error") from None`.
+  * Underlying internal exception messages, API keys, or raw headers are never exposed across the public interface.
+* **Connection Lifecycle Guarantees**:
+  * An explicit `try ... finally` block guarantees `conn.close()` is executed exactly once across all paths (200 success, 404, HTTP errors, redirect rejection, oversized payloads, malformed JSON, and socket timeouts).
+* **Strict Response Parsing & Defensive Binding**:
+  * HTTP 200: Requires exact dict hierarchy (`root.data.attributes.last_analysis_stats`). Analysis counters (`malicious`, `suspicious`, `harmless`, `undetected`) must be exact `int` within `0..256` (booleans, floats, strings rejected). `data.id` is canonicalized and must strictly equal the requested IP (`vt_indicator_mismatch`).
+  * HTTP 404: If and only if the body is valid JSON with `type(code) is str and code == "NotFoundError"`, maps to `ThreatIntelResult(lookup_status=NOT_FOUND, detail_code="ip_lookup_not_found", all counters=0, last_analysis_utc=None)`. All other 404 structures fail closed with `vt_endpoint_not_found`.
+  * `last_analysis_date`: Epoch integer converted deterministically to ISO 8601 UTC string ending in `Z`.
+
+### Artifact Status Matrix
+
+| Component | Role | Security Invariant | Status |
+| :--- | :--- | :--- | :--- |
+| `investigator/providers/virustotal_provider.py` | Provider Adapter | Fixed HTTPS endpoint, GET only, 64-KiB cap, strict schema parsing, masked secrets, zero env/fs access | **IMPLEMENTED + TESTED OFFLINE** |
+| `tests/test_virustotal_provider.py` | Unit & Security Test Suite | 44 tests covering request formatting, response parsing, error mapping, connection lifecycle, and AST boundaries | **IMPLEMENTED + TESTED OFFLINE** |
+| `investigator/threat_intel.py` | Core Contract Allowlist | Minimal change: added `"virustotal"` to `ALLOWED_TI_PROVIDERS` | **IMPLEMENTED + TESTED OFFLINE** |
+| `tests/test_threat_intel.py` | Contract Test Suite | 40 tests covering contract invariants and updated provider allowlist | **IMPLEMENTED + TESTED OFFLINE** |
+
+### Unit Test Verification
+* `tests/test_virustotal_provider.py`: **44 tests passed, 0 failures, 0 errors**.
+* `tests/test_threat_intel.py`: **40 tests passed, 0 failures, 0 errors**.
+* Full test suite across all 16 test modules: **559 tests passed, 0 failures, 0 errors**.

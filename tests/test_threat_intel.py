@@ -321,19 +321,19 @@ class TestThreatIntelResultSchema(unittest.TestCase):
                 undetected_count=0,
                 detail_code="ip_lookup_found",
             )
-        # virustotal is rejected in 5C-1 (deferred to 5C-2)
-        with self.assertRaises(ThreatIntelResultError):
-            ThreatIntelResult(
-                provider="virustotal",
-                indicator_type="ip",
-                indicator_value="8.8.8.8",
-                lookup_status=ThreatIntelLookupStatus.FOUND,
-                malicious_count=0,
-                suspicious_count=0,
-                harmless_count=0,
-                undetected_count=0,
-                detail_code="ip_lookup_found",
-            )
+        # virustotal is allowed in 5C-2
+        res = ThreatIntelResult(
+            provider="virustotal",
+            indicator_type="ip",
+            indicator_value="8.8.8.8",
+            lookup_status=ThreatIntelLookupStatus.FOUND,
+            malicious_count=0,
+            suspicious_count=0,
+            harmless_count=0,
+            undetected_count=0,
+            detail_code="ip_lookup_found",
+        )
+        self.assertEqual(res.provider, "virustotal")
 
     def test_detail_code_coupling(self) -> None:
         """detail_code must match lookup_status."""
