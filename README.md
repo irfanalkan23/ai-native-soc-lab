@@ -111,7 +111,10 @@ The initial incident scenario covers an execution attempt using obfuscated Power
 | **Jira Cloud Create-Issue Adapter** | SOAR / Case Management | **LIVE TESTED with KAN-5** | Downstream tracking adapter (`investigator/providers/jira_provider.py`); 39 offline tests pass; verified live via smoke script (`KAN-4`) and live E2E demo (`KAN-5`); zero response authority. |
 | **OpenAI + Real Splunk + Real Jira** | Full Integrated Pipeline | **NOT YET TESTED** | Components tested individually; integrated trio run pending. |
 | **Real OpenAI + Real Splunk + Real Jira + Real VirusTotal** | Full Integrated Pipeline | **NOT TESTED** | Quad integration not implemented or tested; components tested individually or in subsets. |
-| **Real Endpoint Containment** | Containment Safety | **NOT IMPLEMENTED** | Destructive containment actions explicitly excluded from V1 scope. |
+| **Prompt-Injection Guardrails & Fixtures** | Adversarial Testing / Governance | **IMPLEMENTED + TESTED OFFLINE** | 16 synthetic scenarios across CAT-1 to CAT-8; proves evidence is data, not authority; zero control bypass. |
+| **Model-Compromise Simulation** | Adversarial Testing / Simulation | **TESTED OFFLINE** | Synthetic compromised-model decisions fail closed via ToolRouter; controls hold. |
+| **Real Model Prompt-Injection Robustness** | Adversarial Testing / LLM | **NOT YET TESTED** | Empirical LLM adversarial robustness evaluation deferred to Milestone 6B. |
+| **Real Endpoint Containment** | Containment Safety | **NOT IMPLEMENTED** | Destructive containment actions explicitly excluded from V1 scope; not executed in 6A. |
 
 ---
 
@@ -216,4 +219,5 @@ Located in [`detections/sigma/suspicious_encoded_powershell.yml`](detections/sig
 - [x] **Milestone 5C-1**: Provider-neutral threat intelligence contract and local fake client (advisory evidence only, zero response authority; public IP validation, offline-tested).
 - [x] **Milestone 5C-2**: VirusTotal REST API v3 IP provider adapter (advisory evidence only, zero response authority; offline mocked + tested).
 - [x] **Milestone 5C-2b**: Controlled live VirusTotal smoke test (standalone CLI harness, verified live with exit code 0; API key removed from the active shell/process environment; zero agent/risk/tool integration).
-- [ ] **Milestone 6**: Adversarial robustness evaluation and prompt injection testing.
+- [x] **Milestone 6A**: Offline prompt-injection test harness & synthetic adversarial fixtures (CAT-1 through CAT-8, 16 scenarios, deterministic control verification, model-compromise simulation; real-model robustness NOT YET TESTED).
+- [ ] **Milestone 6B**: Real model adversarial robustness evaluation and prompt injection testing.
