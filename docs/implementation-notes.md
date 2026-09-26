@@ -1140,3 +1140,70 @@ The identical synthetic critical scenario was exercised with human approval:
 * `tests/test_virustotal_provider.py`: **44 tests passed, 0 failures, 0 errors**.
 * `tests/test_threat_intel.py`: **40 tests passed, 0 failures, 0 errors**.
 * Full test suite across all 16 test modules: **559 tests passed, 0 failures, 0 errors**.
+
+---
+
+## 26. Milestone 5C-2b — Controlled Live VirusTotal Smoke Test Validation
+
+### Overview & Operational Context
+* **Execution Date**: 2026-09-26
+* **Baseline Commit**: `e6b3285` (`feat: add controlled VirusTotal live smoke harness`)
+* **Validation Method**: Controlled operator execution of the dedicated standalone smoke test harness (`scripts/run_virustotal_smoke.py`) from PowerShell.
+* **Scope**: Exactly one standalone live HTTPS request to the VirusTotal REST API v3 endpoint (`GET /api/v3/ip_addresses/8.8.8.8`).
+* **Exit Code**: `0`
+
+### Observed Live Result (Normalized Output Only)
+```text
+=== VirusTotal Live Smoke Test Result ===
+Provider:             virustotal
+Indicator Type:       ip
+Indicator Value:      8.8.8.8
+Lookup Status:        FOUND
+Detail Code:          ip_lookup_found
+Malicious Count:      0
+Suspicious Count:     0
+Harmless Count:       53
+Undetected Count:     38
+Last Analysis (UTC):  2026-09-26T01:10:55Z
+=========================================
+```
+
+### Strict Non-Reputational Invariant
+* **Single Smoke-Test Result**: The observed engine counters (`malicious: 0`, `suspicious: 0`, `harmless: 53`, `undetected: 38`) represent a single point-in-time schema response fixture from VirusTotal.
+* **No Reputation Generalization**: These counts must NOT be generalized into an absolute reputation conclusion or verdict.
+* **No Classification of Fixture IP**: The test IP `8.8.8.8` is not described or classified as benign or malicious; it was selected exclusively as a well-known, globally routable public IP fixture to validate live transport, TLS handshake, header serialization, and response parsing.
+
+### Credential Lifecycle & Post-Test Sanitization
+* **Bearer Credential Scope**: For this lab, the API key is treated as a bearer credential carrying the privileges of the associated VirusTotal account.
+* **Transient Assignment & Process Scope**: The API key was entered into a temporary PowerShell SecureString variable, converted transiently for assignment to `VIRUSTOTAL_API_KEY` in the active shell process environment, and used only for the smoke-test execution.
+* **Immediate Shell/Process Removal**: Immediately following execution, the environment variable was removed from the active shell/process environment via `Remove-Item Env:\VIRUSTOTAL_API_KEY`.
+* **Verification**: The follow-up environment lookup (`Get-ChildItem Env:\VIRUSTOTAL_API_KEY`) returned no value, confirming `VIRUSTOTAL_API_KEY` was not present in the active shell/process environment.
+* **No Memory Erasure Claim**: No claim is made regarding complete process-memory erasure prior to process termination.
+* **Zero Persistence**: No credentials were written to `.env`, disk, config files, shell history, or Git. The repository working tree remained clean.
+
+### Architectural Boundaries & Ephemerality
+* **Zero Body Persistence**: The raw HTTP response body and headers from VirusTotal were parsed ephemerally in memory by `VirusTotalThreatIntelClient` into the normalized `ThreatIntelResult` dataclass and immediately discarded. No raw payloads were persisted to disk, written to audit logs, or printed to the console.
+* **No Audit / Incident Records**: The standalone smoke runner does not import `AuditLog` or `IncidentRecord`; zero audit logs or incident records were written.
+* **No Downstream Integration**:
+  * **ToolRouter**: Zero integration; the agent cannot call VirusTotal tools.
+  * **Orchestrator**: Zero integration; the AI investigator cannot request threat intelligence.
+  * **Risk Policy Engine**: Zero integration; threat intel analysis counters have zero influence on risk scoring or disposition.
+  * **Action Policy & Approval Gate**: Zero integration; policy rules and human approval ignore threat intelligence.
+  * **Jira & Splunk**: Zero coupling; ticketing and SIEM search remain completely decoupled from threat intelligence.
+* **Advisory Evidence Only**: VirusTotal data remains advisory evidence only with zero autonomous response authority.
+* **No Production-Enrichment Claim**: This smoke test validates single-indicator connectivity, TLS, authentication, and parsing bounds. It does NOT constitute an automated, continuous, or production-grade threat intelligence enrichment pipeline.
+
+### Artifact & Verification Matrix
+
+| Component | Role | Verification Level | Details |
+| :--- | :--- | :--- | :--- |
+| `scripts/run_virustotal_smoke.py` | Standalone Smoke Runner | **LIVE TESTED** | Single bounded IP lookup; exit code 0; sanitized stdout output; zero persistence |
+| `tests/test_run_virustotal_smoke.py` | Harness Unit & Boundary Tests | **TESTED (18/18 PASS)** | CLI parsing, environment lookup, exit code mappings, AST boundary checks |
+| `investigator/providers/virustotal_provider.py` | VirusTotal Provider Adapter | **LIVE TESTED** | Verified against live REST API v3 endpoint with real bearer credential |
+| `investigator/threat_intel.py` | Core Contract & Schemas | **TESTED OFFLINE** | Provider-neutral schema; unchanged and protected |
+
+### Test Suite Verification Summary
+* `tests/test_run_virustotal_smoke.py`: **18 tests passed, 0 failures, 0 errors**.
+* `tests/test_virustotal_provider.py`: **44 tests passed, 0 failures, 0 errors**.
+* `tests/test_threat_intel.py`: **40 tests passed, 0 failures, 0 errors**.
+* Full test suite across all 17 test modules: **577 tests passed, 0 failures, 0 errors**.
