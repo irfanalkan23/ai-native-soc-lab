@@ -30,3 +30,4 @@ logs/*.log
 *.log
 artifacts/audit/*.jsonl
 artifacts/incidents/*.json
+artifacts/evaluations/*.json
