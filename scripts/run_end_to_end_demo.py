@@ -100,6 +100,12 @@ from investigator.ticketing import (
     build_ticket_request,
 )
 from investigator.providers.jira_provider import JiraTicketClient
+from investigator.runtime_guard import (
+    RuntimeCheckpoint,
+    RuntimeGuard,
+    RuntimeGuardConfig,
+    RuntimeHaltError,
+)
 from investigator.simulator import (
     SimulatedResponseExecutor,
     SimulationError,
@@ -378,6 +384,8 @@ def run_demo(
     splunk_client: Optional[SplunkSearchClient] = None,
     audit_log_path: Optional[Path] = None,
     incidents_dir: Optional[Path] = None,
+    kill_switch: bool = False,
+    guard: Optional[RuntimeGuard] = None,
 ) -> int:
     """Execute the end-to-end integration demo workflow.
 
@@ -388,6 +396,46 @@ def run_demo(
     out_stream = stream_out if stream_out is not None else sys.stdout
 
     audit_log = AuditLog()
+
+    # -----------------------------------------------------------------------
+    # Step 0: Runtime Safety Configuration & Preflight Execution Check
+    # -----------------------------------------------------------------------
+    if guard is not None:
+        runtime_guard = guard
+        if runtime_guard.audit_log is None:
+            runtime_guard.bind_audit_log(audit_log)
+        elif runtime_guard.audit_log is not audit_log:
+            out_stream.write("[!] RuntimeGuard already bound to a different AuditLog\n")
+            return 1
+    else:
+        env_config = RuntimeGuardConfig.from_env()
+        if kill_switch:
+            guard_config = RuntimeGuardConfig(
+                kill_switch=True,
+                max_model_invocations=env_config.max_model_invocations,
+                max_tool_executions=env_config.max_tool_executions,
+            )
+        else:
+            guard_config = env_config
+        runtime_guard = RuntimeGuard(
+            config=guard_config,
+            audit_log=audit_log,
+            incident_id="DEMO-PREFLIGHT",
+        )
+
+    try:
+        runtime_guard.check_execution_permitted(RuntimeCheckpoint.PREFLIGHT)
+    except RuntimeHaltError as err:
+        out_stream.write(f"[!] Runtime guard preflight check failed: {err}\n")
+        out_stream.write(f"[!] Execution aborted: {err.detail_code}\n")
+        if persist_audit:
+            target_audit_path = audit_log_path or DEFAULT_AUDIT_LOG_PATH
+            try:
+                writer = JsonlAuditWriter(target_audit_path)
+                writer.write_events(audit_log.events())
+            except Exception:
+                pass
+        return 1
 
     # -----------------------------------------------------------------------
     # Step 1: Evidence Acquisition & Incident Input Construction
@@ -506,10 +554,13 @@ def run_demo(
                 incident_id=incident.incident_id,
             )
 
+    runtime_guard.bind_incident_id(incident.incident_id)
+
     orchestrator = InvestigationOrchestrator(
         model=model,
         tool_router=tool_router,
         audit_log=audit_log,
+        guard=runtime_guard,
     )
 
     try:
@@ -560,6 +611,12 @@ def run_demo(
     # -----------------------------------------------------------------------
     # Step 6: Simulated Response Execution (Zero Endpoint Mutation)
     # -----------------------------------------------------------------------
+    try:
+        runtime_guard.check_execution_permitted(RuntimeCheckpoint.SIMULATION)
+    except RuntimeHaltError as err:
+        out_stream.write(f"[!] Runtime guard blocked simulation: {err}\n")
+        return 1
+
     executor = SimulatedResponseExecutor()
     try:
         sim_result = executor.execute(
@@ -601,6 +658,12 @@ def run_demo(
     # -----------------------------------------------------------------------
     ticket_result: Optional[TicketResult] = None
     if create_ticket:
+        try:
+            runtime_guard.check_execution_permitted(RuntimeCheckpoint.TICKETING)
+        except RuntimeHaltError as err:
+            out_stream.write(f"[!] Runtime guard blocked ticketing write: {err}\n")
+            return 1
+
         seq = len(audit_log.events())
         audit_log.append(AuditEvent(
             event_type=AuditEventType.TICKET_REQUESTED,
@@ -753,6 +816,12 @@ def main() -> int:
         default=None,
         help="Target Jira Cloud issue type (e.g. Incident or Task). Requires --ticket-provider jira.",
     )
+    parser.add_argument(
+        "--kill-switch",
+        action="store_true",
+        default=False,
+        help="Engage runtime kill switch to abort execution at preflight.",
+    )
 
     args = parser.parse_args()
 
@@ -788,6 +857,7 @@ def main() -> int:
         ticket_provider=args.ticket_provider,
         jira_project=args.jira_project,
         jira_issue_type=args.jira_issue_type,
+        kill_switch=args.kill_switch,
     )
 
 

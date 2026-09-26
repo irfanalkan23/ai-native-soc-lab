@@ -30,6 +30,7 @@ class AuditEventType(str, Enum):
     TICKET_REQUESTED = "TICKET_REQUESTED"
     TICKET_CREATED = "TICKET_CREATED"
     TICKET_FAILED = "TICKET_FAILED"
+    RUNTIME_HALTED = "RUNTIME_HALTED"
 
 
 # Maximum length of a detail_code value.

@@ -28,6 +28,7 @@ from investigator.model import (
     ModelRequest,
     ToolRequest,
 )
+from investigator.runtime_guard import RuntimeGuard, RuntimeHaltError
 from investigator.schemas import InvestigationInput, InvestigationResult
 from investigator.tool_result import MAX_RESULT_TEXT_LENGTH, ToolResultEnvelope
 from investigator.tool_router import ToolRouter, ToolValidationError, ToolExecutionError
@@ -112,15 +113,29 @@ class InvestigationOrchestrator:
         model: Any,
         tool_router: ToolRouter,
         audit_log: Optional[AuditLog] = None,
+        guard: Optional[RuntimeGuard] = None,
     ) -> None:
         self._model = model
         self._tool_router = tool_router
         self._audit_log = audit_log or AuditLog()
+        if guard is not None:
+            self._guard = guard
+            if self._guard.audit_log is None:
+                self._guard.bind_audit_log(self._audit_log)
+            elif self._guard.audit_log is not self._audit_log:
+                raise OrchestratorError("RuntimeGuard already bound to a different AuditLog")
+        else:
+            self._guard = RuntimeGuard(audit_log=self._audit_log)
 
     @property
     def audit_log(self) -> AuditLog:
         """Return the audit log for this orchestrator instance."""
         return self._audit_log
+
+    @property
+    def guard(self) -> RuntimeGuard:
+        """Return the runtime guard attached to this orchestrator instance."""
+        return self._guard
 
     def investigate(self, investigation_input: InvestigationInput) -> InvestigationResult:
         """Drive one investigation session to a validated InvestigationResult.
@@ -142,6 +157,7 @@ class InvestigationOrchestrator:
             )
 
         incident_id = investigation_input.incident_id
+        self._guard.bind_incident_id(incident_id)
         tool_calls_used: int = 0
         prior_tool_results: List[ToolResultEnvelope] = []
         audit_seq: int = 0
@@ -157,6 +173,14 @@ class InvestigationOrchestrator:
             audit_seq += 1
 
         for _decision_idx in range(MAX_MODEL_DECISIONS):
+            # Check runtime guard before model invocation
+            try:
+                self._guard.before_model_invocation()
+            except RuntimeHaltError as exc:
+                raise OrchestratorError(
+                    f"Runtime guard halted model invocation: {exc.detail_code}"
+                ) from exc
+
             # --- Build ModelRequest ---
             request = ModelRequest(
                 system_instructions=INVESTIGATOR_SYSTEM_INSTRUCTIONS,
@@ -207,6 +231,14 @@ class InvestigationOrchestrator:
                     )
 
                 _audit(AuditEventType.TOOL_ALLOWED, "tool_allowed")
+
+                # Check runtime guard before tool execution
+                try:
+                    self._guard.before_tool_execution()
+                except RuntimeHaltError as exc:
+                    raise OrchestratorError(
+                        f"Runtime guard halted tool execution: {exc.detail_code}"
+                    ) from exc
 
                 # Execute via ToolRouter only
                 try:
