@@ -281,6 +281,51 @@ class TestToolRouter(unittest.TestCase):
             )
         self.assertIn("Base64 decoding failed", str(ctx.exception))
 
+    def test_router_splunk_search_rejects_minutes_as_string(self) -> None:
+        """Proof: Router rejects minutes passed as string with ToolValidationError."""
+        from gateway.policy import PolicyValidationError
+        self.mock_splunk_client.search_encoded_powershell.side_effect = PolicyValidationError("minutes must be an integer")
+        with self.assertRaises(ToolValidationError) as ctx:
+            self.router.execute_tool(
+                "bounded_splunk_search",
+                {"host": "DC01", "minutes": "15", "limit": 10},
+            )
+        self.assertIn("minutes must be an integer", str(ctx.exception))
+
+    def test_router_splunk_search_rejects_limit_as_string(self) -> None:
+        """Proof: Router rejects limit passed as string with ToolValidationError."""
+        from gateway.policy import PolicyValidationError
+        self.mock_splunk_client.search_encoded_powershell.side_effect = PolicyValidationError("limit must be an integer")
+        with self.assertRaises(ToolValidationError) as ctx:
+            self.router.execute_tool(
+                "bounded_splunk_search",
+                {"host": "DC01", "minutes": 15, "limit": "10"},
+            )
+        self.assertIn("limit must be an integer", str(ctx.exception))
+
+    def test_router_splunk_search_rejects_unauthorized_host(self) -> None:
+        """Proof: Router rejects hosts other than authorized DC01."""
+        from gateway.policy import PolicyValidationError
+        unauthorized_hosts = ["DC02", "localhost", "127.0.0.1", "FILE01"]
+        for host in unauthorized_hosts:
+            with self.subTest(host=host):
+                self.mock_splunk_client.search_encoded_powershell.side_effect = PolicyValidationError("host must be 'DC01'")
+                with self.assertRaises(ToolValidationError) as ctx:
+                    self.router.execute_tool(
+                        "bounded_splunk_search",
+                        {"host": host, "minutes": 15, "limit": 10},
+                    )
+                self.assertIn("host must be 'DC01'", str(ctx.exception))
+
+    def test_router_splunk_search_rejects_extra_argument(self) -> None:
+        """Proof: Router rejects unrecognized extra arguments in bounded_splunk_search."""
+        with self.assertRaises(ToolValidationError) as ctx:
+            self.router.execute_tool(
+                "bounded_splunk_search",
+                {"host": "DC01", "minutes": 15, "limit": 10, "extra_field": "disallowed"},
+            )
+        self.assertIn("Unrecognized arguments", str(ctx.exception))
+
 
 if __name__ == "__main__":
     unittest.main()

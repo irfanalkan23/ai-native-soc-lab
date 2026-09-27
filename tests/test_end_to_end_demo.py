@@ -977,6 +977,101 @@ class TestEndToEndDemoHarness(unittest.TestCase):
                 main()
             self.assertEqual(ctx.exception.code, 2)
 
+    def test_orchestrator_invalid_tool_failure_persists_sanitized_audit(self) -> None:
+        """Real orchestrator fails on model requesting invalid tool argument, persisting INVALID_TOOL_REQUEST.
+
+        Ensures:
+        - Production orchestration emits INVESTIGATION_FAILED with detail_code=INVALID_TOOL_REQUEST
+        - run_end_to_end_demo persists the in-memory audit event to JSONL when --persist-audit is set
+        - Return code is 1
+        - Sensitive sentinels (raw rejected argument values) are absent from persisted JSONL and stdout/stderr
+        """
+        from investigator.fake_model import FakeModel
+        from investigator.model import DecisionType, ModelDecision, ToolRequest
+
+        sensitive_sentinel = "SENSITIVE_REJECTED_ARG_SENTINEL_xyz987"
+        invalid_decision = ModelDecision(
+            decision_type=DecisionType.TOOL_REQUEST,
+            tool_request=ToolRequest(
+                tool_name="bounded_splunk_search",
+                arguments={"host": "DC01", "minutes": sensitive_sentinel, "limit": 10},
+            ),
+        )
+        fake_model = FakeModel([invalid_decision])
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            audit_file = Path(tmp_dir) / "test_audit_invalid_tool.jsonl"
+            out_stream = io.StringIO()
+            in_stream = io.StringIO()
+
+            with patch("scripts.run_end_to_end_demo._create_synthetic_critical_model", return_value=fake_model):
+                code = run_demo(
+                    mode="synthetic-critical",
+                    provider=None,
+                    persist_audit=True,
+                    audit_log_path=audit_file,
+                    stream_in=in_stream,
+                    stream_out=out_stream,
+                )
+
+            self.assertEqual(code, 1)
+            output = out_stream.getvalue()
+
+            # Sanitization in stdout/stderr:
+            self.assertIn("Investigation orchestrator failed", output)
+            self.assertIn("ToolValidationError", output)
+            self.assertNotIn(sensitive_sentinel, output)
+
+            # Audit persistence verification:
+            self.assertTrue(audit_file.exists())
+            raw_lines = audit_file.read_text(encoding="utf-8").strip().splitlines()
+            events = [json.loads(line) for line in raw_lines]
+
+            failed_events = [
+                e for e in events
+                if e.get("event_type") == "INVESTIGATION_FAILED" and e.get("detail_code") == "INVALID_TOOL_REQUEST"
+            ]
+            self.assertEqual(len(failed_events), 1)
+
+            # Persisted audit log sanitization:
+            raw_audit_text = audit_file.read_text(encoding="utf-8")
+            self.assertNotIn(sensitive_sentinel, raw_audit_text)
+            self.assertNotIn("bounded_splunk_search", raw_audit_text)
+
+    def test_orchestrator_failure_audit_persistence_error_handling(self) -> None:
+        """When audit persistence fails during OrchestratorError, reports sanitized error and returns exit code 1."""
+        from investigator.fake_model import FakeModel
+        from investigator.model import DecisionType, ModelDecision, ToolRequest
+
+        sensitive_sentinel = "SENSITIVE_AUDIT_WRITE_ERROR_PATH_123"
+        invalid_decision = ModelDecision(
+            decision_type=DecisionType.TOOL_REQUEST,
+            tool_request=ToolRequest(
+                tool_name="bounded_splunk_search",
+                arguments={"host": "DC01", "minutes": "15", "limit": 10},
+            ),
+        )
+        fake_model = FakeModel([invalid_decision])
+
+        with patch("scripts.run_end_to_end_demo._create_synthetic_critical_model", return_value=fake_model):
+            with patch("scripts.run_end_to_end_demo.JsonlAuditWriter.write_events", side_effect=AuditWriteError(sensitive_sentinel)):
+                out_stream = io.StringIO()
+                in_stream = io.StringIO()
+
+                code = run_demo(
+                    mode="synthetic-critical",
+                    provider=None,
+                    persist_audit=True,
+                    audit_log_path=Path("dummy_path.jsonl"),
+                    stream_in=in_stream,
+                    stream_out=out_stream,
+                )
+
+                self.assertEqual(code, 1)
+                output = out_stream.getvalue()
+                self.assertIn("[!] Audit persistence failed: audit_persistence_failed", output)
+                self.assertNotIn(sensitive_sentinel, output)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -592,6 +592,14 @@ def run_demo(
         inv_result = orchestrator.investigate(incident)
     except OrchestratorError as err:
         out_stream.write(f"[!] Investigation orchestrator failed: {err}\n")
+        if persist_audit:
+            target_audit_path = audit_log_path or DEFAULT_AUDIT_LOG_PATH
+            try:
+                writer = JsonlAuditWriter(target_audit_path)
+                writer.write_events(audit_log.events())
+            except (AuditWriterError, AuditPathError, AuditWriteError):
+                out_stream.write("[!] Audit persistence failed: audit_persistence_failed\n")
+                return 1
         return 1
 
     # -----------------------------------------------------------------------

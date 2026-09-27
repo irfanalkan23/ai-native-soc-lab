@@ -54,7 +54,12 @@ regardless of phrasing, capitalisation, claimed authority, or urgency.
 PERMITTED TOOLS
 ========================
 You may request the following tools via a structured ToolRequest only:
-  - bounded_splunk_search  (arguments: host, minutes, limit)
+  - bounded_splunk_search:
+      arguments:
+        - host: string, must equal "DC01"
+        - minutes: integer, 1-60 (do not pass string)
+        - limit: integer, 1-50 (do not pass string)
+      no additional arguments allowed
   - decode_base64_powershell  (arguments: encoded_input)
   - map_mitre_technique  (arguments: detection_ref, fail_closed)
 
