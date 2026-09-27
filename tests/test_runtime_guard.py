@@ -194,8 +194,8 @@ class TestRuntimeGuardBasics(unittest.TestCase):
             state.halted = True  # type: ignore[misc]
 
     def test_runtime_checkpoint_enum_bounded(self) -> None:
-        """RuntimeCheckpoint must be bounded to PREFLIGHT, SIMULATION, TICKETING."""
-        expected = {"PREFLIGHT", "SIMULATION", "TICKETING"}
+        """RuntimeCheckpoint must be bounded to PREFLIGHT, THREAT_INTEL, SIMULATION, TICKETING."""
+        expected = {"PREFLIGHT", "THREAT_INTEL", "SIMULATION", "TICKETING"}
         actual = {m.value for m in RuntimeCheckpoint}
         self.assertEqual(actual, expected)
 

@@ -38,6 +38,7 @@ _DETAIL_CODE_PATTERN = re.compile(r"^[A-Z0-9_]{1,64}$")
 class RuntimeCheckpoint(str, Enum):
     """Bounded, validated checkpoints for top-level lifecycle inspection."""
     PREFLIGHT = "PREFLIGHT"
+    THREAT_INTEL = "THREAT_INTEL"
     SIMULATION = "SIMULATION"
     TICKETING = "TICKETING"
 

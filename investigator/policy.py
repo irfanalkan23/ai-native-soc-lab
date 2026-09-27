@@ -24,6 +24,7 @@ from typing import List, Optional, Sequence, Tuple, Union
 
 from investigator.audit import AuditEvent, AuditEventType, AuditLog
 from investigator.schemas import InvestigationInput, InvestigationResult
+from investigator.threat_intel import ThreatIntelPolicySignal, ThreatIntelSignalStatus
 
 
 # Canonical lab detection ID for controlled encoded-PowerShell testing
@@ -80,9 +81,15 @@ POLICY_REASON_CODES = frozenset({
     "model_confidence_medium",
     "approval_required_for_consequential_action",
     "fail_closed_incomplete_evidence",
+    "ti_suspicious_corroboration",
+    "ti_malicious_corroboration",
+    "ti_malicious_high_corroboration",
 })
 
 MAX_POLICY_REASONS = 16
+
+# Maximum additive score contribution from threat-intel evidence
+MAX_TI_SCORE_CONTRIBUTION: int = 15
 
 
 @dataclass(frozen=True)
@@ -100,12 +107,16 @@ class PolicyContext:
                rule mapping (None if unmapped).
         tool_failure_or_incomplete_evidence: TRUSTED boolean flag indicating
                whether required tools failed or evidence is incomplete.
+        threat_intel: Optional normalized ThreatIntelPolicySignal (evidence only).
+                      None means no enrichment was performed (backward-compatible).
+                      RiskPolicyEngine owns all scoring derived from this signal.
     """
     alert: InvestigationInput
     verified_detection_id: str
     deterministic_decoded_command: Optional[str] = None
     mitre_technique_id: Optional[str] = None
     tool_failure_or_incomplete_evidence: bool = False
+    threat_intel: Optional[ThreatIntelPolicySignal] = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.alert, InvestigationInput):
@@ -128,6 +139,14 @@ class PolicyContext:
             raise PolicyEngineError(
                 f"tool_failure_or_incomplete_evidence must be bool, "
                 f"got {type(self.tool_failure_or_incomplete_evidence).__name__}"
+            )
+        if (
+            self.threat_intel is not None
+            and not isinstance(self.threat_intel, ThreatIntelPolicySignal)
+        ):
+            raise PolicyEngineError(
+                f"threat_intel must be ThreatIntelPolicySignal or None, "
+                f"got {type(self.threat_intel).__name__}"
             )
 
 
@@ -299,6 +318,24 @@ class RiskPolicyEngine:
             elif investigation_result.confidence_level == "medium":
                 raw_score += 5
                 reasons.append("model_confidence_medium")
+
+        # 3. Threat-intel advisory corroboration (strictly additive, capped at MAX_TI_SCORE_CONTRIBUTION)
+        #    TI evidence NEVER reduces score; neutral/error/not-found states add +0.
+        if context.threat_intel is not None:
+            ti = context.threat_intel
+            ti_contribution = 0
+            if ti.status is ThreatIntelSignalStatus.FOUND:
+                if ti.malicious_count >= 5:
+                    ti_contribution = 15
+                    reasons.append("ti_malicious_high_corroboration")
+                elif ti.malicious_count >= 1:
+                    ti_contribution = 10
+                    reasons.append("ti_malicious_corroboration")
+                elif ti.suspicious_count >= 1:
+                    ti_contribution = 5
+                    reasons.append("ti_suspicious_corroboration")
+            # NOT_APPLICABLE / NOT_FOUND / ERROR / FOUND clean: +0, no reason code added
+            raw_score += min(ti_contribution, MAX_TI_SCORE_CONTRIBUTION)
 
         risk_score = min(raw_score, 100)
 
