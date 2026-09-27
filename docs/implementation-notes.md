@@ -1267,3 +1267,94 @@ Last Analysis (UTC):  2026-09-26T01:10:55Z
 * **Real OpenAI + live malicious external content**: NOT TESTED
 * **Unauthorized real action**: NOT EXECUTED; no real containment capability exists in the tested 6A paths
 * **Production-grade prompt-injection protection**: NOT CLAIMED
+
+---
+
+## 28. 2026-09-27 — Milestone 7A: Real-provider end-to-end validation completed
+
+### Objective:
+Validate the V1 incident workflow with real Splunk telemetry, a real OpenAI model, persisted audit logging, and real Jira Cloud ticket creation while preserving deterministic policy control and simulation-only response execution.
+
+### Phase A — Real Splunk + FakeModel
+
+Status: LIVE TESTED / PASSED.
+A fresh controlled encoded-PowerShell event was generated on DC01.
+The bounded Splunk search retrieved one matching Sysmon event from localhost:8089.
+Decoded command: Write-Host 'AI-NativeSOC-LAB-TEST'.
+MITRE ATT&CK mapping: T1059.001.
+Deterministic policy result: 0 / LOW / NO_ACTION.
+No approval was required.
+No response action was executed.
+
+### Phase B — Real Splunk + Real OpenAI
+
+Initial live attempt failed safely because the model supplied an invalid argument to bounded_splunk_search.
+The deterministic ToolRouter rejected the malformed request with ToolValidationError.
+No tool-policy weakening or gateway bypass was introduced.
+A narrow hardening change was implemented:
+model-facing instructions now explicitly define host="DC01";
+minutes must be integer 1–60;
+limit must be integer 1–50;
+additional arguments are forbidden;
+orchestrator failure audit events are persisted when --persist-audit is enabled.
+Focused tests: 62/62 PASS.
+Full automated suite: 808 tests PASS, 0 skipped.
+Decision evaluation: 10/10 PASS.
+Live retry with OpenAI succeeded.
+Incident: INC-LIVE-DC01-20260927T160000203TUTC.
+Real Splunk + real OpenAI investigation completed successfully.
+Deterministic policy result: 0 / LOW / NO_ACTION.
+Persisted audit: 16 events.
+
+### Phase C — Real Splunk + Real OpenAI + Real Jira Cloud
+
+First Jira attempt failed closed at ticket dispatch because the Jira API credentials were no longer valid.
+Jira authentication was diagnosed separately with /rest/api/3/myself.
+A fresh Atlassian API token was created and validated with HTTP 200.
+Jira project KAN metadata confirmed Incident as a valid issue type.
+Standalone Jira recheck succeeded with issue KAN-6.
+Full end-to-end Phase C retry succeeded.
+Incident: INC-LIVE-DC01-20260927T174620269TUTC.
+Real Jira issue created: KAN-7.
+Ticket detail code: ticket_created_jira.
+Persisted audit: 14 events.
+Audit sequence ended with TICKET_REQUESTED → TICKET_CREATED.
+Deterministic policy remained 0 / LOW / NO_ACTION.
+Human approval was correctly skipped because the benign fixture did not require a consequential action.
+No endpoint modification occurred.
+
+### Phase D — Human approval governance
+
+Synthetic critical fixture used to test the consequential-action approval boundary separately from the benign real-provider run.
+Risk result: 80 / CRITICAL / APPROVAL_REQUIRED.
+Proposed action: simulate_endpoint_isolation.
+DENY path: PASS.
+APPROVAL_DENIED.
+Simulation blocked with simulation_blocked_denied.
+No endpoint action executed.
+APPROVE path: PASS.
+APPROVAL_GRANTED.
+SIMULATION_COMPLETED.
+Detail code: simulated_endpoint_isolation.
+Simulation only; no real endpoint isolation or modification occurred.
+
+### Milestone 7A final status
+
+Real DC01 → Sysmon → Splunk telemetry: LIVE TESTED.
+Bounded Splunk tool usage: LIVE TESTED.
+Real OpenAI investigation: LIVE TESTED.
+Deterministic policy enforcement: TESTED and LIVE EXERCISED.
+Persisted JSONL audit: TESTED and LIVE EXERCISED.
+Real Jira Cloud create-issue integration: LIVE TESTED in full workflow with KAN-7.
+Human approval DENY and APPROVE paths: TESTED using synthetic critical input.
+Endpoint isolation: SIMULATED ONLY.
+Real autonomous containment: NOT IMPLEMENTED.
+VirusTotal adapter: separately LIVE-SMOKE-TESTED; not part of the Milestone 7A real-provider chain.
+
+### Code checkpoint
+
+Hardening commit: 7438094 — Harden AI tool contract and persist failure audit.
+Working tree verified clean after commit.
+
+### Security conclusion
+Milestone 7A demonstrated that the AI investigator can use bounded tools and provide advisory analysis, while deterministic policy remains authoritative over risk and response. Consequential response remains behind explicit human approval, and V1 endpoint isolation remains simulation-only.
