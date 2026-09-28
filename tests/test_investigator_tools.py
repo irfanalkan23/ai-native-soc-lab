@@ -326,6 +326,118 @@ class TestToolRouter(unittest.TestCase):
             )
         self.assertIn("Unrecognized arguments", str(ctx.exception))
 
+    def test_router_splunk_search_default_omitted_query_type_delegates_to_encoded(self) -> None:
+        """Proof: When query_type is omitted, router defaults to search_encoded_powershell."""
+        self.mock_splunk_client.search_encoded_powershell.return_value = [{"host": "DC01"}]
+        result = self.router.execute_tool(
+            "bounded_splunk_search",
+            {"host": "DC01", "minutes": 15, "limit": 10},
+        )
+        self.assertEqual(len(result), 1)
+        self.mock_splunk_client.search_encoded_powershell.assert_called_once_with(
+            host="DC01",
+            minutes=15,
+            limit=10,
+        )
+        self.mock_splunk_client.search_powershell_network_retrieval.assert_not_called()
+
+    def test_router_splunk_search_explicit_encoded_powershell_query_type(self) -> None:
+        """Proof: query_type='encoded_powershell_matches' delegates to search_encoded_powershell."""
+        self.mock_splunk_client.search_encoded_powershell.return_value = [{"host": "DC01"}]
+        result = self.router.execute_tool(
+            "bounded_splunk_search",
+            {"query_type": "encoded_powershell_matches", "host": "DC01", "minutes": 15, "limit": 10},
+        )
+        self.assertEqual(len(result), 1)
+        self.mock_splunk_client.search_encoded_powershell.assert_called_once_with(
+            host="DC01",
+            minutes=15,
+            limit=10,
+        )
+        self.mock_splunk_client.search_powershell_network_retrieval.assert_not_called()
+
+    def test_router_splunk_search_network_retrieval_query_type(self) -> None:
+        """Proof: query_type='powershell_network_retrieval_matches' delegates to search_powershell_network_retrieval."""
+        self.mock_splunk_client.search_powershell_network_retrieval.return_value = [{"host": "DC01"}]
+        result = self.router.execute_tool(
+            "bounded_splunk_search",
+            {"query_type": "powershell_network_retrieval_matches", "host": "DC01", "minutes": 20, "limit": 5},
+        )
+        self.assertEqual(len(result), 1)
+        self.mock_splunk_client.search_powershell_network_retrieval.assert_called_once_with(
+            host="DC01",
+            minutes=20,
+            limit=5,
+        )
+        self.mock_splunk_client.search_encoded_powershell.assert_not_called()
+
+    def test_router_splunk_search_rejects_unknown_query_type(self) -> None:
+        """Proof: Unknown query_type fails closed with ToolValidationError and calls neither client method."""
+        unknown_types = [
+            "arbitrary_spl",
+            "search",
+            "raw_spl",
+            "powershell_retrieval",
+            "",
+            "DROP TABLE",
+        ]
+        for q_type in unknown_types:
+            with self.subTest(query_type=q_type):
+                with self.assertRaises(ToolValidationError):
+                    self.router.execute_tool(
+                        "bounded_splunk_search",
+                        {"query_type": q_type, "host": "DC01", "minutes": 15, "limit": 10},
+                    )
+                self.mock_splunk_client.search_encoded_powershell.assert_not_called()
+                self.mock_splunk_client.search_powershell_network_retrieval.assert_not_called()
+
+    def test_router_splunk_search_rejects_non_string_query_type(self) -> None:
+        """Proof: Non-string query_type values fail closed with ToolValidationError."""
+        bad_types = [None, True, False, 123, {}, []]
+        for bad_val in bad_types:
+            with self.subTest(bad_val=repr(bad_val)):
+                with self.assertRaises(ToolValidationError):
+                    self.router.execute_tool(
+                        "bounded_splunk_search",
+                        {"query_type": bad_val, "host": "DC01", "minutes": 15, "limit": 10},
+                    )
+                self.mock_splunk_client.search_encoded_powershell.assert_not_called()
+                self.mock_splunk_client.search_powershell_network_retrieval.assert_not_called()
+
+    def test_router_splunk_search_query_type_with_forbidden_parameters_fails_closed(self) -> None:
+        """Proof: Passing query_type alongside forbidden query or endpoint parameters fails closed."""
+        forbidden = [
+            {"query_type": "powershell_network_retrieval_matches", "search": "index=main"},
+            {"query_type": "powershell_network_retrieval_matches", "spl": "index=*"},
+            {"query_type": "encoded_powershell_matches", "query": "delete"},
+            {"query_type": "powershell_network_retrieval_matches", "url": "http://evil.com"},
+            {"query_type": "encoded_powershell_matches", "path": "/etc/passwd"},
+            {"query_type": "powershell_network_retrieval_matches", "endpoint": "https://localhost:8089"},
+        ]
+        for payload in forbidden:
+            with self.subTest(payload=payload):
+                with self.assertRaises(ToolValidationError) as ctx:
+                    self.router.execute_tool("bounded_splunk_search", payload)
+                self.assertIn("strictly prohibited", str(ctx.exception))
+                self.mock_splunk_client.search_encoded_powershell.assert_not_called()
+                self.mock_splunk_client.search_powershell_network_retrieval.assert_not_called()
+
+    def test_router_splunk_search_rejects_extra_arguments_with_valid_query_type(self) -> None:
+        """Proof: Extra/unrecognized arguments fail closed even when valid query_type is provided."""
+        with self.assertRaises(ToolValidationError) as ctx:
+            self.router.execute_tool(
+                "bounded_splunk_search",
+                {
+                    "query_type": "powershell_network_retrieval_matches",
+                    "host": "DC01",
+                    "minutes": 15,
+                    "limit": 10,
+                    "unauthorized_option": "exploit",
+                },
+            )
+        self.assertIn("Unrecognized arguments", str(ctx.exception))
+        self.mock_splunk_client.search_powershell_network_retrieval.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

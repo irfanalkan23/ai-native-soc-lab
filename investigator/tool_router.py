@@ -47,6 +47,11 @@ ALLOWED_TOOLS = frozenset({
     "map_mitre_technique",
 })
 
+ALLOWED_SPLUNK_QUERY_TYPES = frozenset({
+    "encoded_powershell_matches",
+    "powershell_network_retrieval_matches",
+})
+
 
 class ToolRouter:
     """Deterministic tool execution router for the AI investigator."""
@@ -117,23 +122,46 @@ class ToolRouter:
                     f"Parameter '{forbidden}' is strictly prohibited in bounded_splunk_search"
                 )
 
-        allowed_args = {"host", "minutes", "limit"}
+        allowed_args = {"query_type", "host", "minutes", "limit"}
         unrecognized = set(args.keys()) - allowed_args
         if unrecognized:
             raise ToolValidationError(
                 f"Unrecognized arguments for bounded_splunk_search: {sorted(unrecognized)}"
             )
 
+        if "query_type" in args:
+            raw_query_type = args["query_type"]
+            if type(raw_query_type) is not str:
+                raise ToolValidationError(
+                    f"Expected query_type str, got {type(raw_query_type).__name__}"
+                )
+            if raw_query_type not in ALLOWED_SPLUNK_QUERY_TYPES:
+                raise ToolValidationError(
+                    f"Unauthorized query_type '{raw_query_type}'. Allowed: {sorted(ALLOWED_SPLUNK_QUERY_TYPES)}"
+                )
+            query_type = raw_query_type
+        else:
+            query_type = "encoded_powershell_matches"
+
         host = args.get("host", "DC01")
         minutes = args.get("minutes", 15)
         limit = args.get("limit", 10)
 
         try:
-            return self._splunk_client.search_encoded_powershell(
-                host=host,
-                minutes=minutes,
-                limit=limit,
-            )
+            if query_type == "encoded_powershell_matches":
+                return self._splunk_client.search_encoded_powershell(
+                    host=host,
+                    minutes=minutes,
+                    limit=limit,
+                )
+            elif query_type == "powershell_network_retrieval_matches":
+                return self._splunk_client.search_powershell_network_retrieval(
+                    host=host,
+                    minutes=minutes,
+                    limit=limit,
+                )
+            else:
+                raise ToolValidationError(f"Unauthorized query_type '{query_type}'")
         except (PolicyValidationError, ValueError) as err:
             raise ToolValidationError(f"Search input validation failed: {err}") from err
         except SplunkSearchError as err:
