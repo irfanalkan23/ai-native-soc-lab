@@ -31,3 +31,4 @@ logs/*.log
 artifacts/audit/*.jsonl
 artifacts/incidents/*.json
 artifacts/evaluations/*.json
+.venv-sigma/

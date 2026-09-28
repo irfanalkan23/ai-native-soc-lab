@@ -126,7 +126,7 @@ index=main sourcetype="XmlWinEventLog:Microsoft-Windows-Sysmon/Operational" "<Ev
 | Artifact | Type | Status | Description |
 | :--- | :--- | :--- | :--- |
 | `detections/splunk/suspicious_encoded_powershell.spl` | SPL Detection | **IMPLEMENTED + TESTED** | Verified against live Sysmon telemetry in Splunk. |
-| `detections/sigma/suspicious_encoded_powershell.yml` | Sigma Rule | **IMPLEMENTED, NOT YET VALIDATED** | Rule defined; conversion and automated pipeline testing pending. |
+| `detections/sigma/suspicious_encoded_powershell.yml` | Sigma Rule | **IMPLEMENTED + VALIDATED** | Converted with Sigma CLI 3.1.0 / pySigma 1.5.1 / Splunk backend 2.1.0 and live-compared against current Sysmon telemetry; stock generated SPL requires lab-specific `_raw` XML extraction. |
 | `gateway/policy.py` | Input Policy / Query Validation | **IMPLEMENTED + TESTED** | Query input validation, type safety, allowlisted SPL template generator. |
 | `gateway/splunk_search.py` | Local Search Client | **IMPLEMENTED + TESTED** | Bounded export client; live localhost export query verified end-to-end. |
 | `investigator/schemas.py` | Investigation Schemas | **IMPLEMENTED + UNIT TESTED** | Immutable data contracts (`InvestigationInput`, `InvestigationResult`). |
@@ -1358,3 +1358,83 @@ Working tree verified clean after commit.
 
 ### Security conclusion
 Milestone 7A demonstrated that the AI investigator can use bounded tools and provide advisory analysis, while deterministic policy remains authoritative over risk and response. Consequential response remains behind explicit human approval, and V1 endpoint isolation remains simulation-only.
+
+---
+
+## 29. 2026-09-28 — Milestone 7B-1: Sigma validation and Splunk portability analysis completed
+
+### Objective
+
+Validate the existing encoded-PowerShell Sigma rule using real Sigma tooling, translate it to Splunk SPL, and compare the generated query with the live-tested operational SPL used by the lab.
+
+### Validation toolchain
+
+- Python 3.12.4
+- sigma-cli 3.1.0
+- pySigma 1.5.1
+- pysigma-backend-splunk 2.1.0
+- isolated local validation environment: `.venv-sigma/`
+
+The Sigma toolchain remains development/validation tooling only and is not part of the AI investigator runtime dependency set.
+
+### Conversion results
+
+The existing rule `detections/sigma/suspicious_encoded_powershell.yml` was converted using:
+
+- no processing pipeline
+- `splunk_windows`
+- `splunk_sysmon_acceleration`
+
+All three produced the same field-level Splunk expression:
+
+```spl
+Image="*\\powershell.exe" CommandLine IN ("* -EncodedCommand *", "* -enc *")
+```
+
+### Live A/B validation
+
+A fresh controlled encoded-PowerShell fixture was executed on DC01:
+
+```powershell
+Write-Host 'AI-NativeSOC-LAB-TEST'
+```
+
+The resulting Sysmon Event ID 1 telemetry was forwarded to Splunk.
+
+Test A — stock Sigma-generated field query:
+- Time window: Last 15 minutes
+- Result: 0 events
+
+Test B — authoritative lab SPL using explicit Sysmon XML `_raw` extraction:
+- Time window: same Last 15 minutes
+- Result: 1 event
+- `_time`: 2026-09-28 07:16:38.071
+- `host`: DC01
+- `user`: SOCLAB\Administrator
+- `image`: C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe
+- `command line` contained `-NoProfile -EncodedCommand`
+
+### Engineering finding
+
+The Sigma rule correctly represents the intended encoded-PowerShell detection semantics and converts successfully using the current Sigma/pySigma Splunk toolchain.
+
+However, the stock generated Splunk query is not operationally equivalent to the current lab implementation because the Splunk Sysmon ingestion does not expose `Image` and `CommandLine` as searchable top-level fields. The current operational SPL must extract those values from `_raw` XML.
+
+### Design decision
+
+For Version 1:
+- Sigma remains the portable detection-intent artifact.
+- The handcrafted SPL remains the authoritative operational implementation for the current lab telemetry.
+- Sigma-generated SPL is retained as portability/reference evidence.
+- No custom pySigma processing pipeline is introduced at this stage.
+- No CIM-normalized data model is claimed.
+
+### Status
+
+- Sigma rule: IMPLEMENTED + VALIDATED
+- Sigma CLI conversion: TESTED
+- Splunk backend conversion: TESTED
+- Live Sigma-vs-operational-SPL comparison: TESTED
+- Stock generated SPL operational equivalence: NOT ACHIEVED
+- Telemetry-specific operational SPL: IMPLEMENTED + LIVE TESTED
+- Custom pySigma pipeline: NOT IMPLEMENTED

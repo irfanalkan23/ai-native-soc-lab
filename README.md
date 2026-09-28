@@ -90,7 +90,7 @@ The initial incident scenario covers an execution attempt using obfuscated Power
 | **Lab Infrastructure** | Virtual Network & Hosts | **VERIFIED** | VirtualBox LabNet (`192.168.1.0/24`), pfSense, DC01, Kali, Splunk Server. |
 | **Sysmon Telemetry Ingestion** | Data Pipeline | **VERIFIED** | DC01 Sysmon Event ID 1 forwarded to Splunk index `main`. |
 | **Splunk Detection (`.spl`)** | Detection Engineering | **IMPLEMENTED + TESTED** | Verified against benign encoded PowerShell test on DC01. |
-| **Sigma Rule (`.yml`)** | Detection Engineering | **IMPLEMENTED, UNVALIDATED** | Rule defined; automated pipeline conversion pending. |
+| **Sigma Rule (`.yml`)** | Detection Engineering | **IMPLEMENTED + VALIDATED** | Converted with Sigma CLI / pySigma Splunk backend and live-compared against current Splunk telemetry; stock generated SPL requires telemetry-specific adaptation for this lab. |
 | **Bounded Splunk Search Client** | Local Integration & Python Gateway | **IMPLEMENTED + LIVE TESTED** | Hardened local client; 40 unit tests pass; verified live against Splunk Free localhost export endpoint with raw XML extraction. |
 | **Investigator Scaffolding & Tool Router** | Triage Scaffolding & Routing | **IMPLEMENTED + UNIT TESTED** | Deterministic schemas, UTF-16LE Base64 decoder, static MITRE mapper, allowlisted tool router. |
 | **AI Investigator Agent & Orchestrator** | Automation & LLM | **IMPLEMENTED + TESTED** | Bounded orchestrator, FakeModel, OpenAI Responses API adapter; offline + live model tested. |
@@ -199,7 +199,7 @@ Located in [`detections/splunk/suspicious_encoded_powershell.spl`](detections/sp
 ### Sigma Detection Rule
 Located in [`detections/sigma/suspicious_encoded_powershell.yml`](detections/sigma/suspicious_encoded_powershell.yml):
 * Equivalent generic process-creation rule for cross-platform detection repositories.
-* Status: **Implemented, not yet validated** against the live conversion pipeline.
+* Status: **Implemented + validated with Sigma tooling + live-compared against Splunk**. Stock generated SPL is not operationally equivalent to the current lab ingestion because Sysmon fields are embedded in `_raw`; the handcrafted SPL remains the authoritative operational implementation.
 
 ### MITRE ATT&CK Mapping
 * **Technique**: [T1059.001 - Command and Scripting Interpreter: PowerShell](https://attack.mitre.org/techniques/T1059/001/)

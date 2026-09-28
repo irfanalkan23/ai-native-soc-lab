@@ -1,6 +1,7 @@
-# Status: IMPLEMENTED, NOT YET VALIDATED
-# Note: Implemented as a Sigma representation of suspicious encoded PowerShell execution.
-# Lab pipeline validation against Sysmon via pySigma/Sigma CLI is pending.
+# Status: IMPLEMENTED + VALIDATED WITH SIGMA TOOLING
+# Note: Portable Sigma representation of suspicious encoded PowerShell execution.
+# Validation: Converted with Sigma CLI/pySigma Splunk backend and live-compared against lab Splunk telemetry.
+# Operational note: Current lab Sysmon fields require _raw XML extraction in the authoritative SPL implementation.
 
 title: Suspicious Encoded PowerShell Execution
 id: 4e4f13c0-89a9-4f0e-a08f-b70b9c19e729
