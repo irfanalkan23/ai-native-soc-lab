@@ -42,7 +42,7 @@ MAX_ISSUE_TYPE_LENGTH = 32
 MAX_SUMMARY_LENGTH = 255
 MAX_DESCRIPTION_LENGTH = 4096
 MAX_LABEL_LENGTH = 64
-MAX_LABELS_COUNT = 8
+MAX_LABELS_COUNT = 9
 MAX_EXTERNAL_REF_LENGTH = 64
 MAX_PROVIDER_LENGTH = 32
 MAX_TICKET_KEY_LENGTH = 64
@@ -58,6 +58,7 @@ SAFE_TICKET_KEY_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]{1,31}-[0-9]{1,10}$")
 ALLOWED_TICKET_LABELS = frozenset({
     "ai-native-soc",
     "powershell",
+    "network-retrieval",
     "benign-test",
     "human-approved",
     "human-denied",
@@ -381,6 +382,8 @@ def build_ticket_request(
     # NOT from untrusted detection_name substring.
     if incident_record.mitre_technique_id == "T1059.001":
         derived_labels.append("powershell")
+    if incident_record.mitre_technique_id == "T1105":
+        derived_labels.append("network-retrieval")
 
     # "benign-test" label is derived ONLY from validated policy reason code,
     # NOT solely from risk_score == 0.

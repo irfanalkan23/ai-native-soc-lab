@@ -38,16 +38,22 @@ from investigator.approval import (
 )
 from investigator.audit import AuditEventType
 from investigator.audit_writer import AuditWriteError
+from investigator.incident_record import build_incident_record
 from investigator.policy import (
     ActionDisposition,
+    PolicyContext,
     PolicyDecision,
     ProposedAction,
     RiskLevel,
+    RiskPolicyEngine,
 )
+from investigator.schemas import InvestigationInput, InvestigationResult
 from investigator.simulator import (
     SimulatedResponseExecutor,
+    SimulationResult,
     SimulationStatus,
 )
+from investigator.tools.mitre_mapper import map_detection_to_mitre
 from scripts.run_end_to_end_demo import (
     _find_exact_benign_fixture,
     _parse_event_timestamp,
@@ -1071,6 +1077,109 @@ class TestEndToEndDemoHarness(unittest.TestCase):
                 output = out_stream.getvalue()
                 self.assertIn("[!] Audit persistence failed: audit_persistence_failed", output)
                 self.assertNotIn(sensitive_sentinel, output)
+
+
+class TestSecondDetectionPipelineFlow(unittest.TestCase):
+    """Milestone 8I-B: Verify deterministic pipeline flow for the second detection."""
+
+    def setUp(self) -> None:
+        self.cmd = 'powershell.exe -NoProfile -Command "Invoke-WebRequest -Uri http://127.0.0.1:65535/AI-NativeSOC-LAB-TEST"'
+        self.alert = InvestigationInput(
+            incident_id="INC-NETWORK-001",
+            timestamp="2026-09-28T12:00:00Z",
+            host="DC01",
+            user="SYSTEM",
+            image="C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+            command_line=self.cmd,
+            parent_image="C:\\Windows\\System32\\cmd.exe",
+            parent_command_line="cmd.exe /c start",
+            detection_name="suspicious_powershell_network_retrieval",
+            detection_id="DET-POWERSHELL-002",
+        )
+
+    def test_second_detection_policy_context_flow_and_scoring(self) -> None:
+        """1 & 2: PolicyContext receives DET-POWERSHELL-002 and T1105 without Base64 decoding,
+
+        and evaluation receives network retrieval signals without benign suppression or decoded_command_present.
+        """
+        # 1. MITRE mapping resolves to T1105
+        mitre_res = map_detection_to_mitre(self.alert.detection_name, fail_closed=False)
+        self.assertTrue(mitre_res.mapped)
+        self.assertEqual(mitre_res.technique_id, "T1105")
+
+        # 2. Build PolicyContext: must NOT require Base64 decoding
+        context = PolicyContext(
+            alert=self.alert,
+            verified_detection_id=self.alert.detection_id,
+            deterministic_decoded_command=None,
+            mitre_technique_id=mitre_res.technique_id,
+            tool_failure_or_incomplete_evidence=False,
+        )
+        self.assertEqual(context.verified_detection_id, "DET-POWERSHELL-002")
+        self.assertEqual(context.mitre_technique_id, "T1105")
+        self.assertIsNone(context.deterministic_decoded_command)
+
+        # 3. Policy evaluation result
+        engine = RiskPolicyEngine()
+        decision = engine.evaluate(context)
+
+        self.assertIn("powershell_network_retrieval_detected", decision.reasons)
+        self.assertIn("mitre_t1105", decision.reasons)
+        self.assertEqual(decision.risk_score, 35)
+
+        self.assertNotIn("benign_lab_fixture_matched", decision.reasons)
+        self.assertNotIn("encoded_powershell_detected", decision.reasons)
+        self.assertNotIn("decoded_command_present", decision.reasons)
+
+    def test_second_detection_incident_record_persistence(self) -> None:
+        """3: IncidentRecord preserves second detection identifiers, MITRE T1105, and reason codes."""
+        mitre_res = map_detection_to_mitre(self.alert.detection_name, fail_closed=False)
+        context = PolicyContext(
+            alert=self.alert,
+            verified_detection_id=self.alert.detection_id,
+            deterministic_decoded_command=None,
+            mitre_technique_id=mitre_res.technique_id,
+            tool_failure_or_incomplete_evidence=False,
+        )
+        engine = RiskPolicyEngine()
+        decision = engine.evaluate(context)
+
+        inv_result = InvestigationResult(
+            summary="Suspicious PowerShell network retrieval observed.",
+            observations=("Observed Invoke-WebRequest command line syntax",),
+            decoded_command=None,
+            mitre_techniques=("T1105",),
+            suspicious_indicators=("network_retrieval",),
+            recommended_next_step="Inspect execution context",
+            confidence_level="medium",
+            evidence_refs=("DC01:Sysmon:1",),
+        )
+        sim_result = SimulationResult(
+            incident_id=self.alert.incident_id,
+            proposed_action=decision.proposed_action,
+            status=SimulationStatus.NOT_EXECUTED,
+            detail_code="human_review_required",
+        )
+
+        record = build_incident_record(
+            investigation_input=self.alert,
+            investigation_result=inv_result,
+            policy_decision=decision,
+            simulation_result=sim_result,
+            evidence_source="Live Splunk (localhost:8089)",
+            deterministic_decoded_command=context.deterministic_decoded_command,
+            mitre_technique_id=context.mitre_technique_id,
+        )
+
+        self.assertEqual(record.detection_id, "DET-POWERSHELL-002")
+        self.assertEqual(record.detection_name, "suspicious_powershell_network_retrieval")
+        self.assertEqual(record.mitre_technique_id, "T1105")
+        self.assertIsNone(record.decoded_command)
+        self.assertIn("powershell_network_retrieval_detected", record.policy_reason_codes)
+        self.assertIn("mitre_t1105", record.policy_reason_codes)
+        self.assertNotIn("benign_lab_fixture_matched", record.policy_reason_codes)
+        self.assertNotIn("encoded_powershell_detected", record.policy_reason_codes)
+        self.assertNotIn("decoded_command_present", record.policy_reason_codes)
 
 
 if __name__ == "__main__":

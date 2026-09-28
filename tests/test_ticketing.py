@@ -105,6 +105,10 @@ class TestTicketConfig(unittest.TestCase):
         self.assertFalse(config.include_decoded_command)
         self.assertEqual(len(config.allowed_labels), len(ALLOWED_TICKET_LABELS))
 
+    def test_allowed_ticket_labels_includes_network_retrieval(self) -> None:
+        """Allowlist must include 'network-retrieval' for T1105 ticketing."""
+        self.assertIn("network-retrieval", ALLOWED_TICKET_LABELS)
+
     def test_immutability(self) -> None:
         config = TicketConfig(
             project_key="SEC",
@@ -540,6 +544,37 @@ class TestBuildTicketRequest(unittest.TestCase):
         )
         req = build_ticket_request(rec, self.config_default)
         self.assertIn("powershell", req.labels)
+
+    def test_mitre_technique_t1105_creates_network_retrieval_label_and_not_powershell(self) -> None:
+        """Requirement 4: IncidentRecord with T1105 derives 'network-retrieval' and 'ai-native-soc',
+
+        and does NOT derive 'powershell'. Jira summary remains generic with detection name and host.
+        """
+        rec = _make_valid_incident_record(
+            detection_name="suspicious_powershell_network_retrieval",
+            mitre_technique_id="T1105",
+            policy_reason_codes=("powershell_network_retrieval_detected", "mitre_t1105"),
+        )
+        req = build_ticket_request(rec, self.config_default)
+        self.assertIn("suspicious_powershell_network_retrieval", req.summary)
+        self.assertIn("DC01", req.summary)
+        self.assertIn("ai-native-soc", req.labels)
+        self.assertIn("network-retrieval", req.labels)
+        self.assertNotIn("powershell", req.labels)
+
+    def test_second_detection_localhost_fixture_does_not_create_benign_test_label(self) -> None:
+        """Requirement 6: DET-POWERSHELL-002 using localhost fixture does NOT receive benign-test label
+
+        unless benign_lab_fixture_matched is in policy_reason_codes.
+        """
+        rec = _make_valid_incident_record(
+            detection_name="suspicious_powershell_network_retrieval",
+            mitre_technique_id="T1105",
+            decoded_command=None,
+            policy_reason_codes=("powershell_network_retrieval_detected", "mitre_t1105"),
+        )
+        req = build_ticket_request(rec, self.config_default)
+        self.assertNotIn("benign-test", req.labels)
 
     def test_risk_score_zero_without_policy_reason_does_not_create_benign_test_label(self) -> None:
         """risk_score 0 without benign_lab_fixture_matched cannot independently create benign-test label."""
