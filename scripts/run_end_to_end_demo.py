@@ -81,6 +81,7 @@ from investigator.orchestrator import (
 )
 from investigator.policy import (
     BENIGN_LAB_DETECTION_ID,
+    DET_POWERSHELL_002,
     EXACT_BENIGN_COMMAND,
     ActionDisposition,
     PolicyContext,
@@ -194,6 +195,48 @@ def _find_exact_benign_fixture(
     return None
 
 
+def _find_exact_network_retrieval_fixture(
+    records: List[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """Order candidates by _time (newest first) and select the controlled network retrieval fixture.
+
+    Fixed matching properties:
+    - Image: must end with 'powershell.exe' (case-insensitive)
+    - CommandLine: must contain 'Invoke-WebRequest' (case-insensitive) and
+      '127.0.0.1:65535/AI-NativeSOC-LAB-TEST'
+
+    Returns:
+        Selected record dict if found, else None.
+    """
+    dated_candidates: List[Tuple[datetime, Dict[str, Any]]] = []
+    for rec in records:
+        ts_str = rec.get("_time", "")
+        dt = _parse_event_timestamp(ts_str)
+        if dt is not None:
+            dated_candidates.append((dt, rec))
+
+    # Sort descending: newest first
+    dated_candidates.sort(key=lambda item: item[0], reverse=True)
+
+    target_host_marker = "127.0.0.1:65535/AI-NativeSOC-LAB-TEST"
+    for _dt, rec in dated_candidates:
+        image = str(rec.get("Image", "")).lower()
+        cmd_line = str(rec.get("CommandLine", ""))
+
+        if not image.endswith("powershell.exe"):
+            continue
+
+        if "invoke-webrequest" not in cmd_line.lower():
+            continue
+
+        if target_host_marker not in cmd_line:
+            continue
+
+        return rec
+
+    return None
+
+
 def _create_synthetic_critical_model(
     command_line: str,
     detection_name: str,
@@ -276,6 +319,48 @@ def _create_live_benign_fake_model(
         ),
     ]
     return FakeModel(decisions)
+
+
+def _create_live_network_retrieval_fake_model(
+    command_line: str,
+    detection_name: str,
+    incident_id: str,
+) -> FakeModel:
+    """Construct a deterministic FakeModel sequence for live-network-retrieval mode."""
+    decisions = [
+        ModelDecision(
+            decision_type=DecisionType.TOOL_REQUEST,
+            tool_request=ToolRequest(
+                tool_name="map_mitre_technique",
+                arguments={"detection_ref": detection_name, "fail_closed": False},
+            ),
+        ),
+        ModelDecision(
+            decision_type=DecisionType.FINAL_RESULT,
+            final_result=InvestigationResult(
+                summary=(
+                    "Explicit PowerShell network retrieval primitive observed on DC01; "
+                    "controlled localhost validation retrieval attempt with no evidence of successful transfer."
+                ),
+                observations=(
+                    "Explicit PowerShell network retrieval primitive observed in process command line",
+                    "Target URI points to local loopback validation endpoint (unsuccessful connection attempt)",
+                ),
+                decoded_command=None,
+                mitre_techniques=("T1105",),
+                suspicious_indicators=(
+                    "network_retrieval_primitive",
+                    "controlled_localhost_fetch_attempt",
+                ),
+                recommended_next_step="Review endpoint network transfer policies and verify controlled test context.",
+                confidence_level="medium",
+                evidence_refs=(incident_id,),
+            ),
+        ),
+    ]
+    model = FakeModel(decisions)
+    model.decisions = decisions
+    return model
 
 
 def _render_safe_summary(
@@ -537,6 +622,55 @@ def run_demo(
 
         evidence_source = "Sanitized Local Synthetic Fixture"
         retrieved_count = 0
+    elif mode == "live-network-retrieval":
+        client = splunk_client or SplunkSearchClient(verify_tls=False)
+        out_stream.write(f"[*] Querying bounded Splunk search on localhost:8089 (host=DC01, minutes={minutes}, limit=5)...\n")
+        out_stream.flush()
+
+        try:
+            raw_records = client.search_powershell_network_retrieval(
+                host="DC01",
+                minutes=minutes,
+                limit=5,
+            )
+        except SplunkConnectionError as err:
+            out_stream.write(f"[!] Splunk connection error: {err}\n")
+            out_stream.write("[!] Note: live-network-retrieval requires running locally on Splunk-Server (localhost:8089).\n")
+            out_stream.write("[!] For offline/local demonstration, run with --mode synthetic-critical.\n")
+            return 1
+        except (SplunkResponseError, SplunkSearchError) as err:
+            out_stream.write(f"[!] Bounded Splunk search failed: {err}\n")
+            return 1
+
+        if not raw_records:
+            out_stream.write("[!] Controlled network retrieval validation fixture not found in the bounded Splunk window.\n")
+            out_stream.write("[!] Generate the approved network retrieval test event and retry.\n")
+            return 1
+
+        selected_record = _find_exact_network_retrieval_fixture(raw_records)
+        if selected_record is None:
+            out_stream.write("[!] Controlled network retrieval validation fixture not found in the bounded Splunk window.\n")
+            out_stream.write("[!] Generate the approved network retrieval test event and retry.\n")
+            return 1
+
+        deterministic_decoded = None
+        clean_time_id = selected_record["_time"].replace(":", "").replace("-", "").replace(" ", "T").replace("+", "").replace(".", "")
+        incident_id = f"INC-LIVE-DC01-{clean_time_id}"[:60]
+
+        incident = InvestigationInput(
+            incident_id=incident_id,
+            timestamp=selected_record["_time"],
+            host="DC01",
+            user=selected_record["User"],
+            image=selected_record["Image"],
+            command_line=selected_record["CommandLine"],
+            parent_image=selected_record["ParentImage"],
+            parent_command_line=selected_record["ParentCommandLine"],
+            detection_name="suspicious_powershell_network_retrieval",
+            detection_id=DET_POWERSHELL_002,
+        )
+        evidence_source = "Live Splunk (localhost:8089)"
+        retrieved_count = len(raw_records)
     else:
         out_stream.write(f"[!] Unknown mode: {mode}\n")
         return 1
@@ -546,7 +680,11 @@ def run_demo(
     # -----------------------------------------------------------------------
     mitre_res = map_detection_to_mitre(incident.detection_name, fail_closed=False)
     mitre_id = mitre_res.technique_id if mitre_res.mapped else None
-    tool_failure = deterministic_decoded is None
+
+    if mode == "live-network-retrieval":
+        tool_failure = not (mitre_res.mapped and mitre_id == "T1105")
+    else:
+        tool_failure = deterministic_decoded is None
 
     # -----------------------------------------------------------------------
     # Step 3: AI Investigation Session (Advisory Hypotheses via ToolRouter)
@@ -560,6 +698,23 @@ def run_demo(
             decoded_command=deterministic_decoded or "",
             incident_id=incident.incident_id,
         )
+    elif mode == "live-network-retrieval":
+        if provider == "openai":
+            from investigator.providers.openai_provider import (
+                OpenAIModel,
+                OpenAIProviderError,
+            )
+            try:
+                model = OpenAIModel()
+            except OpenAIProviderError as err:
+                out_stream.write(f"[!] OpenAI provider configuration failed: {err}\n")
+                return 1
+        else:
+            model = _create_live_network_retrieval_fake_model(
+                command_line=incident.command_line,
+                detection_name=incident.detection_name,
+                incident_id=incident.incident_id,
+            )
     else:  # live-benign
         if provider == "openai":
             from investigator.providers.openai_provider import (
@@ -867,15 +1022,15 @@ def main() -> int:
     )
     parser.add_argument(
         "--mode",
-        choices=["live-benign", "synthetic-critical"],
+        choices=["live-benign", "live-network-retrieval", "synthetic-critical"],
         required=True,
-        help="Demo mode to execute (live-benign or synthetic-critical).",
+        help="Demo mode to execute (live-benign, live-network-retrieval, or synthetic-critical).",
     )
     parser.add_argument(
         "--provider",
         choices=["fake", "openai"],
         default=None,
-        help="Model provider for live-benign mode (fake or openai). Forbidden on synthetic-critical.",
+        help="Model provider for live modes (fake or openai). Forbidden on synthetic-critical.",
     )
     parser.add_argument(
         "--minutes",
@@ -944,9 +1099,9 @@ def main() -> int:
     if args.mode == "synthetic-critical" and args.provider is not None:
         parser.error("--provider is not allowed for synthetic-critical mode (strictly uses deterministic FakeModel)")
 
-    # live-benign defaults to fake if not specified
+    # live modes default to fake if not specified
     provider = args.provider
-    if args.mode == "live-benign" and provider is None:
+    if args.mode in ("live-benign", "live-network-retrieval") and provider is None:
         provider = "fake"
 
     if not (1 <= args.minutes <= 60):
