@@ -51,6 +51,18 @@ _STATIC_MITRE_DATABASE: Dict[str, Dict[str, str]] = {
         "tactic_id": "TA0002",
         "tactic_name": "Execution",
     },
+    "powershell_network_retrieval_matches": {
+        "technique_id": "T1105",
+        "technique_name": "Ingress Tool Transfer",
+        "tactic_id": "TA0011",
+        "tactic_name": "Command and Control",
+    },
+    "suspicious_powershell_network_retrieval": {
+        "technique_id": "T1105",
+        "technique_name": "Ingress Tool Transfer",
+        "tactic_id": "TA0011",
+        "tactic_name": "Command and Control",
+    },
 }
 
 

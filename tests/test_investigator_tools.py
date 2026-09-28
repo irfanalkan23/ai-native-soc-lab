@@ -132,6 +132,22 @@ class TestMitreMapper(unittest.TestCase):
                 self.assertEqual(mapping.tactic_id, "TA0002")
                 self.assertEqual(mapping.tactic_name, "Execution")
 
+    def test_mitre_mapping_powershell_network_retrieval(self) -> None:
+        """Verify mapping of verified PowerShell network retrieval detection references to T1105."""
+        refs = [
+            "powershell_network_retrieval_matches",
+            "suspicious_powershell_network_retrieval",
+        ]
+        for ref in refs:
+            with self.subTest(ref=ref):
+                mapping = map_detection_to_mitre(ref)
+                self.assertIsInstance(mapping, MitreMapping)
+                self.assertTrue(mapping.mapped)
+                self.assertEqual(mapping.technique_id, "T1105")
+                self.assertEqual(mapping.technique_name, "Ingress Tool Transfer")
+                self.assertEqual(mapping.tactic_id, "TA0011")
+                self.assertEqual(mapping.tactic_name, "Command and Control")
+
     def test_unknown_detection_fails_closed_when_configured(self) -> None:
         """Proof: Unknown detections raise MitreMappingError when fail_closed=True."""
         with self.assertRaises(MitreMappingError):

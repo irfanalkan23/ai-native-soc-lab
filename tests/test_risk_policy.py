@@ -42,6 +42,11 @@ from investigator.policy import (
 from investigator.schemas import ConfidenceLevel, InvestigationInput, InvestigationResult
 from investigator.tool_router import ToolRouter
 
+try:
+    from investigator.policy import DET_POWERSHELL_002
+except ImportError:
+    DET_POWERSHELL_002 = "DET-POWERSHELL-002"
+
 
 def _make_alert(
     incident_id: str = "INC-3D-001",
@@ -234,6 +239,23 @@ class TestBenignLabRuleConjunction(unittest.TestCase):
         self.assertIn("fail_closed_incomplete_evidence", decision.reasons)
         self.assertIn(decision.action_disposition, (ActionDisposition.HUMAN_REVIEW, ActionDisposition.APPROVAL_REQUIRED))
 
+    def test_network_retrieval_does_not_qualify_for_benign_lab_suppression(self) -> None:
+        """Proof: DET-POWERSHELL-002 does NOT qualify for benign_lab_fixture_matched,
+
+        even if the command line contains the controlled localhost Invoke-WebRequest validation command.
+        """
+        localhost_test_cmd = "Invoke-WebRequest -Uri http://127.0.0.1/test"
+        context = PolicyContext(
+            alert=_make_alert(command_line=f'powershell.exe -Command "{localhost_test_cmd}"'),
+            verified_detection_id=DET_POWERSHELL_002,
+            deterministic_decoded_command=localhost_test_cmd,
+            tool_failure_or_incomplete_evidence=False,
+        )
+        decision = self.engine.evaluate(context)
+        self.assertNotIn("benign_lab_fixture_matched", decision.reasons)
+        self.assertNotEqual(decision.action_disposition, ActionDisposition.NO_ACTION)
+        self.assertNotEqual(decision.proposed_action, ProposedAction.NO_ACTION)
+
 
 class TestDeterministicScoring(unittest.TestCase):
     """Verification of score calculation, additive weights, and bounds."""
@@ -264,6 +286,16 @@ class TestDeterministicScoring(unittest.TestCase):
         self.assertEqual(decision.risk_score, 25)
         self.assertIn("encoded_powershell_detected", decision.reasons)
 
+    def test_powershell_network_retrieval_verified_detection_adds_25(self) -> None:
+        context = PolicyContext(
+            alert=self.alert,
+            verified_detection_id=DET_POWERSHELL_002,
+            deterministic_decoded_command=None,
+        )
+        decision = self.engine.evaluate(context)
+        self.assertEqual(decision.risk_score, 25)
+        self.assertIn("powershell_network_retrieval_detected", decision.reasons)
+
     def test_decoded_command_adds_10(self) -> None:
         context = PolicyContext(
             alert=self.alert,
@@ -283,6 +315,27 @@ class TestDeterministicScoring(unittest.TestCase):
         decision = self.engine.evaluate(context)
         self.assertEqual(decision.risk_score, 10)
         self.assertIn("mitre_t1059_001", decision.reasons)
+
+    def test_mitre_t1105_adds_10(self) -> None:
+        context = PolicyContext(
+            alert=self.alert,
+            verified_detection_id="OTHER",
+            mitre_technique_id="T1105",
+        )
+        decision = self.engine.evaluate(context)
+        self.assertEqual(decision.risk_score, 10)
+        self.assertIn("mitre_t1105", decision.reasons)
+
+    def test_powershell_network_retrieval_and_mitre_t1105_additive_scoring(self) -> None:
+        context = PolicyContext(
+            alert=self.alert,
+            verified_detection_id=DET_POWERSHELL_002,
+            mitre_technique_id="T1105",
+        )
+        decision = self.engine.evaluate(context)
+        self.assertEqual(decision.risk_score, 35)
+        self.assertIn("powershell_network_retrieval_detected", decision.reasons)
+        self.assertIn("mitre_t1105", decision.reasons)
 
     def test_suspicious_indicators_scoring(self) -> None:
         context = PolicyContext(
@@ -569,6 +622,17 @@ class TestPolicyDecisionValidation(unittest.TestCase):
         dec_suspicious = engine.evaluate(ctx_suspicious, res_suspicious)
         for r in dec_suspicious.reasons:
             self.assertIn(r, POLICY_REASON_CODES)
+
+    def test_reason_codes_allowlist_contains_network_retrieval_reasons(self) -> None:
+        """Verify new deterministic reason codes are in POLICY_REASON_CODES allowlist."""
+        self.assertIn("powershell_network_retrieval_detected", POLICY_REASON_CODES)
+        self.assertIn("mitre_t1105", POLICY_REASON_CODES)
+
+    def test_canonical_second_detection_id_constant(self) -> None:
+        """Verify DET_POWERSHELL_002 is exported and has value DET-POWERSHELL-002."""
+        import investigator.policy as policy_mod
+        self.assertTrue(hasattr(policy_mod, "DET_POWERSHELL_002"))
+        self.assertEqual(getattr(policy_mod, "DET_POWERSHELL_002"), "DET-POWERSHELL-002")
 
 
 class TestPolicySecurityBoundaries(unittest.TestCase):
