@@ -304,6 +304,99 @@ class TestGatewayPolicy(unittest.TestCase):
         self.assertIn("| head 25", spl)
         self.assertIn("| table _time host User Image CommandLine ParentImage ParentCommandLine", spl)
 
+    def test_powershell_network_retrieval_query_type_accepted(self) -> None:
+        """Verify that 'powershell_network_retrieval_matches' is accepted as a valid query_type."""
+        req = validate_search_request(
+            query_type="powershell_network_retrieval_matches",
+            host="DC01",
+            minutes=15,
+            limit=10,
+        )
+        self.assertIsInstance(req, SearchRequest)
+        self.assertEqual(req.query_type, "powershell_network_retrieval_matches")
+        self.assertEqual(req.host, "DC01")
+        self.assertEqual(req.minutes, 15)
+        self.assertEqual(req.limit, 10)
+
+    def test_build_allowlisted_spl_powershell_network_retrieval(self) -> None:
+        """Verify build_allowlisted_spl() constructs the expected SPL for powershell_network_retrieval_matches."""
+        req = SearchRequest(
+            query_type="powershell_network_retrieval_matches",
+            host="DC01",
+            minutes=20,
+            limit=15,
+        )
+        spl = build_allowlisted_spl(req)
+        self.assertTrue(spl.startswith("search index=main"))
+        self.assertIn('sourcetype="XmlWinEventLog:Microsoft-Windows-Sysmon/Operational"', spl)
+        self.assertIn('host="DC01"', spl)
+        self.assertIn('earliest="-20m"', spl)
+        self.assertIn("<EventID>1</EventID>", spl)
+        self.assertIn('rex field=_raw "<Data Name=[\'\\"]Image[\'\\"]>(?<Image>[^<]+)</Data>"', spl)
+        self.assertIn('rex field=_raw "<Data Name=[\'\\"]CommandLine[\'\\"]>(?<CommandLine>[^<]+)</Data>"', spl)
+        self.assertIn('rex field=_raw "<Data Name=[\'\\"]ParentImage[\'\\"]>(?<ParentImage>[^<]+)</Data>"', spl)
+        self.assertIn('rex field=_raw "<Data Name=[\'\\"]ParentCommandLine[\'\\"]>(?<ParentCommandLine>[^<]+)</Data>"', spl)
+        self.assertIn('rex field=_raw "<Data Name=[\'\\"]User[\'\\"]>(?<User>[^<]+)</Data>"', spl)
+        self.assertIn('where match(Image, "(?i)powershell[.]exe$")', spl)
+        self.assertIn(
+            'where match(CommandLine, "(?i)(Invoke-WebRequest|Invoke-RestMethod|[.]DownloadString\\()")',
+            spl,
+        )
+        self.assertIn("| sort - _time", spl)
+        self.assertIn("| head 15", spl)
+        self.assertIn("| table _time host User Image CommandLine ParentImage ParentCommandLine", spl)
+
+    def test_encoded_powershell_matches_predicate_preserved(self) -> None:
+        """Verify encoded_powershell_matches still produces the existing encoded-command predicate."""
+        req = SearchRequest(
+            query_type="encoded_powershell_matches",
+            host="DC01",
+            minutes=15,
+            limit=10,
+        )
+        spl = build_allowlisted_spl(req)
+        self.assertIn('where match(CommandLine, "(?i)(^|[[:space:]])-(encodedcommand|enc)([[:space:]]|$)")', spl)
+        self.assertNotIn("Invoke-WebRequest", spl)
+
+    def test_unknown_query_type_rejected_with_new_allowed_type(self) -> None:
+        """Verify an unknown or arbitrary query type is still rejected."""
+        invalid_types = [
+            "unknown_type",
+            "powershell_retrieval",
+            "encoded_powershell",
+            "network_retrieval",
+            "",
+            "powershell_network_retrieval",
+        ]
+        for q_type in invalid_types:
+            with self.subTest(query_type=q_type):
+                with self.assertRaises(PolicyValidationError):
+                    validate_search_request(
+                        query_type=q_type,
+                        host="DC01",
+                        minutes=15,
+                        limit=10,
+                    )
+
+    def test_arbitrary_query_text_injection_prevented_in_query_type(self) -> None:
+        """Verify callers cannot inject arbitrary query text through query_type or other parameters."""
+        malicious_inputs = [
+            'encoded_powershell_matches | search *',
+            'powershell_network_retrieval_matches" | delete',
+            'encoded_powershell_matches; eval 1=1',
+            '<EventID>1</EventID>',
+            'index=other',
+        ]
+        for mal in malicious_inputs:
+            with self.subTest(payload=mal):
+                with self.assertRaises(PolicyValidationError):
+                    validate_search_request(
+                        query_type=mal,
+                        host="DC01",
+                        minutes=15,
+                        limit=10,
+                    )
+
 
 class TestRawSysmonXmlExtraction(unittest.TestCase):
     """Regression tests proving raw Sysmon XML extraction and filtering semantics (Milestone 5B-2 fix)."""
@@ -582,6 +675,168 @@ class TestRawSysmonXmlExtraction(unittest.TestCase):
         )
         record = self._simulate_spl_pipeline(raw_xml)
         self.assertIsNotNone(record)
+
+
+class TestPowerShellNetworkRetrievalDetection(unittest.TestCase):
+    """Regression test suite for Suspicious PowerShell Network Retrieval detection artifact.
+
+    Validates the detection logic defined in:
+    detections/splunk/suspicious_powershell_network_retrieval.spl
+
+    Known limitation note:
+    The rule is string/regex based and does not parse PowerShell syntax, so quoted text
+    containing "Invoke-WebRequest" may still match.
+    """
+
+    def setUp(self) -> None:
+        import re
+        from pathlib import Path
+
+        self.re = re
+        spl_path = (
+            Path(__file__).resolve().parent.parent
+            / "detections"
+            / "splunk"
+            / "suspicious_powershell_network_retrieval.spl"
+        )
+        with open(spl_path, "r", encoding="utf-8") as f:
+            self.spl = f.read()
+
+    def _simulate_network_retrieval_spl(
+        self,
+        raw_xml: str,
+        host: str = "DC01",
+        time_val: str = "2026-09-28T12:00:00.000Z",
+    ):
+        """Simulate Splunk pipeline execution derived directly from the SPL artifact.
+
+        Pipeline steps extracted from self.spl:
+        1. Base filter: EventID 1 condition
+        2. Field extraction: rex field=_raw patterns
+        3. Image filter: match(Image, ...) regex
+        4. CommandLine filter: match(CommandLine, ...) regex
+        """
+        # 1. Base search filter: verify both SPL and raw_xml contain <EventID>1</EventID>
+        if "<EventID>1</EventID>" not in self.spl:
+            return None
+        if "<EventID>1</EventID>" not in raw_xml:
+            return None
+
+        # 2. Extract rex patterns from SPL (matching until unescaped double quote)
+        rex_matches = self.re.findall(r'rex field=_raw "(.*?)(?<!\\)"', self.spl)
+        record = {"_time": time_val, "host": host}
+        for rex_pat in rex_matches:
+            unescaped_pat = rex_pat.replace(r'\"', '"')
+            py_pat = self.re.sub(r'\(\?<([a-zA-Z0-9_]+)>', r'(?P<\1>', unescaped_pat)
+            m = self.re.search(py_pat, raw_xml)
+            if m:
+                record.update(m.groupdict())
+
+        # 3. Where clause filter: Image
+        where_img = self.re.search(r'where match\(Image,\s*"([^"]+)"\)', self.spl)
+        if where_img:
+            img_pat = where_img.group(1)
+            img_val = record.get("Image", "")
+            if not self.re.search(img_pat, img_val):
+                return None
+
+        # 4. Where clause filter: CommandLine
+        where_cmd = self.re.search(r'where match\(CommandLine,\s*"([^"]+)"\)', self.spl)
+        if where_cmd:
+            cmd_pat = where_cmd.group(1)
+            py_cmd_pat = cmd_pat.replace("[[:space:]]", r"\s")
+            cmd_val = record.get("CommandLine", "")
+            if not self.re.search(py_cmd_pat, cmd_val):
+                return None
+
+        return record
+
+    def test_invoke_webrequest_matches(self) -> None:
+        """Proof: powershell.exe invoking Invoke-WebRequest matches."""
+        raw_xml = (
+            "<Event><System><EventID>1</EventID></System><EventData>"
+            "<Data Name='Image'>C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe</Data>"
+            "<Data Name='CommandLine'>powershell.exe -NoProfile -Command \"Invoke-WebRequest -Uri http://127.0.0.1/test\"</Data>"
+            "<Data Name='ParentImage'>C:\\Windows\\System32\\cmd.exe</Data>"
+            "<Data Name='ParentCommandLine'>\"cmd.exe\"</Data>"
+            "<Data Name='User'>SOCLAB\\Administrator</Data>"
+            "</EventData></Event>"
+        )
+        record = self._simulate_network_retrieval_spl(raw_xml)
+        self.assertIsNotNone(record)
+        self.assertIn("Invoke-WebRequest", record["CommandLine"])
+
+    def test_invoke_restmethod_matches(self) -> None:
+        """Proof: powershell.exe invoking Invoke-RestMethod matches."""
+        raw_xml = (
+            "<Event><System><EventID>1</EventID></System><EventData>"
+            "<Data Name='Image'>C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe</Data>"
+            "<Data Name='CommandLine'>powershell.exe -NoProfile -Command \"Invoke-RestMethod -Uri http://127.0.0.1/test\"</Data>"
+            "<Data Name='ParentImage'>C:\\Windows\\System32\\cmd.exe</Data>"
+            "<Data Name='ParentCommandLine'>\"cmd.exe\"</Data>"
+            "<Data Name='User'>SOCLAB\\Administrator</Data>"
+            "</EventData></Event>"
+        )
+        record = self._simulate_network_retrieval_spl(raw_xml)
+        self.assertIsNotNone(record)
+        self.assertIn("Invoke-RestMethod", record["CommandLine"])
+
+    def test_downloadstring_matches(self) -> None:
+        """Proof: powershell.exe invoking .DownloadString( matches."""
+        raw_xml = (
+            "<Event><System><EventID>1</EventID></System><EventData>"
+            "<Data Name='Image'>C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe</Data>"
+            "<Data Name='CommandLine'>powershell.exe -NoProfile -Command \"(New-Object Net.WebClient).DownloadString('http://127.0.0.1/test')\"</Data>"
+            "<Data Name='ParentImage'>C:\\Windows\\System32\\cmd.exe</Data>"
+            "<Data Name='ParentCommandLine'>\"cmd.exe\"</Data>"
+            "<Data Name='User'>SOCLAB\\Administrator</Data>"
+            "</EventData></Event>"
+        )
+        record = self._simulate_network_retrieval_spl(raw_xml)
+        self.assertIsNotNone(record)
+        self.assertIn(".DownloadString(", record["CommandLine"])
+
+    def test_network_retrieval_matching_is_case_insensitive(self) -> None:
+        """Proof: Lowercase or mixed-case indicator like invoke-webrequest matches case-insensitively."""
+        raw_xml = (
+            "<Event><System><EventID>1</EventID></System><EventData>"
+            "<Data Name='Image'>C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe</Data>"
+            "<Data Name='CommandLine'>powershell.exe -NoProfile -Command \"invoke-webrequest -Uri http://127.0.0.1/test\"</Data>"
+            "<Data Name='ParentImage'>C:\\Windows\\System32\\cmd.exe</Data>"
+            "<Data Name='ParentCommandLine'>\"cmd.exe\"</Data>"
+            "<Data Name='User'>SOCLAB\\Administrator</Data>"
+            "</EventData></Event>"
+        )
+        record = self._simulate_network_retrieval_spl(raw_xml)
+        self.assertIsNotNone(record)
+
+    def test_normal_powershell_command_rejected(self) -> None:
+        """Proof: Normal PowerShell execution without retrieval primitives is rejected."""
+        raw_xml = (
+            "<Event><System><EventID>1</EventID></System><EventData>"
+            "<Data Name='Image'>C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe</Data>"
+            "<Data Name='CommandLine'>powershell.exe -NoProfile -Command \"Write-Host 'hello'\"</Data>"
+            "<Data Name='ParentImage'>C:\\Windows\\System32\\cmd.exe</Data>"
+            "<Data Name='ParentCommandLine'>\"cmd.exe\"</Data>"
+            "<Data Name='User'>SOCLAB\\Administrator</Data>"
+            "</EventData></Event>"
+        )
+        record = self._simulate_network_retrieval_spl(raw_xml)
+        self.assertIsNone(record)
+
+    def test_non_powershell_process_with_indicator_rejected(self) -> None:
+        """Proof: Non-powershell Image (cmd.exe) containing retrieval indicator is rejected."""
+        raw_xml = (
+            "<Event><System><EventID>1</EventID></System><EventData>"
+            "<Data Name='Image'>C:\\Windows\\System32\\cmd.exe</Data>"
+            "<Data Name='CommandLine'>cmd.exe /c echo Invoke-WebRequest</Data>"
+            "<Data Name='ParentImage'>C:\\Windows\\explorer.exe</Data>"
+            "<Data Name='ParentCommandLine'>\"C:\\Windows\\explorer.exe\"</Data>"
+            "<Data Name='User'>SOCLAB\\Administrator</Data>"
+            "</EventData></Event>"
+        )
+        record = self._simulate_network_retrieval_spl(raw_xml)
+        self.assertIsNone(record)
 
 
 if __name__ == "__main__":

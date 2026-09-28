@@ -14,7 +14,10 @@ class PolicyValidationError(ValueError):
     pass
 
 
-ALLOWED_QUERY_TYPES = frozenset({"encoded_powershell_matches"})
+ALLOWED_QUERY_TYPES = frozenset({
+    "encoded_powershell_matches",
+    "powershell_network_retrieval_matches",
+})
 ALLOWED_HOSTS = frozenset({"DC01"})
 
 MIN_MINUTES = 1
@@ -129,6 +132,13 @@ def build_allowlisted_spl(request: SearchRequest) -> str:
     if type(request.limit) is not int or not (MIN_LIMIT <= request.limit <= MAX_LIMIT):
         raise PolicyValidationError(f"Invalid limit parameter: {request.limit}")
 
+    if request.query_type == "encoded_powershell_matches":
+        cmd_predicate = r"(?i)(^|[[:space:]])-(encodedcommand|enc)([[:space:]]|$)"
+    elif request.query_type == "powershell_network_retrieval_matches":
+        cmd_predicate = r"(?i)(Invoke-WebRequest|Invoke-RestMethod|[.]DownloadString\()"
+    else:
+        raise PolicyValidationError(f"Unauthorized query type: {request.query_type}")
+
     return (
         f'search index=main sourcetype="XmlWinEventLog:Microsoft-Windows-Sysmon/Operational" '
         f'host="{request.host}" earliest="-{request.minutes}m" "<EventID>1</EventID>" '
@@ -138,7 +148,7 @@ def build_allowlisted_spl(request: SearchRequest) -> str:
         '| rex field=_raw "<Data Name=[\'\\"]ParentCommandLine[\'\\"]>(?<ParentCommandLine>[^<]+)</Data>" '
         '| rex field=_raw "<Data Name=[\'\\"]User[\'\\"]>(?<User>[^<]+)</Data>" '
         '| where match(Image, "(?i)powershell[.]exe$") '
-        '| where match(CommandLine, "(?i)(^|[[:space:]])-(encodedcommand|enc)([[:space:]]|$)") '
+        f'| where match(CommandLine, "{cmd_predicate}") '
         '| sort - _time '
         f'| head {request.limit} '
         '| table _time host User Image CommandLine ParentImage ParentCommandLine'

@@ -1,0 +1,9 @@
+index=main sourcetype="XmlWinEventLog:Microsoft-Windows-Sysmon/Operational" "<EventID>1</EventID>"
+| rex field=_raw "<Data Name=['\"]Image['\"]>(?<Image>[^<]+)</Data>"
+| rex field=_raw "<Data Name=['\"]CommandLine['\"]>(?<CommandLine>[^<]+)</Data>"
+| rex field=_raw "<Data Name=['\"]ParentImage['\"]>(?<ParentImage>[^<]+)</Data>"
+| rex field=_raw "<Data Name=['\"]ParentCommandLine['\"]>(?<ParentCommandLine>[^<]+)</Data>"
+| rex field=_raw "<Data Name=['\"]User['\"]>(?<User>[^<]+)</Data>"
+| where match(Image, "(?i)powershell[.]exe$")
+| where match(CommandLine, "(?i)(Invoke-WebRequest|Invoke-RestMethod|[.]DownloadString\()")
+| table _time host User Image CommandLine ParentImage ParentCommandLine

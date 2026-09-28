@@ -287,6 +287,71 @@ class TestSplunkSearchClient(unittest.TestCase):
             self.assertIn("| head 10", spl_sent)
             self.assertIn("| table _time host User Image CommandLine ParentImage ParentCommandLine", spl_sent)
 
+    def test_search_powershell_network_retrieval_success_and_payload(self) -> None:
+        """Verify search_powershell_network_retrieval dispatches network-retrieval predicate and parses 7-field response."""
+        import urllib.parse
+
+        mock_export_stream = (
+            '{"preview":false,"offset":0,"lastrow":true,"result":{'
+            '"_time":"2026-09-28T12:00:00.000+00:00",'
+            '"host":"DC01",'
+            '"User":"SOCLAB\\\\Administrator",'
+            '"Image":"C:\\\\Windows\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe",'
+            '"CommandLine":"powershell.exe -NoProfile -Command \\"Invoke-WebRequest -Uri http://127.0.0.1/test\\"",'
+            '"ParentImage":"C:\\\\Windows\\\\System32\\\\cmd.exe",'
+            '"ParentCommandLine":"\\"C:\\\\Windows\\\\system32\\\\cmd.exe\\"",'
+            '"internal_field":"leak_test"'
+            '}}\n'
+        )
+        with patch("urllib.request.urlopen") as mock_urlopen:
+            mock_urlopen.return_value = self._create_mock_response(mock_export_stream)
+
+            results = self.client.search_powershell_network_retrieval(  # type: ignore[attr-defined]
+                host="DC01",
+                minutes=15,
+                limit=10,
+            )
+
+            mock_urlopen.assert_called_once()
+            called_req = mock_urlopen.call_args[0][0]
+            self.assertEqual(called_req.full_url, SPLUNK_EXPORT_ENDPOINT)
+            self.assertEqual(called_req.get_method(), "POST")
+
+            parsed_body = urllib.parse.parse_qs(called_req.data.decode("utf-8"))
+            self.assertIn("search", parsed_body)
+            spl_sent = parsed_body["search"][0]
+            self.assertIn(
+                'where match(CommandLine, "(?i)(Invoke-WebRequest|Invoke-RestMethod|[.]DownloadString\\()")',
+                spl_sent,
+            )
+            self.assertNotIn("-(encodedcommand|enc)", spl_sent)
+
+            self.assertEqual(len(results), 1)
+            event = results[0]
+            self.assertEqual(event["host"], "DC01")
+            self.assertEqual(event["User"], "SOCLAB\\Administrator")
+            self.assertIn("Invoke-WebRequest", event["CommandLine"])
+            self.assertNotIn("internal_field", event)
+            self.assertEqual(set(event.keys()), set(ALLOWED_FIELDS))
+
+    def test_search_powershell_network_retrieval_boundary_validation_fails_closed(self) -> None:
+        """Verify invalid host/minutes/limit fail closed for search_powershell_network_retrieval."""
+        # Invalid host
+        with self.assertRaises(PolicyValidationError):
+            self.client.search_powershell_network_retrieval(host="WORKSTATION1", minutes=15, limit=10)  # type: ignore[attr-defined]
+
+        # Invalid minutes
+        with self.assertRaises(PolicyValidationError):
+            self.client.search_powershell_network_retrieval(host="DC01", minutes=0, limit=10)  # type: ignore[attr-defined]
+        with self.assertRaises(PolicyValidationError):
+            self.client.search_powershell_network_retrieval(host="DC01", minutes=61, limit=10)  # type: ignore[attr-defined]
+
+        # Invalid limit
+        with self.assertRaises(PolicyValidationError):
+            self.client.search_powershell_network_retrieval(host="DC01", minutes=15, limit=0)  # type: ignore[attr-defined]
+        with self.assertRaises(PolicyValidationError):
+            self.client.search_powershell_network_retrieval(host="DC01", minutes=15, limit=51)  # type: ignore[attr-defined]
+
 
 if __name__ == "__main__":
     unittest.main()

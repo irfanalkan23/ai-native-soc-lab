@@ -1,0 +1,40 @@
+# Status: EXPERIMENTAL
+# Note: Portable Sigma representation of suspicious PowerShell network retrieval execution.
+# Operational note: Current lab Sysmon fields require _raw XML extraction in the authoritative SPL implementation.
+
+title: Suspicious PowerShell Network Retrieval
+id: 87684e84-27e1-4d74-9085-b88d54f98fe4
+status: experimental
+description: Detects PowerShell process creation where the command line contains an explicit network retrieval primitive.
+author: Irfan Alkan
+date: 2026-09-28
+
+logsource:
+  category: process_creation
+  product: windows
+
+detection:
+  selection_image:
+    Image|endswith:
+      - '\powershell.exe'
+
+  selection_network_retrieval:
+    CommandLine|contains:
+      - 'Invoke-WebRequest'
+      - 'Invoke-RestMethod'
+      - '.DownloadString('
+
+  condition: selection_image and selection_network_retrieval
+
+falsepositives:
+  - Administrative scripting
+  - Software deployment or management tools
+  - Legitimate automation that retrieves remote content
+
+level: medium
+
+tags:
+  - attack.execution
+  - attack.t1059.001
+  - attack.command_and_control
+  - attack.t1105

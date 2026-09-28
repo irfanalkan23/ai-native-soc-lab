@@ -24,6 +24,7 @@ from typing import Any, Dict, List, Optional
 from gateway.policy import (
     ALLOWED_FIELDS,
     PolicyValidationError,
+    SearchRequest,
     build_allowlisted_spl,
     validate_search_request,
 )
@@ -95,6 +96,44 @@ class SplunkSearchClient:
         """Expose the immutable hardcoded endpoint."""
         return SPLUNK_EXPORT_ENDPOINT
 
+    def _execute_bounded_search(self, request: SearchRequest) -> List[Dict[str, Any]]:
+        """Execute a policy-validated SearchRequest against the fixed export endpoint.
+
+        Constructs allowlisted SPL from template, dispatches POST request to fixed export
+        endpoint, parses JSON stream, and enforces defense-in-depth result-count bound.
+        """
+        # Construct non-arbitrary SPL from template
+        spl = build_allowlisted_spl(request)
+
+        # Execute query against fixed export endpoint
+        payload = urllib.parse.urlencode({
+            "search": spl,
+            "output_mode": "json",
+        }).encode("utf-8")
+
+        req = urllib.request.Request(
+            url=SPLUNK_EXPORT_ENDPOINT,
+            data=payload,
+            method="POST",
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                "User-Agent": "AI-Native-SOC-Lab/SearchClient-v1",
+            },
+        )
+
+        raw_response = self._execute_http(req)
+
+        # Parse structured response and extract allowlisted fields
+        records = self._parse_json_stream(raw_response)
+
+        # Defense-in-depth: enforce post-parsing result count limit
+        if len(records) > request.limit:
+            raise SplunkResponseError(
+                f"Splunk returned {len(records)} events, exceeding requested limit of {request.limit}"
+            )
+
+        return records
+
     def search_encoded_powershell(
         self,
         host: str = "DC01",
@@ -122,45 +161,48 @@ class SplunkSearchClient:
             SplunkResponseError: If Splunk returns an error envelope, HTTP error,
                                  malformed data, missing mandatory fields, or excess events.
         """
-        # Step 1: Validate input through policy gate
         request = validate_search_request(
             query_type="encoded_powershell_matches",
             host=host,
             minutes=minutes,
             limit=limit,
         )
+        return self._execute_bounded_search(request)
 
-        # Step 2: Construct non-arbitrary SPL from template
-        spl = build_allowlisted_spl(request)
+    def search_powershell_network_retrieval(
+        self,
+        host: str = "DC01",
+        minutes: int = 15,
+        limit: int = 10,
+    ) -> List[Dict[str, Any]]:
+        """Query Splunk for suspicious PowerShell network retrieval executions on host DC01.
 
-        # Step 3: Execute query against fixed export endpoint
-        payload = urllib.parse.urlencode({
-            "search": spl,
-            "output_mode": "json",
-        }).encode("utf-8")
+        Enforces policy validation before dispatching the request. The caller can
+        only supply bounded parameters (host, minutes, limit); arbitrary SPL and
+        endpoint paths cannot be supplied.
 
-        req = urllib.request.Request(
-            url=SPLUNK_EXPORT_ENDPOINT,
-            data=payload,
-            method="POST",
-            headers={
-                "Content-Type": "application/x-www-form-urlencoded",
-                "User-Agent": "AI-Native-SOC-Lab/SearchClient-v1",
-            },
+        Args:
+            host: Target host name (strictly 'DC01').
+            minutes: Lookback window in minutes (1-60).
+            limit: Maximum events to return (1-50).
+
+        Returns:
+            List of dictionaries containing all 7 mandatory allowlisted fields:
+            _time, host, User, Image, CommandLine, ParentImage, ParentCommandLine.
+
+        Raises:
+            PolicyValidationError: If inputs violate policy boundaries.
+            SplunkConnectionError: If Splunk cannot be reached or times out.
+            SplunkResponseError: If Splunk returns an error envelope, HTTP error,
+                                 malformed data, missing mandatory fields, or excess events.
+        """
+        request = validate_search_request(
+            query_type="powershell_network_retrieval_matches",
+            host=host,
+            minutes=minutes,
+            limit=limit,
         )
-
-        raw_response = self._execute_http(req)
-
-        # Step 4: Parse structured response and extract allowlisted fields
-        records = self._parse_json_stream(raw_response)
-
-        # Step 5: Defense-in-depth: enforce post-parsing result count limit
-        if len(records) > request.limit:
-            raise SplunkResponseError(
-                f"Splunk returned {len(records)} events, exceeding requested limit of {request.limit}"
-            )
-
-        return records
+        return self._execute_bounded_search(request)
 
     def _execute_http(self, req: urllib.request.Request) -> str:
         """Execute the HTTP request using bounded reads and sanitized error reporting."""
