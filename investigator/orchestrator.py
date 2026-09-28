@@ -52,6 +52,41 @@ class OrchestratorError(Exception):
 
 
 # ---------------------------------------------------------------------------
+# Tool Audit Mapping & Helper (Milestone 8K)
+# ---------------------------------------------------------------------------
+
+_TOOL_AUDIT_PREFIX: Dict[str, str] = {
+    "bounded_splunk_search": "bounded_splunk_search",
+    "decode_base64_powershell": "decode_base64_powershell",
+    "map_mitre_technique": "map_mitre_technique",
+}
+
+_ALLOWED_AUDIT_SUFFIXES = frozenset({
+    "requested",
+    "allowed",
+    "ok",
+    "execution_failed",
+    "result_too_large",
+})
+
+
+def _tool_audit_code(tool_name: str, suffix: str) -> str:
+    """Derive a fixed machine-readable audit detail code for an allowlisted tool.
+
+    Security Guarantees:
+      - Accepts only the 3 strictly allowlisted tool names.
+      - Accepts only fixed internal lifecycle suffixes.
+      - Never interpolates arbitrary strings or model inputs into audit.
+      - Fails closed for unknown tool names or unknown suffixes.
+    """
+    if tool_name not in _TOOL_AUDIT_PREFIX or suffix not in _ALLOWED_AUDIT_SUFFIXES:
+        raise ValueError(
+            f"Invalid tool audit mapping: tool_name={tool_name!r}, suffix={suffix!r}"
+        )
+    return f"{_TOOL_AUDIT_PREFIX[tool_name]}_{suffix}"
+
+
+# ---------------------------------------------------------------------------
 # Result serialization helpers
 # ---------------------------------------------------------------------------
 
@@ -217,10 +252,16 @@ class InvestigationOrchestrator:
             # --- Branch: TOOL_REQUEST ---
             if decision.decision_type == DecisionType.TOOL_REQUEST:
                 tool_req: ToolRequest = decision.tool_request
-                # Use a static detail code — never place the model-supplied tool name
-                # directly into audit. A name longer than MAX_DETAIL_CODE_LENGTH would
-                # raise ValueError before ToolRouter can reject the request.
-                _audit(AuditEventType.TOOL_REQUESTED, "tool_requested")
+                is_allowlisted_tool = tool_req.tool_name in _TOOL_AUDIT_PREFIX
+
+                # Use a static detail code — never place model-supplied arbitrary tool name
+                # directly into audit. If allowlisted, derive fixed code; otherwise use generic.
+                req_audit_code = (
+                    _tool_audit_code(tool_req.tool_name, "requested")
+                    if is_allowlisted_tool
+                    else "tool_requested"
+                )
+                _audit(AuditEventType.TOOL_REQUESTED, req_audit_code)
 
                 # Budget check — reject 4th tool call
                 if tool_calls_used >= MAX_TOOL_CALLS:
@@ -230,7 +271,12 @@ class InvestigationOrchestrator:
                         f"Model must emit FINAL_RESULT."
                     )
 
-                _audit(AuditEventType.TOOL_ALLOWED, "tool_allowed")
+                allowed_audit_code = (
+                    _tool_audit_code(tool_req.tool_name, "allowed")
+                    if is_allowlisted_tool
+                    else "tool_allowed"
+                )
+                _audit(AuditEventType.TOOL_ALLOWED, allowed_audit_code)
 
                 # Check runtime guard before tool execution
                 try:
@@ -265,7 +311,12 @@ class InvestigationOrchestrator:
                     )
                     prior_tool_results.append(envelope)
                     tool_calls_used += 1
-                    _audit(AuditEventType.TOOL_COMPLETED, "execution_failed")
+                    exec_failed_audit_code = (
+                        _tool_audit_code(tool_req.tool_name, "execution_failed")
+                        if is_allowlisted_tool
+                        else "execution_failed"
+                    )
+                    _audit(AuditEventType.TOOL_COMPLETED, exec_failed_audit_code)
                     continue
 
                 # Serialize result to bounded JSON string
@@ -277,7 +328,11 @@ class InvestigationOrchestrator:
                         result_text=result_text,
                         error_code=None,
                     )
-                    audit_detail = "ok"
+                    audit_detail = (
+                        _tool_audit_code(tool_req.tool_name, "ok")
+                        if is_allowlisted_tool
+                        else "ok"
+                    )
                 except ValueError:
                     # Result was too large or could not be serialized → fail closed with code
                     envelope = ToolResultEnvelope(
@@ -286,7 +341,11 @@ class InvestigationOrchestrator:
                         result_text=json.dumps({"error": "result_too_large"}),
                         error_code="RESULT_TOO_LARGE",
                     )
-                    audit_detail = "result_too_large"
+                    audit_detail = (
+                        _tool_audit_code(tool_req.tool_name, "result_too_large")
+                        if is_allowlisted_tool
+                        else "result_too_large"
+                    )
 
                 prior_tool_results.append(envelope)
                 tool_calls_used += 1

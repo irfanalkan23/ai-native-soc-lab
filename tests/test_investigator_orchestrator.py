@@ -515,13 +515,13 @@ class TestInvestigationOrchestrator(unittest.TestCase):
         result = orch.investigate(_VALID_INPUT)
         self.assertIsInstance(result, InvestigationResult)
 
-        # Verify one TOOL_COMPLETED event with "execution_failed" exists
+        # Verify one TOOL_COMPLETED event with "bounded_splunk_search_execution_failed" exists
         completed_events = [
             e for e in audit_log.events()
             if e.event_type == AuditEventType.TOOL_COMPLETED
         ]
         self.assertEqual(len(completed_events), 1)
-        self.assertEqual(completed_events[0].detail_code, "execution_failed")
+        self.assertEqual(completed_events[0].detail_code, "bounded_splunk_search_execution_failed")
 
     # --- Schema validation propagation ---
 
@@ -889,8 +889,8 @@ class TestOversizedToolResultAuditDetail(unittest.TestCase):
         self.assertEqual(len(completed), 1)
         self.assertEqual(
             completed[0].detail_code,
-            "result_too_large",
-            msg="Oversized result must be audited as 'result_too_large', not 'ok'",
+            "bounded_splunk_search_result_too_large",
+            msg="Oversized result must be audited as 'bounded_splunk_search_result_too_large', not 'ok'",
         )
 
 
@@ -1042,18 +1042,18 @@ class TestStaticAuditDetailCodes(unittest.TestCase):
 
         self.assertEqual(
             detail_by_type[AuditEventType.TOOL_REQUESTED],
-            "tool_requested",
-            msg="TOOL_REQUESTED detail_code must be the static string 'tool_requested'",
+            "decode_base64_powershell_requested",
+            msg="TOOL_REQUESTED detail_code must be 'decode_base64_powershell_requested'",
         )
         self.assertEqual(
             detail_by_type[AuditEventType.TOOL_ALLOWED],
-            "tool_allowed",
-            msg="TOOL_ALLOWED detail_code must be the static string 'tool_allowed'",
+            "decode_base64_powershell_allowed",
+            msg="TOOL_ALLOWED detail_code must be 'decode_base64_powershell_allowed'",
         )
         self.assertEqual(
             detail_by_type[AuditEventType.TOOL_COMPLETED],
-            "ok",
-            msg="TOOL_COMPLETED detail_code must be 'ok' for a successful execution",
+            "decode_base64_powershell_ok",
+            msg="TOOL_COMPLETED detail_code must be 'decode_base64_powershell_ok' for a successful execution",
         )
 
 

@@ -1034,6 +1034,11 @@ class TestEndToEndDemoHarness(unittest.TestCase):
             raw_lines = audit_file.read_text(encoding="utf-8").strip().splitlines()
             events = [json.loads(line) for line in raw_lines]
 
+            detail_codes = [e.get("detail_code") for e in events]
+            self.assertIn("bounded_splunk_search_requested", detail_codes)
+            self.assertIn("bounded_splunk_search_allowed", detail_codes)
+            self.assertIn("INVALID_TOOL_REQUEST", detail_codes)
+
             failed_events = [
                 e for e in events
                 if e.get("event_type") == "INVESTIGATION_FAILED" and e.get("detail_code") == "INVALID_TOOL_REQUEST"
@@ -1043,7 +1048,8 @@ class TestEndToEndDemoHarness(unittest.TestCase):
             # Persisted audit log sanitization:
             raw_audit_text = audit_file.read_text(encoding="utf-8")
             self.assertNotIn(sensitive_sentinel, raw_audit_text)
-            self.assertNotIn("bounded_splunk_search", raw_audit_text)
+            self.assertNotIn("ToolValidationError", raw_audit_text)
+            self.assertNotIn("minutes", raw_audit_text)
 
     def test_orchestrator_failure_audit_persistence_error_handling(self) -> None:
         """When audit persistence fails during OrchestratorError, reports sanitized error and returns exit code 1."""
