@@ -524,6 +524,65 @@ class TestRawSysmonXmlExtraction(unittest.TestCase):
             self.assertIn(field, record)
             self.assertTrue(bool(str(record[field]).strip()))
 
+    def test_encoded_argument_matching_is_case_insensitive(self) -> None:
+        """Proof: Mixed-case flags such as -ENC and -eNcOdEdCoMmAnD are matched case-insensitively."""
+        test_flags = ["-ENC", "-eNcOdEdCoMmAnD"]
+        for flag in test_flags:
+            with self.subTest(flag=flag):
+                raw_xml = (
+                    f"<Event><System><EventID>1</EventID></System><EventData>"
+                    f"<Data Name='Image'>C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe</Data>"
+                    f"<Data Name='CommandLine'>powershell.exe {flag} VwByAGkAdABl...</Data>"
+                    f"<Data Name='ParentImage'>C:\\Windows\\System32\\cmd.exe</Data>"
+                    f"<Data Name='ParentCommandLine'>\"cmd.exe\"</Data>"
+                    f"<Data Name='User'>SOCLAB\\Administrator</Data>"
+                    f"</EventData></Event>"
+                )
+                record = self._simulate_spl_pipeline(raw_xml)
+                self.assertIsNotNone(record)
+
+    def test_enc_prefix_inside_longer_token_rejected(self) -> None:
+        """Proof: -enc prefix inside a longer unseparated token like -encfoo is rejected."""
+        raw_xml = (
+            "<Event><System><EventID>1</EventID></System><EventData>"
+            "<Data Name='Image'>C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe</Data>"
+            "<Data Name='CommandLine'>powershell.exe -encfoo AAAA</Data>"
+            "<Data Name='ParentImage'>C:\\Windows\\System32\\cmd.exe</Data>"
+            "<Data Name='ParentCommandLine'>\"cmd.exe\"</Data>"
+            "<Data Name='User'>SOCLAB\\Administrator</Data>"
+            "</EventData></Event>"
+        )
+        record = self._simulate_spl_pipeline(raw_xml)
+        self.assertIsNone(record)
+
+    def test_encodedcommand_prefix_inside_longer_token_rejected(self) -> None:
+        """Proof: -EncodedCommand prefix inside a longer unseparated token like -EncodedCommandX is rejected."""
+        raw_xml = (
+            "<Event><System><EventID>1</EventID></System><EventData>"
+            "<Data Name='Image'>C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe</Data>"
+            "<Data Name='CommandLine'>powershell.exe -EncodedCommandX AAAA</Data>"
+            "<Data Name='ParentImage'>C:\\Windows\\System32\\cmd.exe</Data>"
+            "<Data Name='ParentCommandLine'>\"cmd.exe\"</Data>"
+            "<Data Name='User'>SOCLAB\\Administrator</Data>"
+            "</EventData></Event>"
+        )
+        record = self._simulate_spl_pipeline(raw_xml)
+        self.assertIsNone(record)
+
+    def test_encoded_argument_at_command_line_end_matches(self) -> None:
+        """Proof: Encoded argument flag positioned at the end of the command line matches regex boundary."""
+        raw_xml = (
+            "<Event><System><EventID>1</EventID></System><EventData>"
+            "<Data Name='Image'>C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe</Data>"
+            "<Data Name='CommandLine'>powershell.exe -enc</Data>"
+            "<Data Name='ParentImage'>C:\\Windows\\System32\\cmd.exe</Data>"
+            "<Data Name='ParentCommandLine'>\"cmd.exe\"</Data>"
+            "<Data Name='User'>SOCLAB\\Administrator</Data>"
+            "</EventData></Event>"
+        )
+        record = self._simulate_spl_pipeline(raw_xml)
+        self.assertIsNotNone(record)
+
 
 if __name__ == "__main__":
     unittest.main()

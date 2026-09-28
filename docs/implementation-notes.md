@@ -1438,3 +1438,67 @@ For Version 1:
 - Stock generated SPL operational equivalence: NOT ACHIEVED
 - Telemetry-specific operational SPL: IMPLEMENTED + LIVE TESTED
 - Custom pySigma pipeline: NOT IMPLEMENTED
+
+---
+
+## 30. 2026-09-28 — Milestone 7B-2: Detection regression edge-case coverage completed
+
+### Objective
+
+Strengthen regression coverage for the live-tested encoded-PowerShell detection without changing production detection logic.
+
+### Added regression cases
+
+Four deterministic tests were added to the existing `TestRawSysmonXmlExtraction` suite in `tests/test_gateway_policy.py`:
+
+- mixed-case encoded-command flags are detected:
+  - `-ENC`
+  - `-eNcOdEdCoMmAnD`
+- `-encfoo` is rejected because `-enc` must be a standalone token
+- `-EncodedCommandX` is rejected because `-EncodedCommand` must be a standalone token
+- `powershell.exe -enc` matches the end-of-line token boundary
+
+The final case validates detection-regex boundary behavior only; it does not claim successful PowerShell execution.
+
+### Validation results
+
+Focused detection/gateway suite:
+
+```text
+Ran 29 tests
+OK
+```
+
+Full repository suite:
+
+```text
+TOTAL_TESTS=812
+FAILURES=0
+ERRORS=0
+SKIPPED=0
+```
+
+Decision evaluation sub-harness:
+
+```text
+10/10 PASS
+```
+
+### Engineering conclusion
+
+The operational encoded-PowerShell detection now has explicit regression coverage for:
+- case-insensitive flag matching
+- positive `-EncodedCommand` and `-enc` behavior
+- rejection of longer prefix tokens
+- end-of-line token boundary matching
+- previously implemented XML extraction, Sysmon Event ID filtering, PowerShell image matching, and non-PowerShell rejection
+
+No production detection logic was changed during this milestone.
+
+### Status
+
+- Detection edge-case regression tests: IMPLEMENTED + TESTED
+- Focused test suite: 29/29 PASS
+- Full automated suite: 812/812 PASS
+- Decision evaluation: 10/10 PASS
+- Production detection logic changes: NONE
