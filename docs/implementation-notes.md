@@ -1515,7 +1515,7 @@ Extend the AI-Native SOC investigator platform with an operational second detect
 
 - **Detection identifier**: `DET-POWERSHELL-002`
 - **Detection name**: `suspicious_powershell_network_retrieval`
-- **Data source**: Sysmon Event ID 1 (Process Creation) forwarded from DC01 to Splunk index `win`.
+- **Data source**: Sysmon Event ID 1 (Process Creation) forwarded from DC01 to Splunk index `main`.
 - **Targeted syntax**: Common PowerShell network-retrieval command patterns including `Invoke-WebRequest`, `Invoke-RestMethod`, and `.DownloadString`.
 - **Authoritative MITRE mapping**: Primary deterministic technique mapping is `T1105` (Ingress Tool Transfer).
 - **Execution semantics**: The detection identifies the *attempt* to invoke PowerShell network download primitives. It does **not** claim or verify successful transfer or file delivery.
@@ -1580,7 +1580,7 @@ Extend the AI-Native SOC investigator platform with an operational second detect
 - Strict prompt contract clarification: IMPLEMENTED + TESTED
 - Automated test suite (868 tests): TESTED (100% PASS)
 - Offline incident ticketing: IMPLEMENTED + TESTED (SIMULATED TICKET SEC-0001)
-- Jira Cloud live ticket creation: IMPLEMENTED (disabled in this run; tested offline)
+- Jira Cloud ticket creation: IMPLEMENTED + previously TESTED live; not exercised during this Milestone 8 validation.
 - Endpoint containment: SIMULATION-ONLY / APPROVAL-GATED (no real containment executed)
 
 > [!NOTE]
