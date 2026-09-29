@@ -2,7 +2,12 @@
 
 import unittest
 
-from investigator.model import INVESTIGATOR_SYSTEM_INSTRUCTIONS
+from investigator.model import (
+    _ALLOWED_ARG_PRIMITIVE_TYPES,
+    INVESTIGATOR_SYSTEM_INSTRUCTIONS,
+    ModelValidationError,
+    ToolRequest,
+)
 from investigator.schemas import InvestigationInput
 
 
@@ -128,6 +133,42 @@ class TestInvestigatorModelPrompt(unittest.TestCase):
         self.assertIn("Arbitrary SPL queries (e.g. search index=*)", instructions)
         self.assertIn("Shell execution of any kind", instructions)
         self.assertIn("Arbitrary URLs or external endpoints", instructions)
+
+    def test_tool_request_rejects_nested_or_non_primitive_arguments(self) -> None:
+        """Verify schema boundary (Milestone 9C): ToolRequest strictly forbids nested objects,
+        lists, dicts, and non-primitive types in tool arguments.
+        """
+        nested_or_non_primitive = [
+            ("host", ["DC01"]),
+            ("host", {"value": "DC01"}),
+            ("minutes", {"value": 15}),
+            ("minutes", [15]),
+            ("limit", 5.0),  # float not in _ALLOWED_ARG_PRIMITIVE_TYPES
+            ("detection_ref", ["suspicious_powershell_network_retrieval"]),
+            ("fail_closed", {"value": False}),
+            ("encoded_input", {"payload": "QQ=="}),
+            ("encoded_input", ["QQ=="]),
+        ]
+        for key, bad_val in nested_or_non_primitive:
+            with self.subTest(key=key, bad_val=bad_val):
+                with self.assertRaises(ModelValidationError) as ctx:
+                    ToolRequest(
+                        tool_name="bounded_splunk_search",
+                        arguments={key: bad_val},
+                    )
+                self.assertIn("must be a JSON-safe primitive", str(ctx.exception))
+
+    def test_system_instructions_specify_primitive_types_only(self) -> None:
+        """Verify prompt contract (Milestone 9C): system instructions explicitly state
+        primitive argument types only and forbid string/nested smuggling.
+        """
+        instructions = INVESTIGATOR_SYSTEM_INSTRUCTIONS
+        self.assertIn("minutes: integer, 1-60 (do not pass string)", instructions)
+        self.assertIn("limit: integer, 1-50 (do not pass string)", instructions)
+        self.assertIn('host: string, must equal "DC01"', instructions)
+        self.assertIn("detection_ref: string", instructions)
+        self.assertIn("fail_closed: boolean", instructions)
+        self.assertIn("no additional arguments allowed", instructions)
 
 
 if __name__ == "__main__":

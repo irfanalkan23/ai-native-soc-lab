@@ -1311,6 +1311,122 @@ class TestStaticAuditDetailCodes(unittest.TestCase):
                     self.assertIn("bounded_splunk_search_allowed", persisted_text)
                     self.assertIn("INVALID_TOOL_REQUEST", persisted_text)
 
+    def test_orchestrator_type_confused_arguments_fail_closed_with_sanitized_audit(self) -> None:
+        """Adversarial regression test (Milestone 9C): type-confused tool arguments fail closed
+        at the orchestrator boundary with INVALID_TOOL_REQUEST, trigger zero executions, and
+        never leak malformed argument values into in-memory or persisted audit logs.
+        """
+        import tempfile
+        from pathlib import Path
+        from investigator.audit_writer import JsonlAuditWriter
+        from investigator.tool_router import ToolRouter
+
+        malformed_requests = [
+            # 1. minutes passed as string
+            ToolRequest(
+                tool_name="bounded_splunk_search",
+                arguments={"host": "DC01", "minutes": "60", "limit": 5},
+            ),
+            # 2. minutes passed as bool True
+            ToolRequest(
+                tool_name="bounded_splunk_search",
+                arguments={"host": "DC01", "minutes": True, "limit": 5},
+            ),
+            # 3. limit passed as bool False
+            ToolRequest(
+                tool_name="bounded_splunk_search",
+                arguments={"host": "DC01", "minutes": 15, "limit": False},
+            ),
+            # 4. limit passed as string
+            ToolRequest(
+                tool_name="bounded_splunk_search",
+                arguments={"host": "DC01", "minutes": 15, "limit": "5"},
+            ),
+            # 5. fail_closed passed as string
+            ToolRequest(
+                tool_name="map_mitre_technique",
+                arguments={
+                    "detection_ref": "suspicious_powershell_network_retrieval",
+                    "fail_closed": "false",
+                },
+            ),
+            # 6. fail_closed passed as integer 0
+            ToolRequest(
+                tool_name="map_mitre_technique",
+                arguments={
+                    "detection_ref": "suspicious_powershell_network_retrieval",
+                    "fail_closed": 0,
+                },
+            ),
+            # 7. fail_closed passed as None
+            ToolRequest(
+                tool_name="map_mitre_technique",
+                arguments={
+                    "detection_ref": "suspicious_powershell_network_retrieval",
+                    "fail_closed": None,
+                },
+            ),
+        ]
+
+        for tool_req in malformed_requests:
+            with self.subTest(tool=tool_req.tool_name, args=dict(tool_req.arguments)):
+                from gateway.splunk_search import SplunkSearchClient
+                mock_splunk = SplunkSearchClient()
+                mock_splunk._execute_bounded_search = MagicMock(return_value=[])
+                router = ToolRouter(splunk_client=mock_splunk)
+                audit_log = AuditLog()
+
+                bad_decision = ModelDecision(
+                    decision_type=DecisionType.TOOL_REQUEST,
+                    tool_request=tool_req,
+                )
+                fake_model = FakeModel([bad_decision])
+                orch = InvestigationOrchestrator(model=fake_model, tool_router=router, audit_log=audit_log)
+
+                # Orchestrator rejects malformed tool request
+                with self.assertRaises(OrchestratorError) as ctx:
+                    orch.investigate(_VALID_INPUT)
+                self.assertIn("Invalid or forbidden tool request", str(ctx.exception))
+
+                # Zero tool execution
+                mock_splunk._execute_bounded_search.assert_not_called()
+
+                # Emits INVALID_TOOL_REQUEST
+                events = audit_log.events()
+                failed_events = [e for e in events if e.event_type == AuditEventType.INVESTIGATION_FAILED]
+                self.assertEqual(len(failed_events), 1)
+                self.assertEqual(failed_events[0].detail_code, "INVALID_TOOL_REQUEST")
+
+                # In-memory audit sanitization: raw argument values are not in detail codes
+                for k, v in tool_req.arguments.items():
+                    if v is not None and type(v) in (str, float):
+                        for e in events:
+                            self.assertNotIn(str(v), e.detail_code)
+                            self.assertLessEqual(len(e.detail_code), MAX_DETAIL_CODE_LENGTH)
+
+                # Safe codes present
+                detail_codes = [e.detail_code for e in events]
+                expected_prefix = (
+                    "bounded_splunk_search"
+                    if tool_req.tool_name == "bounded_splunk_search"
+                    else "map_mitre_technique"
+                )
+                self.assertIn(f"{expected_prefix}_requested", detail_codes)
+                self.assertIn(f"{expected_prefix}_allowed", detail_codes)
+                self.assertIn("INVALID_TOOL_REQUEST", detail_codes)
+
+                # Persisted audit verification (JSONL)
+                with tempfile.TemporaryDirectory() as tmp_dir:
+                    audit_file = Path(tmp_dir) / "audit_9c.jsonl"
+                    writer = JsonlAuditWriter(audit_file)
+                    for e in events:
+                        writer.write_event(e)
+
+                    persisted_text = audit_file.read_text(encoding="utf-8")
+                    self.assertIn(f"{expected_prefix}_requested", persisted_text)
+                    self.assertIn(f"{expected_prefix}_allowed", persisted_text)
+                    self.assertIn("INVALID_TOOL_REQUEST", persisted_text)
+
 
 if __name__ == "__main__":
     unittest.main()

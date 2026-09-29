@@ -111,5 +111,164 @@ class TestToolRouterSplInjectionDefense(unittest.TestCase):
         self.assertEqual(result_retrieval, [{"event": "retrieval"}])
 
 
+class TestToolRouterArgumentSmugglingAndTypeConfusion(unittest.TestCase):
+    """Milestone 9C: Prove malformed or type-confused arguments fail closed without execution."""
+
+    def setUp(self) -> None:
+        from gateway.splunk_search import SplunkSearchClient
+        self.mock_splunk = SplunkSearchClient()
+        self.mock_splunk._execute_bounded_search = MagicMock(return_value=[])
+        self.router = ToolRouter(splunk_client=self.mock_splunk)
+
+    def test_bounded_splunk_search_type_confusion(self) -> None:
+        """1. bounded_splunk_search type confusion fails closed before gateway execution."""
+        invalid_cases = [
+            ("host", ["DC01"]),
+            ("host", {"value": "DC01"}),
+            ("minutes", "60"),
+            ("minutes", 1.5),
+            ("minutes", True),
+            ("limit", "5"),
+            ("limit", 5.0),
+            ("limit", False),
+            ("query_type", None),
+            ("query_type", 123),
+            ("query_type", ["encoded_powershell_matches"]),
+        ]
+        for field, bad_val in invalid_cases:
+            with self.subTest(field=field, bad_val=bad_val):
+                self.mock_splunk._execute_bounded_search.reset_mock()
+                args = {"host": "DC01", "minutes": 15, "limit": 10}
+                args[field] = bad_val
+                with self.assertRaises(ToolValidationError):
+                    self.router.execute_tool("bounded_splunk_search", args)
+                self.mock_splunk._execute_bounded_search.assert_not_called()
+
+    def test_map_mitre_technique_type_confusion(self) -> None:
+        """2. map_mitre_technique type confusion fails closed with no truthy/falsy coercion."""
+        # fail_closed type confusion (rejected by router argument validation)
+        invalid_fail_closed = [
+            "false",
+            0,
+            None,
+            {"value": False},
+        ]
+        for bad_fc in invalid_fail_closed:
+            with self.subTest(fail_closed=bad_fc):
+                with self.assertRaises(ToolValidationError):
+                    self.router.execute_tool(
+                        "map_mitre_technique",
+                        {
+                            "detection_ref": "suspicious_powershell_network_retrieval",
+                            "fail_closed": bad_fc,
+                        },
+                    )
+
+        # detection_ref non-string type confusion (fails closed before database lookup)
+        from investigator.tools.mitre_mapper import MitreMappingError, map_detection_to_mitre
+        invalid_detection_refs = [
+            None,
+            123,
+            ["suspicious_powershell_network_retrieval"],
+        ]
+        for bad_ref in invalid_detection_refs:
+            with self.subTest(detection_ref=bad_ref):
+                with self.assertRaises(MitreMappingError):
+                    map_detection_to_mitre(bad_ref)  # type: ignore[arg-type]
+
+    def test_decode_base64_powershell_type_confusion(self) -> None:
+        """3. decode_base64_powershell type confusion fails closed with zero decoder execution."""
+        from investigator.tools.base64_decoder import DecoderError, decode_powershell_base64
+        invalid_inputs = [
+            None,
+            123,
+            True,
+            ["QQ=="],
+            {"value": "QQ=="},
+        ]
+        for bad_input in invalid_inputs:
+            with self.subTest(encoded_input=bad_input):
+                with self.assertRaises(DecoderError):
+                    decode_powershell_base64(bad_input)  # type: ignore[arg-type]
+
+    def test_argument_smuggling_and_nested_payloads_rejected(self) -> None:
+        """4. Argument smuggling / nested payloads are rejected without flattening or normalization."""
+        # 4a. bounded_splunk_search nested dictionary
+        with self.assertRaises(ToolValidationError):
+            self.router.execute_tool(
+                "bounded_splunk_search",
+                {"host": "DC01", "minutes": {"value": 15}, "limit": 5},
+            )
+        self.mock_splunk._execute_bounded_search.assert_not_called()
+
+        # 4b. map_mitre_technique nested dictionary
+        with self.assertRaises(ToolValidationError):
+            self.router.execute_tool(
+                "map_mitre_technique",
+                {
+                    "detection_ref": "suspicious_powershell_network_retrieval",
+                    "fail_closed": {"value": False},
+                },
+            )
+
+        # 4c. decode_base64_powershell nested dictionary
+        from investigator.tool_router import ToolExecutionError
+        with self.assertRaises(ToolExecutionError):
+            self.router.execute_tool(
+                "decode_base64_powershell",
+                {"encoded_input": {"payload": "QQ=="}},
+            )
+
+    def test_boolean_edge_cases_rejected_for_integer_arguments(self) -> None:
+        """5. Explicitly verify Python bool values are not accepted where integer arguments are required."""
+        bool_cases = [
+            {"host": "DC01", "minutes": True, "limit": 10},
+            {"host": "DC01", "minutes": False, "limit": 10},
+            {"host": "DC01", "minutes": 15, "limit": True},
+            {"host": "DC01", "minutes": 15, "limit": False},
+        ]
+        for args in bool_cases:
+            with self.subTest(args=args):
+                self.mock_splunk._execute_bounded_search.reset_mock()
+                with self.assertRaises(ToolValidationError):
+                    self.router.execute_tool("bounded_splunk_search", args)
+                self.mock_splunk._execute_bounded_search.assert_not_called()
+
+    def test_valid_controls_exact_types(self) -> None:
+        """6. Confirm valid exact types pass validation and execute cleanly."""
+        # 6a. bounded_splunk_search
+        self.mock_splunk._execute_bounded_search.reset_mock()
+        self.mock_splunk._execute_bounded_search.return_value = [{"host": "DC01"}]
+        result = self.router.execute_tool(
+            "bounded_splunk_search",
+            {
+                "host": "DC01",
+                "minutes": 15,
+                "limit": 5,
+                "query_type": "encoded_powershell_matches",
+            },
+        )
+        self.assertEqual(len(result), 1)
+        self.mock_splunk._execute_bounded_search.assert_called_once()
+
+        # 6b. map_mitre_technique
+        mitre_result = self.router.execute_tool(
+            "map_mitre_technique",
+            {
+                "detection_ref": "suspicious_powershell_network_retrieval",
+                "fail_closed": False,
+            },
+        )
+        self.assertEqual(mitre_result.technique_id, "T1105")
+
+        # 6c. decode_base64_powershell
+        valid_b64 = "VwByAGkAdABlAC0ASABvAHMAdAAgACcAQQBJAC0ATgBhAHQAaQB2AGUAUwBPAEMALQBMAEEAQgAtAFQARQBTAFQAJwA="
+        decode_result = self.router.execute_tool(
+            "decode_base64_powershell",
+            {"encoded_input": valid_b64},
+        )
+        self.assertIn("AI-NativeSOC-LAB-TEST", decode_result.decoded_text)
+
+
 if __name__ == "__main__":
     unittest.main()
