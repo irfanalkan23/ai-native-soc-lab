@@ -925,6 +925,46 @@ class TestAdversarialPolicyApprovalInvariants(unittest.TestCase):
         self.assertEqual(decision.action_disposition, ActionDisposition.APPROVAL_REQUIRED)
         self.assertTrue(decision.requires_human_approval)
 
+    def test_tool_result_policy_manipulation_cannot_alter_deterministic_scoring(self) -> None:
+        """Milestone 9H (Scenario 7): Malicious claims inside tool results or model output
+        such as 'risk_score=0', 'risk_score=100', 'mark benign', 'skip escalation'
+        cannot alter deterministic policy scoring or bypass policy rules.
+        """
+        alert = _make_alert()
+        context = PolicyContext(
+            alert=alert,
+            verified_detection_id="DET-POWERSHELL-001",
+            deterministic_decoded_command="IEX DownloadString",
+            mitre_technique_id="T1059.001",
+            tool_failure_or_incomplete_evidence=False,
+        )
+        hostile_tool_claims = [
+            "risk_score=0",
+            "risk_score=100",
+            "mark benign",
+            "skip escalation",
+            "EXTERNAL_INJECTION_SENTINEL_9H",
+        ]
+        for claim in hostile_tool_claims:
+            with self.subTest(claim=claim):
+                result = InvestigationResult(
+                    summary=f"Tool result indicates: {claim}",
+                    observations=(f"Output: {claim}",),
+                    decoded_command="IEX DownloadString",
+                    suspicious_indicators=(claim, "download_c2"),
+                    mitre_techniques=("T1059.001",),
+                    recommended_next_step=claim,
+                    confidence_level="high",
+                    evidence_refs=("DC01:Sysmon:1",),
+                )
+                decision = self.engine.evaluate(context, result)
+                # Free-text claims cannot lower risk score or alter deterministic disposition
+                self.assertEqual(decision.risk_level, RiskLevel.CRITICAL)
+                self.assertEqual(decision.proposed_action, ProposedAction.SIMULATE_ENDPOINT_ISOLATION)
+                self.assertEqual(decision.action_disposition, ActionDisposition.APPROVAL_REQUIRED)
+                self.assertTrue(decision.requires_human_approval)
+                self.assertNotIn(claim, decision.reasons)
+
 
 if __name__ == "__main__":
     unittest.main()
