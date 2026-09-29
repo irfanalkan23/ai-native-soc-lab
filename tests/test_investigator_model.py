@@ -115,6 +115,20 @@ class TestInvestigatorModelPrompt(unittest.TestCase):
         self.assertIn("Arbitrary SPL queries (e.g. search index=*)", instructions)
         self.assertIn("Endpoint isolation or network containment", instructions)
 
+    def test_investigator_system_instructions_prohibit_arbitrary_spl_and_query_type_abuse(self) -> None:
+        """Verify prompt contract (Milestone 9B): query_type is fixed allowlisted selector,
+        only the two exact values are allowed, arbitrary SPL is prohibited, and no additional
+        arguments are allowed.
+        """
+        instructions = INVESTIGATOR_SYSTEM_INSTRUCTIONS
+        self.assertIn("query_type: string, fixed allowlisted selector, NOT arbitrary search text", instructions)
+        self.assertIn('"encoded_powershell_matches"', instructions)
+        self.assertIn('"powershell_network_retrieval_matches"', instructions)
+        self.assertIn("no additional arguments allowed", instructions)
+        self.assertIn("Arbitrary SPL queries (e.g. search index=*)", instructions)
+        self.assertIn("Shell execution of any kind", instructions)
+        self.assertIn("Arbitrary URLs or external endpoints", instructions)
+
 
 if __name__ == "__main__":
     unittest.main()

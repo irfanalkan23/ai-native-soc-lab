@@ -1144,6 +1144,173 @@ class TestStaticAuditDetailCodes(unittest.TestCase):
             self.assertIn("tool_allowed", persisted_text)
             self.assertIn("INVALID_TOOL_REQUEST", persisted_text)
 
+    def test_orchestrator_invalid_query_type_fails_closed_with_sanitized_audit(self) -> None:
+        """Adversarial regression test (Milestone 9B): invalid query_type values are rejected before
+        Splunk execution, zero calls occur, investigation fails closed with INVALID_TOOL_REQUEST,
+        and audit never persists malicious query_type, arbitrary SPL, or raw commands.
+        """
+        import tempfile
+        from pathlib import Path
+        from investigator.audit_writer import JsonlAuditWriter
+        from investigator.tool_router import ToolRouter
+
+        invalid_query_types = [
+            "index=*",
+            "search index=*",
+            "search index=* | delete",
+            "powershell_network_retrieval_matches | stats count",
+        ]
+
+        for bad_qt in invalid_query_types:
+            with self.subTest(query_type=bad_qt):
+                mock_splunk = MagicMock()
+                router = ToolRouter(splunk_client=mock_splunk)
+                audit_log = AuditLog()
+
+                bad_decision = ModelDecision(
+                    decision_type=DecisionType.TOOL_REQUEST,
+                    tool_request=ToolRequest(
+                        tool_name="bounded_splunk_search",
+                        arguments={
+                            "query_type": bad_qt,
+                            "host": "DC01",
+                            "minutes": 15,
+                            "limit": 10,
+                        },
+                    ),
+                )
+                fake_model = FakeModel([bad_decision])
+                orch = InvestigationOrchestrator(model=fake_model, tool_router=router, audit_log=audit_log)
+
+                with self.assertRaises(OrchestratorError) as ctx:
+                    orch.investigate(_VALID_INPUT)
+                self.assertIn("Invalid or forbidden tool request", str(ctx.exception))
+
+                # Zero gateway / search calls
+                mock_splunk.search_encoded_powershell.assert_not_called()
+                mock_splunk.search_powershell_network_retrieval.assert_not_called()
+                self.assertEqual(mock_splunk.method_calls, [])
+
+                # Investigation failed closed with INVALID_TOOL_REQUEST
+                events = audit_log.events()
+                failed_events = [e for e in events if e.event_type == AuditEventType.INVESTIGATION_FAILED]
+                self.assertEqual(len(failed_events), 1)
+                self.assertEqual(failed_events[0].detail_code, "INVALID_TOOL_REQUEST")
+
+                # In-memory audit sanitization
+                for e in events:
+                    self.assertNotIn("index=*", e.detail_code)
+                    self.assertNotIn("| delete", e.detail_code)
+                    self.assertNotIn("delete", e.detail_code)
+                    self.assertNotIn("stats count", e.detail_code)
+                    self.assertNotIn(bad_qt, e.detail_code)
+                    self.assertLessEqual(len(e.detail_code), MAX_DETAIL_CODE_LENGTH)
+
+                # Safe codes present
+                detail_codes = [e.detail_code for e in events]
+                self.assertIn("bounded_splunk_search_requested", detail_codes)
+                self.assertIn("bounded_splunk_search_allowed", detail_codes)
+                self.assertIn("INVALID_TOOL_REQUEST", detail_codes)
+
+                # Persisted audit verification (JSONL)
+                with tempfile.TemporaryDirectory() as tmp_dir:
+                    audit_file = Path(tmp_dir) / "audit_9b_qt.jsonl"
+                    writer = JsonlAuditWriter(audit_file)
+                    for e in events:
+                        writer.write_event(e)
+
+                    persisted_text = audit_file.read_text(encoding="utf-8")
+                    self.assertNotIn("index=*", persisted_text)
+                    self.assertNotIn("| delete", persisted_text)
+                    self.assertNotIn("stats count", persisted_text)
+                    self.assertNotIn(bad_qt, persisted_text)
+                    self.assertIn("bounded_splunk_search_requested", persisted_text)
+                    self.assertIn("bounded_splunk_search_allowed", persisted_text)
+                    self.assertIn("INVALID_TOOL_REQUEST", persisted_text)
+
+    def test_orchestrator_forbidden_additional_args_fail_closed_with_sanitized_audit(self) -> None:
+        """Adversarial regression test (Milestone 9B): forbidden additional arguments in
+        bounded_splunk_search fail closed without Splunk execution, and forbidden keys/values
+        never leak into persisted or in-memory audit logs.
+        """
+        import tempfile
+        from pathlib import Path
+        from investigator.audit_writer import JsonlAuditWriter
+        from investigator.tool_router import ToolRouter
+
+        forbidden_payloads = [
+            {"query": "search index=*"},
+            {"spl": "search index=*"},
+            {"search": "index=*"},
+            {"url": "https://example.com"},
+            {"index": "*"},
+        ]
+
+        for payload in forbidden_payloads:
+            with self.subTest(forbidden_payload=payload):
+                mock_splunk = MagicMock()
+                router = ToolRouter(splunk_client=mock_splunk)
+                audit_log = AuditLog()
+
+                full_args = {
+                    "host": "DC01",
+                    "minutes": 15,
+                    "limit": 10,
+                    **payload,
+                }
+                bad_decision = ModelDecision(
+                    decision_type=DecisionType.TOOL_REQUEST,
+                    tool_request=ToolRequest(
+                        tool_name="bounded_splunk_search",
+                        arguments=full_args,
+                    ),
+                )
+                fake_model = FakeModel([bad_decision])
+                orch = InvestigationOrchestrator(model=fake_model, tool_router=router, audit_log=audit_log)
+
+                with self.assertRaises(OrchestratorError) as ctx:
+                    orch.investigate(_VALID_INPUT)
+                self.assertIn("Invalid or forbidden tool request", str(ctx.exception))
+
+                # Zero gateway / search calls
+                mock_splunk.search_encoded_powershell.assert_not_called()
+                mock_splunk.search_powershell_network_retrieval.assert_not_called()
+                self.assertEqual(mock_splunk.method_calls, [])
+
+                # Investigation failed closed with INVALID_TOOL_REQUEST
+                events = audit_log.events()
+                failed_events = [e for e in events if e.event_type == AuditEventType.INVESTIGATION_FAILED]
+                self.assertEqual(len(failed_events), 1)
+                self.assertEqual(failed_events[0].detail_code, "INVALID_TOOL_REQUEST")
+
+                # In-memory audit sanitization
+                for key, val in payload.items():
+                    for e in events:
+                        self.assertNotIn(str(val), e.detail_code)
+                        self.assertNotIn("index=*", e.detail_code)
+                        self.assertLessEqual(len(e.detail_code), MAX_DETAIL_CODE_LENGTH)
+
+                # Safe codes present
+                detail_codes = [e.detail_code for e in events]
+                self.assertIn("bounded_splunk_search_requested", detail_codes)
+                self.assertIn("bounded_splunk_search_allowed", detail_codes)
+                self.assertIn("INVALID_TOOL_REQUEST", detail_codes)
+
+                # Persisted audit verification (JSONL)
+                with tempfile.TemporaryDirectory() as tmp_dir:
+                    audit_file = Path(tmp_dir) / "audit_9b_args.jsonl"
+                    writer = JsonlAuditWriter(audit_file)
+                    for e in events:
+                        writer.write_event(e)
+
+                    persisted_text = audit_file.read_text(encoding="utf-8")
+                    self.assertNotIn("search index=*", persisted_text)
+                    self.assertNotIn("index=*", persisted_text)
+                    self.assertNotIn("https://example.com", persisted_text)
+                    self.assertIn("bounded_splunk_search_requested", persisted_text)
+                    self.assertIn("bounded_splunk_search_allowed", persisted_text)
+                    self.assertIn("INVALID_TOOL_REQUEST", persisted_text)
+
 
 if __name__ == "__main__":
     unittest.main()
