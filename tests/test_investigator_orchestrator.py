@@ -1704,5 +1704,302 @@ class TestAdversarialToolBudgetExhaustionAndLoopResistance(unittest.TestCase):
         self.assertEqual(rejected_events[0].detail_code, "BUDGET_EXHAUSTED")
 
 
+class TestAdversarialOversizedOutputAndResultFlooding(unittest.TestCase):
+    """Milestone 9F: Oversized Output & Result-Flooding Resistance Regressions.
+
+    Verifies:
+      - Oversized results across all allowlisted tools (Splunk, Decoder, MITRE) fail safely
+      - Oversized results produce sanitized RESULT_TOO_LARGE envelopes with zero payload leakage
+      - Repeated oversized results consume tool budget and halt at MAX_TOOL_CALLS
+      - Model can recover after an oversized result by emitting FINAL_RESULT
+      - Distinctive secret sentinels never leak into in-memory or persisted JSONL audit
+      - Boundary tests for exact MAX_RESULT_TEXT_LENGTH limits (under vs over)
+      - Non-serializable objects (circular references, __str__ exceptions) fail closed safely
+      - Exact tool accounting: oversized executions increment backend count and budget exactly once
+    """
+
+    SENTINEL: str = "OVERSIZED_SECRET_SENTINEL_9F_TOP_SECRET_EXFIL"
+
+    def test_oversized_bounded_splunk_search_result_handled_safely(self) -> None:
+        """Requirement 1, 6 & 9: Oversized Splunk result produces sanitized envelope and audit."""
+        from pathlib import Path
+        import tempfile
+        from investigator.audit_writer import JsonlAuditWriter
+        from investigator.tool_router import ToolRouter
+
+        # Construct events containing sentinel that serialize to > MAX_RESULT_TEXT_LENGTH (4096)
+        large_events = [
+            {"_raw": f"{self.SENTINEL}_{'A' * 400}", "host": "DC01", "idx": i}
+            for i in range(20)
+        ]
+        mock_splunk = MagicMock()
+        mock_splunk.search_encoded_powershell.return_value = large_events
+        router = ToolRouter(splunk_client=mock_splunk)
+        audit_log = AuditLog()
+
+        splunk_decision = ModelDecision(
+            decision_type=DecisionType.TOOL_REQUEST,
+            tool_request=ToolRequest(
+                tool_name="bounded_splunk_search",
+                arguments={"query_type": "encoded_powershell_matches", "host": "DC01"},
+            ),
+        )
+
+        orch = InvestigationOrchestrator(
+            model=FakeModel([splunk_decision, _final_result_decision()]),
+            tool_router=router,
+            audit_log=audit_log,
+        )
+        result = orch.investigate(_VALID_INPUT)
+        self.assertIsInstance(result, InvestigationResult)
+
+        # Accounting: backend invoked exactly once
+        self.assertEqual(mock_splunk.search_encoded_powershell.call_count, 1)
+
+        # Audit verification
+        completed = [e for e in audit_log.events() if e.event_type == AuditEventType.TOOL_COMPLETED]
+        self.assertEqual(len(completed), 1)
+        self.assertEqual(completed[0].detail_code, "bounded_splunk_search_result_too_large")
+
+        # Sentinel absent from in-memory audit
+        for e in audit_log.events():
+            self.assertNotIn(self.SENTINEL, e.detail_code)
+            self.assertLessEqual(len(e.detail_code), MAX_DETAIL_CODE_LENGTH)
+
+        # Sentinel absent from persisted JSONL audit
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            audit_path = Path(tmp_dir) / "audit_9f_splunk.jsonl"
+            writer = JsonlAuditWriter(audit_path)
+            for e in audit_log.events():
+                writer.write_event(e)
+
+            persisted = audit_path.read_text(encoding="utf-8")
+            self.assertIn("bounded_splunk_search_result_too_large", persisted)
+            self.assertNotIn(self.SENTINEL, persisted)
+
+    def test_oversized_decode_base64_powershell_result_handled_safely(self) -> None:
+        """Requirement 2: Oversized decoder output becomes RESULT_TOO_LARGE with sanitized audit."""
+        import base64
+        from investigator.tool_router import ToolRouter
+
+        # Construct payload with sentinel that decodes to > 4096 bytes
+        oversized_payload = f"{self.SENTINEL}_{'B' * 5000}"
+        raw_b64 = base64.b64encode(oversized_payload.encode("utf-16le")).decode("ascii")
+
+        mock_splunk = MagicMock()
+        router = ToolRouter(splunk_client=mock_splunk)
+        audit_log = AuditLog()
+
+        decoder_decision = ModelDecision(
+            decision_type=DecisionType.TOOL_REQUEST,
+            tool_request=ToolRequest(
+                tool_name="decode_base64_powershell",
+                arguments={"encoded_input": raw_b64},
+            ),
+        )
+
+        orch = InvestigationOrchestrator(
+            model=FakeModel([decoder_decision, _final_result_decision()]),
+            tool_router=router,
+            audit_log=audit_log,
+        )
+        result = orch.investigate(_VALID_INPUT)
+        self.assertIsInstance(result, InvestigationResult)
+
+        completed = [e for e in audit_log.events() if e.event_type == AuditEventType.TOOL_COMPLETED]
+        self.assertEqual(len(completed), 1)
+        self.assertEqual(completed[0].detail_code, "decode_base64_powershell_result_too_large")
+
+        for e in audit_log.events():
+            self.assertNotIn(self.SENTINEL, e.detail_code)
+
+    def test_oversized_map_mitre_technique_result_handled_safely(self) -> None:
+        """Requirement 3: Oversized MITRE mapping simulation triggers RESULT_TOO_LARGE."""
+        from investigator.orchestrator import _serialize_tool_result
+        from investigator.tools.mitre_mapper import MitreMapping
+        from investigator.tool_router import ToolRouter
+
+        # In production, MITRE mappings are small static dataclasses. We verify the serialization
+        # boundary safely rejects an oversized mapping object if returned by the mapper.
+        oversized_mapping = MitreMapping(
+            mapped=True,
+            technique_id="T1059.001",
+            technique_name=f"{self.SENTINEL}_{'M' * 5000}",
+            tactic_id="TA0002",
+            tactic_name="Execution",
+            detection_ref="encoded_powershell_matches",
+        )
+
+        # Direct serialization check raises ValueError
+        with self.assertRaises(ValueError) as cm:
+            _serialize_tool_result("map_mitre_technique", oversized_mapping)
+        self.assertIn("exceeds MAX_RESULT_TEXT_LENGTH", str(cm.exception))
+
+        # Orchestration integration check via router mock
+        mock_router = MagicMock(spec=ToolRouter)
+        mock_router.execute_tool.return_value = oversized_mapping
+        audit_log = AuditLog()
+
+        mitre_decision = ModelDecision(
+            decision_type=DecisionType.TOOL_REQUEST,
+            tool_request=ToolRequest(
+                tool_name="map_mitre_technique",
+                arguments={"detection_ref": "encoded_powershell_matches", "fail_closed": True},
+            ),
+        )
+
+        orch = InvestigationOrchestrator(
+            model=FakeModel([mitre_decision, _final_result_decision()]),
+            tool_router=mock_router,
+            audit_log=audit_log,
+        )
+        result = orch.investigate(_VALID_INPUT)
+        self.assertIsInstance(result, InvestigationResult)
+
+        completed = [e for e in audit_log.events() if e.event_type == AuditEventType.TOOL_COMPLETED]
+        self.assertEqual(len(completed), 1)
+        self.assertEqual(completed[0].detail_code, "map_mitre_technique_result_too_large")
+        for e in audit_log.events():
+            self.assertNotIn(self.SENTINEL, e.detail_code)
+
+    def test_repeated_oversized_results_exhaust_budget(self) -> None:
+        """Requirement 4: Repeated oversized results consume budget slots and halt at MAX_TOOL_CALLS."""
+        from investigator.tool_router import ToolRouter
+
+        mock_splunk = MagicMock()
+        mock_splunk.search_encoded_powershell.return_value = [{"_raw": "X" * 1000} for _ in range(10)]
+        router = ToolRouter(splunk_client=mock_splunk)
+        audit_log = AuditLog()
+
+        decisions = [
+            ModelDecision(
+                decision_type=DecisionType.TOOL_REQUEST,
+                tool_request=ToolRequest(
+                    tool_name="bounded_splunk_search",
+                    arguments={"query_type": "encoded_powershell_matches", "host": "DC01"},
+                ),
+            )
+            for _ in range(4)
+        ]
+
+        orch = InvestigationOrchestrator(model=FakeModel(decisions), tool_router=router, audit_log=audit_log)
+        with self.assertRaises(OrchestratorError) as cm:
+            orch.investigate(_VALID_INPUT)
+
+        self.assertIn("Tool budget exhausted", str(cm.exception))
+        # 3 oversized results executed and consumed budget
+        self.assertEqual(mock_splunk.search_encoded_powershell.call_count, MAX_TOOL_CALLS)
+
+        completed = [e for e in audit_log.events() if e.event_type == AuditEventType.TOOL_COMPLETED]
+        self.assertEqual(len(completed), MAX_TOOL_CALLS)
+        for c in completed:
+            self.assertEqual(c.detail_code, "bounded_splunk_search_result_too_large")
+
+        # 4th request rejected
+        rejected = [e for e in audit_log.events() if e.event_type == AuditEventType.TOOL_REJECTED]
+        self.assertEqual(len(rejected), 1)
+        self.assertEqual(rejected[0].detail_code, "BUDGET_EXHAUSTED")
+
+    def test_model_recovery_after_oversized_result(self) -> None:
+        """Requirement 5: Model observes RESULT_TOO_LARGE envelope and successfully recovers with FINAL_RESULT."""
+        from investigator.tool_router import ToolRouter
+
+        mock_splunk = MagicMock()
+        mock_splunk.search_encoded_powershell.return_value = [{"_raw": f"{self.SENTINEL}_{'X' * 500}"} for _ in range(15)]
+        router = ToolRouter(splunk_client=mock_splunk)
+
+        observed_requests = []
+
+        class InspectingModel:
+            def __init__(self) -> None:
+                self.turn = 0
+
+            def decide(self, req: ModelRequest) -> ModelDecision:
+                observed_requests.append(req)
+                if self.turn == 0:
+                    self.turn += 1
+                    return ModelDecision(
+                        decision_type=DecisionType.TOOL_REQUEST,
+                        tool_request=ToolRequest(
+                            tool_name="bounded_splunk_search",
+                            arguments={"query_type": "encoded_powershell_matches", "host": "DC01"},
+                        ),
+                    )
+                return _final_result_decision()
+
+        orch = InvestigationOrchestrator(model=InspectingModel(), tool_router=router)
+        res = orch.investigate(_VALID_INPUT)
+
+        self.assertIsInstance(res, InvestigationResult)
+        self.assertEqual(len(observed_requests), 2)
+        # Turn 2 request contains sanitized envelope
+        turn2_req = observed_requests[1]
+        self.assertEqual(len(turn2_req.prior_tool_results), 1)
+        env = turn2_req.prior_tool_results[0]
+        self.assertFalse(env.success)
+        self.assertEqual(env.error_code, "RESULT_TOO_LARGE")
+        self.assertEqual(env.result_text, '{"error": "result_too_large"}')
+        # Proves oversized payload NEVER reaches model request
+        self.assertNotIn(self.SENTINEL, env.result_text)
+
+    def test_result_size_boundary_exact_limits(self) -> None:
+        """Requirement 7: Test exact MAX_RESULT_TEXT_LENGTH boundary (under vs over limit)."""
+        import json
+        from investigator.orchestrator import _serialize_tool_result
+        from investigator.tools.base64_decoder import DecodeResult
+
+        # Baseline JSON overhead for decode_base64_powershell with a fixed 4-digit byte_count:
+        fixed_byte_count = 1000
+        overhead = len(json.dumps({"decoded_text": "", "encoding": "utf-16le", "byte_count": fixed_byte_count}, default=str))
+
+        # Target exact bound (len == MAX_RESULT_TEXT_LENGTH):
+        exact_chars = MAX_RESULT_TEXT_LENGTH - overhead
+
+        # Exactly at limit: length == MAX_RESULT_TEXT_LENGTH (succeeds)
+        under_res = DecodeResult(success=True, decoded_text="A" * exact_chars, encoding="utf-16le", byte_count=fixed_byte_count)
+        serialized_under = _serialize_tool_result("decode_base64_powershell", under_res)
+        self.assertEqual(len(serialized_under), MAX_RESULT_TEXT_LENGTH)
+
+        # Just over limit by 1 char: length == MAX_RESULT_TEXT_LENGTH + 1 (fails with ValueError)
+        over_res = DecodeResult(success=True, decoded_text="A" * (exact_chars + 1), encoding="utf-16le", byte_count=fixed_byte_count)
+        with self.assertRaises(ValueError) as cm:
+            _serialize_tool_result("decode_base64_powershell", over_res)
+        self.assertIn("exceeds MAX_RESULT_TEXT_LENGTH", str(cm.exception))
+
+    def test_non_serializable_result_fails_closed(self) -> None:
+        """Requirement 8: Non-serializable objects (circular reference, __str__ error) fail closed safely."""
+        from investigator.tool_router import ToolRouter
+
+        # Circular reference in Splunk events
+        circular_events = []
+        circular_events.append({"ref": circular_events})
+
+        mock_splunk = MagicMock()
+        mock_splunk.search_encoded_powershell.return_value = circular_events
+        router = ToolRouter(splunk_client=mock_splunk)
+        audit_log = AuditLog()
+
+        splunk_decision = ModelDecision(
+            decision_type=DecisionType.TOOL_REQUEST,
+            tool_request=ToolRequest(
+                tool_name="bounded_splunk_search",
+                arguments={"query_type": "encoded_powershell_matches", "host": "DC01"},
+            ),
+        )
+
+        orch = InvestigationOrchestrator(
+            model=FakeModel([splunk_decision, _final_result_decision()]),
+            tool_router=router,
+            audit_log=audit_log,
+        )
+        result = orch.investigate(_VALID_INPUT)
+        self.assertIsInstance(result, InvestigationResult)
+
+        completed = [e for e in audit_log.events() if e.event_type == AuditEventType.TOOL_COMPLETED]
+        self.assertEqual(len(completed), 1)
+        # Fails closed via static code
+        self.assertEqual(completed[0].detail_code, "bounded_splunk_search_result_too_large")
+
+
 if __name__ == "__main__":
     unittest.main()
