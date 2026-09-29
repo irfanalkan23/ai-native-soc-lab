@@ -25,5 +25,49 @@ class TestInvestigatorModelPrompt(unittest.TestCase):
         self.assertIn("powershell_network_retrieval_matches", instructions)
 
 
+    def test_investigator_system_instructions_map_mitre_technique_contract(self) -> None:
+        """Verify map_mitre_technique instructions specify exact detection_ref and fail_closed false."""
+        instructions = INVESTIGATOR_SYSTEM_INSTRUCTIONS
+        self.assertIn("map_mitre_technique", instructions)
+        mitre_section = instructions[instructions.index("map_mitre_technique"):]
+
+        self.assertIn("detection_ref", mitre_section)
+        self.assertIn("investigation_input.detection_name", mitre_section)
+        self.assertTrue(
+            "exactly" in mitre_section.lower(),
+            msg="map_mitre_technique instructions must require using investigation_input.detection_name exactly",
+        )
+        self.assertIn("T1105", mitre_section)
+        self.assertIn("fail_closed", mitre_section)
+        self.assertTrue(
+            "false" in mitre_section.lower(),
+            msg="map_mitre_technique instructions must state fail_closed must be false",
+        )
+        self.assertTrue(
+            "no additional arguments" in mitre_section.lower(),
+            msg="map_mitre_technique instructions must forbid additional arguments",
+        )
+
+    def test_investigator_system_instructions_map_mitre_required_terms(self) -> None:
+        """Verify all Milestone 8L required terms are explicitly present in the model prompt."""
+        instructions = INVESTIGATOR_SYSTEM_INSTRUCTIONS
+        for term in (
+            "detection_ref",
+            "investigation_input.detection_name",
+            "T1105",
+            "fail_closed",
+        ):
+            self.assertIn(term, instructions)
+
+        self.assertTrue(
+            "exactly" in instructions.lower(),
+            msg="Prompt must contain 'exactly'",
+        )
+        self.assertTrue(
+            "false" in instructions.lower(),
+            msg="Prompt must contain 'false'",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

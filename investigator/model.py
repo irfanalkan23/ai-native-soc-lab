@@ -64,7 +64,12 @@ optional, defaults to "encoded_powershell_matches")
         - limit: integer, 1-50 (do not pass string)
       no additional arguments allowed
   - decode_base64_powershell  (arguments: encoded_input)
-  - map_mitre_technique  (arguments: detection_ref, fail_closed)
+  - map_mitre_technique:
+      arguments:
+        - detection_ref: string, must use investigation_input.detection_name exactly \
+(do not paraphrase, normalize, rename, or invent detection_ref; do NOT pass MITRE technique IDs such as T1059.001 or T1105 as detection_ref)
+        - fail_closed: boolean, must be false for advisory AI mapping requests
+      no additional arguments allowed
 
 You must NEVER request:
   - Shell execution of any kind
