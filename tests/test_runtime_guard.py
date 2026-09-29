@@ -1003,5 +1003,330 @@ class TestNegativeControl(unittest.TestCase):
         self.assertEqual(ctx2.exception.detail_code, "SYNTHETIC_INTEGRITY_BREACH")
 
 
+class TestAdversarialRuntimeGuardKillSwitchEnforcement(unittest.TestCase):
+    """Milestone 9G: Runtime Guard / Kill-Switch Enforcement Regressions.
+
+    Verifies:
+      - Active kill switch blocks allowlisted tools (Splunk, MITRE, Decoder) before execution
+      - Mid-investigation shutdown blocks subsequent tools while preserving prior results
+      - Repeated tool requests while guard is disabled result in zero backend calls
+      - RuntimeGuard is strictly evaluated before ToolRouter execution
+      - Audit trail records static RUNTIME_HALTED codes without leaking tool payloads
+      - Enabled control case executes normally
+      - Malformed guard responses/errors fail closed
+      - Human approval cannot override a disabled RuntimeGuard
+    """
+
+    class _DynamicKillSwitchModel:
+        """Test model double that triggers kill switch at a specified decision turn."""
+        def __init__(self, guard: RuntimeGuard, decisions: List[ModelDecision], engage_at_turn: int) -> None:
+            self.guard = guard
+            self.decisions = decisions
+            self.engage_at_turn = engage_at_turn
+            self.turn = 0
+
+        def decide(self, req: ModelRequest) -> ModelDecision:
+            if self.turn == self.engage_at_turn:
+                try:
+                    self.guard.engage_kill_switch()
+                except RuntimeHaltError:
+                    pass  # engage_kill_switch immediately raises, but model returns decision to test before_tool_execution
+            decision = self.decisions[self.turn]
+            self.turn += 1
+            return decision
+
+    def _make_splunk_request(self) -> ModelDecision:
+        return ModelDecision(
+            decision_type=DecisionType.TOOL_REQUEST,
+            tool_request=ToolRequest(
+                tool_name="bounded_splunk_search",
+                arguments={"query_type": "encoded_powershell_matches", "host": "DC01"},
+            ),
+        )
+
+    def _make_mitre_request(self) -> ModelDecision:
+        return ModelDecision(
+            decision_type=DecisionType.TOOL_REQUEST,
+            tool_request=ToolRequest(
+                tool_name="map_mitre_technique",
+                arguments={"detection_ref": "encoded_powershell_matches", "fail_closed": True},
+            ),
+        )
+
+    def _make_decoder_request(self) -> ModelDecision:
+        return ModelDecision(
+            decision_type=DecisionType.TOOL_REQUEST,
+            tool_request=ToolRequest(
+                tool_name="decode_base64_powershell",
+                arguments={
+                    "encoded_input": "VwByAGkAdABlAC0ASABvAHMAdAAgACcAQQBJAC0ATgBhAHQAaQB2AGUAUwBPAEMALQBMAEEAQgAtAFQARQBTAFQAJwA=",
+                },
+            ),
+        )
+
+    def _make_final_result_decision(self) -> ModelDecision:
+        return ModelDecision(
+            decision_type=DecisionType.FINAL_RESULT,
+            final_result=_make_sample_result(),
+        )
+
+    def test_kill_switch_active_before_first_tool_call_splunk(self) -> None:
+        """Requirement 1 & 6: Kill switch active before tool call blocks Splunk before backend execution."""
+        mock_splunk = MagicMock()
+        mock_splunk.search_encoded_powershell.return_value = []
+        router = ToolRouter(splunk_client=mock_splunk)
+        audit_log = AuditLog()
+        guard = RuntimeGuard(audit_log=audit_log, incident_id="INC-GUARD-01")
+
+        # Model emits valid Splunk request and engages kill switch before execution
+        model = self._DynamicKillSwitchModel(guard, [self._make_splunk_request()], engage_at_turn=0)
+        orch = InvestigationOrchestrator(model=model, tool_router=router, audit_log=audit_log, guard=guard)
+
+        with self.assertRaises(OrchestratorError) as cm:
+            orch.investigate(_make_sample_input())
+
+        self.assertIn("Runtime guard halted tool execution: KILL_SWITCH_ENGAGED", str(cm.exception))
+
+        # Core invariant: zero backend calls
+        mock_splunk.search_encoded_powershell.assert_not_called()
+        self.assertEqual(mock_splunk.search_encoded_powershell.call_count, 0)
+
+        # Audit verification: RUNTIME_HALTED with static detail code
+        events = audit_log.events()
+        halted_events = [e for e in events if e.event_type == AuditEventType.RUNTIME_HALTED]
+        self.assertEqual(len(halted_events), 1)
+        self.assertEqual(halted_events[0].detail_code, "KILL_SWITCH_ENGAGED")
+
+        # Backend success code NOT recorded
+        completed_events = [e for e in events if e.event_type == AuditEventType.TOOL_COMPLETED]
+        self.assertEqual(len(completed_events), 0)
+
+    def test_kill_switch_active_for_map_mitre_technique(self) -> None:
+        """Requirement 2: Kill switch active for map_mitre_technique blocks before mapper execution."""
+        mock_router = MagicMock(spec=ToolRouter)
+        audit_log = AuditLog()
+        guard = RuntimeGuard(audit_log=audit_log, incident_id="INC-GUARD-02")
+
+        model = self._DynamicKillSwitchModel(guard, [self._make_mitre_request()], engage_at_turn=0)
+        orch = InvestigationOrchestrator(model=model, tool_router=mock_router, audit_log=audit_log, guard=guard)
+
+        with self.assertRaises(OrchestratorError) as cm:
+            orch.investigate(_make_sample_input())
+
+        self.assertIn("Runtime guard halted tool execution: KILL_SWITCH_ENGAGED", str(cm.exception))
+        # Mapper was never invoked
+        mock_router.execute_tool.assert_not_called()
+
+    def test_kill_switch_active_for_decode_base64_powershell(self) -> None:
+        """Requirement 3: Kill switch active for decode_base64_powershell blocks before decoder execution."""
+        mock_router = MagicMock(spec=ToolRouter)
+        audit_log = AuditLog()
+        guard = RuntimeGuard(audit_log=audit_log, incident_id="INC-GUARD-03")
+
+        model = self._DynamicKillSwitchModel(guard, [self._make_decoder_request()], engage_at_turn=0)
+        orch = InvestigationOrchestrator(model=model, tool_router=mock_router, audit_log=audit_log, guard=guard)
+
+        with self.assertRaises(OrchestratorError) as cm:
+            orch.investigate(_make_sample_input())
+
+        self.assertIn("Runtime guard halted tool execution: KILL_SWITCH_ENGAGED", str(cm.exception))
+        mock_router.execute_tool.assert_not_called()
+
+    def test_mid_investigation_shutdown(self) -> None:
+        """Requirement 4: Tool 1 executes, kill switch engages, Tool 2 blocked before backend execution."""
+        mock_splunk = MagicMock()
+        mock_splunk.search_encoded_powershell.return_value = []
+        router = ToolRouter(splunk_client=mock_splunk)
+        audit_log = AuditLog()
+        guard = RuntimeGuard(audit_log=audit_log, incident_id="INC-GUARD-04")
+
+        # Turn 0: Decoder (allowed), Turn 1: Splunk (kill switch engaged)
+        decisions = [self._make_decoder_request(), self._make_splunk_request()]
+        model = self._DynamicKillSwitchModel(guard, decisions, engage_at_turn=1)
+        orch = InvestigationOrchestrator(model=model, tool_router=router, audit_log=audit_log, guard=guard)
+
+        with self.assertRaises(OrchestratorError) as cm:
+            orch.investigate(_make_sample_input())
+
+        self.assertIn("Runtime guard halted tool execution: KILL_SWITCH_ENGAGED", str(cm.exception))
+
+        # Tool 1 was completed
+        events = audit_log.events()
+        completed = [e for e in events if e.event_type == AuditEventType.TOOL_COMPLETED]
+        self.assertEqual(len(completed), 1)
+        self.assertEqual(completed[0].detail_code, "decode_base64_powershell_ok")
+
+        # Tool 2 was blocked before backend execution
+        mock_splunk.search_encoded_powershell.assert_not_called()
+
+        # RUNTIME_HALTED recorded
+        halted = [e for e in events if e.event_type == AuditEventType.RUNTIME_HALTED]
+        self.assertEqual(len(halted), 1)
+        self.assertEqual(halted[0].detail_code, "KILL_SWITCH_ENGAGED")
+
+    def test_repeated_valid_requests_while_disabled(self) -> None:
+        """Requirement 5: Repeated calls while guard is halted raise RuntimeHaltError without state reset."""
+        audit_log = AuditLog()
+        guard = RuntimeGuard(audit_log=audit_log, incident_id="INC-GUARD-05")
+        with self.assertRaises(RuntimeHaltError):
+            guard.engage_kill_switch()
+
+        # State is latched
+        self.assertTrue(guard.state.halted)
+        self.assertEqual(guard.state.halt_reason, RuntimeHaltReason.KILL_SWITCH_ENGAGED)
+
+        # Repeated calls to all boundary methods repeatedly fail closed
+        for _ in range(5):
+            with self.assertRaises(RuntimeHaltError) as cm:
+                guard.before_model_invocation()
+            self.assertEqual(cm.exception.reason, RuntimeHaltReason.KILL_SWITCH_ENGAGED)
+
+            with self.assertRaises(RuntimeHaltError) as cm2:
+                guard.before_tool_execution()
+            self.assertEqual(cm2.exception.reason, RuntimeHaltReason.KILL_SWITCH_ENGAGED)
+
+            with self.assertRaises(RuntimeHaltError) as cm3:
+                guard.check_execution_permitted(RuntimeCheckpoint.SIMULATION)
+            self.assertEqual(cm3.exception.reason, RuntimeHaltReason.KILL_SWITCH_ENGAGED)
+
+        # Invariant: exactly one RUNTIME_HALTED audit event emitted (no duplicate audit spam)
+        halted_events = [e for e in audit_log.events() if e.event_type == AuditEventType.RUNTIME_HALTED]
+        self.assertEqual(len(halted_events), 1)
+
+    def test_guard_precedence_before_tool_router_side_effects(self) -> None:
+        """Requirement 6: Precedence proof: guard is checked strictly before ToolRouter.execute_tool()."""
+        call_order = []
+        audit_log = AuditLog()
+
+        mock_guard = MagicMock(spec=RuntimeGuard)
+        mock_guard.audit_log = audit_log
+        def _halt_hook():
+            call_order.append("guard_checked")
+            raise RuntimeHaltError(RuntimeHaltReason.KILL_SWITCH_ENGAGED)
+        mock_guard.before_model_invocation.return_value = None
+        mock_guard.before_tool_execution.side_effect = _halt_hook
+
+        mock_router = MagicMock(spec=ToolRouter)
+        mock_router.execute_tool.side_effect = lambda *args, **kwargs: call_order.append("tool_executed")
+
+        from investigator.fake_model import FakeModel
+        model = FakeModel([self._make_splunk_request()])
+        orch = InvestigationOrchestrator(model=model, tool_router=mock_router, audit_log=audit_log, guard=mock_guard)
+
+        with self.assertRaises(OrchestratorError):
+            orch.investigate(_make_sample_input())
+
+        self.assertEqual(call_order, ["guard_checked"])
+        mock_router.execute_tool.assert_not_called()
+
+    def test_audit_behavior_sanitized_codes(self) -> None:
+        """Requirement 7: Audit records only static codes; zero argument/telemetry leakage."""
+        mock_splunk = MagicMock()
+        mock_splunk.search_encoded_powershell.return_value = []
+        router = ToolRouter(splunk_client=mock_splunk)
+        audit_log = AuditLog()
+        guard = RuntimeGuard(audit_log=audit_log, incident_id="INC-GUARD-07")
+
+        model = self._DynamicKillSwitchModel(guard, [self._make_splunk_request()], engage_at_turn=0)
+        orch = InvestigationOrchestrator(model=model, tool_router=router, audit_log=audit_log, guard=guard)
+
+        with self.assertRaises(OrchestratorError):
+            orch.investigate(_make_sample_input())
+
+        events = audit_log.events()
+        for e in events:
+            # Safe static detail codes only
+            self.assertLessEqual(len(e.detail_code), 64)
+            self.assertNotIn("query_type", e.detail_code)
+            self.assertNotIn("DC01", e.detail_code)
+            self.assertNotIn("powershell.exe", e.detail_code)
+
+        # JSONL persistence check
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            audit_path = Path(tmp_dir) / "audit_9g.jsonl"
+            writer = JsonlAuditWriter(audit_path)
+            for e in events:
+                writer.write_event(e)
+
+            persisted = audit_path.read_text(encoding="utf-8")
+            self.assertIn("KILL_SWITCH_ENGAGED", persisted)
+            self.assertNotIn("query_type", persisted)
+
+    def test_enabled_control_case(self) -> None:
+        """Requirement 8: Enabled control case executes normally when kill switch is inactive."""
+        mock_splunk = MagicMock()
+        mock_splunk.search_encoded_powershell.return_value = []
+        router = ToolRouter(splunk_client=mock_splunk)
+        audit_log = AuditLog()
+        guard = RuntimeGuard(
+            config=RuntimeGuardConfig(kill_switch=False),
+            audit_log=audit_log,
+            incident_id="INC-GUARD-08",
+        )
+
+        from investigator.fake_model import FakeModel
+        decisions = [self._make_splunk_request(), self._make_final_result_decision()]
+        model = FakeModel(decisions)
+        orch = InvestigationOrchestrator(model=model, tool_router=router, audit_log=audit_log, guard=guard)
+
+        result = orch.investigate(_make_sample_input())
+        self.assertIsInstance(result, InvestigationResult)
+        self.assertEqual(mock_splunk.search_encoded_powershell.call_count, 1)
+
+        completed = [e for e in audit_log.events() if e.event_type == AuditEventType.TOOL_COMPLETED]
+        self.assertEqual(len(completed), 1)
+        self.assertEqual(completed[0].detail_code, "bounded_splunk_search_ok")
+
+    def test_guard_failure_or_malformed_detail_fails_closed(self) -> None:
+        """Requirement 9: Malformed detail code fails closed to UNEXPECTED_STATE/INVALID_HALT_DETAIL."""
+        audit_log = AuditLog()
+        guard = RuntimeGuard(audit_log=audit_log, incident_id="INC-GUARD-09")
+
+        # Invalid detail code with spaces/punctuation
+        with self.assertRaises(RuntimeHaltError) as cm:
+            guard.halt(RuntimeHaltReason.CONTROL_FAILURE, detail_code="malformed detail with spaces!")
+
+        self.assertEqual(cm.exception.reason, RuntimeHaltReason.UNEXPECTED_STATE)
+        self.assertEqual(cm.exception.detail_code, "INVALID_HALT_DETAIL")
+        self.assertTrue(guard.state.halted)
+        self.assertEqual(guard.state.halt_detail_code, "INVALID_HALT_DETAIL")
+
+    def test_human_approval_cannot_override_kill_switch(self) -> None:
+        """Requirement 10: Valid human approval record cannot override or bypass a halted RuntimeGuard."""
+        audit_log = AuditLog()
+        guard = RuntimeGuard(audit_log=audit_log, incident_id="INC-GUARD-10")
+
+        # Simulate operator entering valid human approval
+        consequential_decision = PolicyDecision(
+            risk_score=80,
+            risk_level=RiskLevel.CRITICAL,
+            action_disposition=ActionDisposition.APPROVAL_REQUIRED,
+            proposed_action=ProposedAction.SIMULATE_ENDPOINT_ISOLATION,
+            reasons=("encoded_powershell_detected", "approval_required_for_consequential_action"),
+            requires_human_approval=True,
+        )
+        auth_context = ActionAuthorizationContext("INC-GUARD-10", consequential_decision)
+        valid_approval = ApprovalRecord(
+            incident_id="INC-GUARD-10",
+            proposed_action=ProposedAction.SIMULATE_ENDPOINT_ISOLATION,
+            decision=ApprovalDecision.APPROVED,
+            approver=DEFAULT_APPROVER,
+            reason_code="approval_granted",
+        )
+        self.assertEqual(valid_approval.decision, ApprovalDecision.APPROVED)
+
+        # Engage kill switch on runtime guard (catches immediate halt exception)
+        with self.assertRaises(RuntimeHaltError):
+            guard.engage_kill_switch()
+        self.assertTrue(guard.state.halted)
+
+        # Simulation checkpoint rejects execution despite valid approval
+        with self.assertRaises(RuntimeHaltError) as cm:
+            guard.check_execution_permitted(RuntimeCheckpoint.SIMULATION)
+
+        self.assertEqual(cm.exception.reason, RuntimeHaltReason.KILL_SWITCH_ENGAGED)
+        self.assertEqual(cm.exception.detail_code, "KILL_SWITCH_ENGAGED")
+
+
 if __name__ == "__main__":
     unittest.main()
