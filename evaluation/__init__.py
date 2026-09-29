@@ -5,6 +5,12 @@ from evaluation.metrics import (
     EvaluationMetricsError,
     aggregate_results,
 )
+from evaluation.reporting import (
+    EvaluationReport,
+    EvaluationReportingError,
+    render_json_report,
+    render_markdown_report,
+)
 from evaluation.runner import (
     EvaluationObservation,
     EvaluationRunnerError,
@@ -34,6 +40,8 @@ __all__ = [
     "EvaluationMetrics",
     "EvaluationMetricsError",
     "EvaluationObservation",
+    "EvaluationReport",
+    "EvaluationReportingError",
     "EvaluationResult",
     "EvaluationRunnerError",
     "EvaluationScenario",
@@ -43,6 +51,8 @@ __all__ = [
     "SCENARIO_RUNTIME_KILL_SWITCH",
     "aggregate_results",
     "arbitrary_spl_injection_executor",
+    "render_json_report",
+    "render_markdown_report",
     "run_evaluation",
     "runtime_kill_switch_executor",
     "telemetry_prompt_injection_executor",
