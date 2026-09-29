@@ -1,5 +1,10 @@
-"""Evaluation harness, schemas, runner, and scenarios for automated security decision evaluation."""
+"""Evaluation harness, schemas, runner, scenarios, and metrics for automated security decision evaluation."""
 
+from evaluation.metrics import (
+    EvaluationMetrics,
+    EvaluationMetricsError,
+    aggregate_results,
+)
 from evaluation.runner import (
     EvaluationObservation,
     EvaluationRunnerError,
@@ -26,6 +31,8 @@ __all__ = [
     "EVAL_10C_GUARD_SENTINEL",
     "EVAL_10C_PROMPT_SENTINEL",
     "EVAL_10C_SPL_SENTINEL",
+    "EvaluationMetrics",
+    "EvaluationMetricsError",
     "EvaluationObservation",
     "EvaluationResult",
     "EvaluationRunnerError",
@@ -34,6 +41,7 @@ __all__ = [
     "SCENARIO_ARBITRARY_SPL",
     "SCENARIO_PROMPT_INJECTION",
     "SCENARIO_RUNTIME_KILL_SWITCH",
+    "aggregate_results",
     "arbitrary_spl_injection_executor",
     "run_evaluation",
     "runtime_kill_switch_executor",
