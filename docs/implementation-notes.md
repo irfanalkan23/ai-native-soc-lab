@@ -1502,3 +1502,86 @@ No production detection logic was changed during this milestone.
 - Full automated suite: 812/812 PASS
 - Decision evaluation: 10/10 PASS
 - Production detection logic changes: NONE
+
+---
+
+## 31. 2026-09-29 — Milestone 8: Live network retrieval detection, real-provider validation, and sanitized audit closure
+
+### Objective
+
+Extend the AI-Native SOC investigator platform with an operational second detection (`suspicious_powershell_network_retrieval` / `DET-POWERSHELL-002`), execute live end-to-end telemetry validation from DC01 through bounded Splunk search, run real OpenAI model evaluation with deterministic policy and incident ticketing, harden forensic audit observability with sanitized tool-aware codes, and formalize AI prompt contracts for MITRE technique mapping.
+
+### 1. Detection Engineering (DET-POWERSHELL-002)
+
+- **Detection identifier**: `DET-POWERSHELL-002`
+- **Detection name**: `suspicious_powershell_network_retrieval`
+- **Data source**: Sysmon Event ID 1 (Process Creation) forwarded from DC01 to Splunk index `win`.
+- **Targeted syntax**: Common PowerShell network-retrieval command patterns including `Invoke-WebRequest`, `Invoke-RestMethod`, and `.DownloadString`.
+- **Authoritative MITRE mapping**: Primary deterministic technique mapping is `T1105` (Ingress Tool Transfer).
+- **Execution semantics**: The detection identifies the *attempt* to invoke PowerShell network download primitives. It does **not** claim or verify successful transfer or file delivery.
+
+### 2. Live Telemetry & Splunk Search Validation
+
+- **Host & Environment**: Live Windows domain controller DC01 (`SOCLAB\Administrator`).
+- **Telemetry ingestion**: Sysmon process creation forwarded to local Splunk enterprise instance at `localhost:8089` (TLS-enabled management endpoint).
+- **Controlled live fixture**:
+  ```powershell
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "try { Invoke-WebRequest -Uri 'http://127.0.0.1:65535/AI-NativeSOC-LAB-TEST' -TimeoutSec 2 } catch {}"
+  ```
+- **Connection semantics**: The connection target (`127.0.0.1:65535`) intentionally fails immediately, ensuring safety. The telemetry validates command-line detection of the retrieval attempt only, with zero network exfiltration or payload staging.
+- **Bounded Splunk retrieval**: Query dispatched via `SplunkSearchClient.search_powershell_network_retrieval()` strictly restricted to predefined bounded SPL (`query_type="powershell_network_retrieval_matches"`), fixed host `DC01`, and bounded time window without arbitrary search injection.
+
+### 3. Real OpenAI Provider Investigation & Policy Evaluation
+
+- **Provider**: Real OpenAI API (`OpenAIModel` adapter configured via `OPENAI_MODEL`).
+- **Investigation lifecycle**:
+  1. `MODEL_REQUESTED`: Initial prompt with sanitized `InvestigationInput` dispatched.
+  2. `bounded_splunk_search`: `requested` → `allowed` → `ok` (bounded events returned).
+  3. `map_mitre_technique`: `requested` → `allowed` → `ok` (deterministic mapping `T1105`).
+  4. `FINAL_RESULT_ACCEPTED`: Structured `InvestigationResult` validated and returned.
+- **Deterministic Policy Evaluation**:
+  - Risk score: `HIGH`
+  - Action disposition: `HUMAN_REVIEW`
+  - Proposed action: `create_incident_record`
+  - Reason codes: Validated network retrieval indicators, parent process lineage, and MITRE `T1105` correlation.
+
+### 4. Security Guardrails & Forensic Sanitization
+
+- **No arbitrary SPL or endpoints**: Callers and models cannot supply custom SPL strings, search parameters, or arbitrary destination URLs.
+- **Fixed tool allowlist**: Execution router strictly limited to `bounded_splunk_search`, `decode_base64_powershell`, and `map_mitre_technique`.
+- **Static MITRE mapper**: Static lookup table remains authoritative and fail-closed.
+- **Strict model contract (Milestone 8L)**: System instructions mandate that `detection_ref` must match `investigation_input.detection_name` exactly. Models are explicitly forbidden from passing technique IDs (e.g. `T1059.001`, `T1105`) or paraphrasing detection names, and `fail_closed` must be `false` for advisory AI calls.
+- **Sanitized tool-aware audit logging (Milestone 8K)**: Audit events record static machine-readable codes derived from the allowlist (`<tool>_requested`, `<tool>_allowed`, `<tool>_ok`, `<tool>_execution_failed`, `<tool>_result_too_large`).
+- **Privacy preservation**: Raw tool arguments, SPL strings, telemetry text, command lines, decoded payloads, exception traces, model reasoning, and secrets are strictly excluded from the persisted audit stream.
+- **Fail-closed unallowlisted handling**: Arbitrary or malicious tool names are rejected before execution and never interpolated into audit `detail_code`.
+
+### 5. Response & Ticketing State
+
+- **Containment action**: High-impact containment remains simulation-only / approval-gated. No real endpoint containment was executed during Milestone 8 validation; the host DC01 remained completely operational and unchanged.
+- **Review and approval semantics**: Deterministic policy disposition was HUMAN_REVIEW; the proposed create_incident_record action did not require an explicit approval prompt.
+- **Incident ticketing**: Tested with `fake_ticket_client`. Ticket identifier `SEC-0001` was generated offline in a simulated environment; no tickets were created in Jira Cloud during this run.
+
+### 6. Automated Verification & Testing
+
+- **Full repository test suite**: 868/868 PASS (0 failures, 0 errors across unit, integration, and property test suites).
+- **Decision evaluation harness**: 10/10 PASS across offline benchmark cases.
+- **Milestone 8K (Sanitized tool-aware audit)**: Verified across all allowlisted tools and failure states.
+- **Milestone 8L (MITRE tool prompt contract)**: Verified exact detection_ref and argument constraints.
+- **Live demo runner**: Verified across `live-benign`, `live-network-retrieval`, and `synthetic-critical` modes.
+
+### Status
+
+- Second detection engineering (DET-POWERSHELL-002): IMPLEMENTED + TESTED
+- Live DC01 Sysmon telemetry capture: TESTED
+- Bounded Splunk search integration: IMPLEMENTED + TESTED
+- Real-provider OpenAI investigation: TESTED
+- Deterministic risk & policy scoring: IMPLEMENTED + TESTED
+- Sanitized tool-aware audit logging: IMPLEMENTED + TESTED
+- Strict prompt contract clarification: IMPLEMENTED + TESTED
+- Automated test suite (868 tests): TESTED (100% PASS)
+- Offline incident ticketing: IMPLEMENTED + TESTED (SIMULATED TICKET SEC-0001)
+- Jira Cloud live ticket creation: IMPLEMENTED (disabled in this run; tested offline)
+- Endpoint containment: SIMULATION-ONLY / APPROVAL-GATED (no real containment executed)
+
+> [!NOTE]
+> This validation was conducted in a controlled lab environment for security-architecture demonstration. It does not represent an operational production SOC deployment.
