@@ -1428,5 +1428,281 @@ class TestStaticAuditDetailCodes(unittest.TestCase):
                     self.assertIn("INVALID_TOOL_REQUEST", persisted_text)
 
 
+class TestAdversarialToolBudgetExhaustionAndLoopResistance(unittest.TestCase):
+    """Milestone 9E: Tool-Budget Exhaustion & Loop Resistance Regressions.
+
+    Verifies:
+      - Repeated valid tool requests (Splunk, MITRE, Decoder) cannot create unbounded loops
+      - Orchestrator strictly halts at MAX_TOOL_CALLS and fails closed before the 4th tool executes
+      - A model that never emits FINAL_RESULT terminates deterministically in bounded steps
+      - Backend/gateway execution count strictly matches MAX_TOOL_CALLS (zero extra executions)
+      - Failed tool executions (ToolExecutionError) consume tool budget
+      - Safe control: fewer than MAX_TOOL_CALLS followed by FINAL_RESULT succeeds normally
+      - Audit trail records safe static codes, bounded event counts, and BUDGET_EXHAUSTED
+    """
+
+    def _make_splunk_request(self) -> ModelDecision:
+        return ModelDecision(
+            decision_type=DecisionType.TOOL_REQUEST,
+            tool_request=ToolRequest(
+                tool_name="bounded_splunk_search",
+                arguments={"query_type": "encoded_powershell_matches", "host": "DC01"},
+            ),
+        )
+
+    def _make_mitre_request(self) -> ModelDecision:
+        return ModelDecision(
+            decision_type=DecisionType.TOOL_REQUEST,
+            tool_request=ToolRequest(
+                tool_name="map_mitre_technique",
+                arguments={"detection_ref": "encoded_powershell_matches", "fail_closed": True},
+            ),
+        )
+
+    def _make_decoder_request(self) -> ModelDecision:
+        return ModelDecision(
+            decision_type=DecisionType.TOOL_REQUEST,
+            tool_request=ToolRequest(
+                tool_name="decode_base64_powershell",
+                arguments={
+                    "encoded_input": "VwByAGkAdABlAC0ASABvAHMAdAAgACcAQQBJAC0ATgBhAHQAaQB2AGUAUwBPAEMALQBMAEEAQgAtAFQARQBTAFQAJwA=",
+                },
+            ),
+        )
+
+    def test_repeated_bounded_splunk_search_exhausts_budget(self) -> None:
+        """Requirement 1 & 6: Repeated Splunk searches halt at MAX_TOOL_CALLS with zero extra executions."""
+        from investigator.tool_router import ToolRouter
+        mock_splunk = MagicMock()
+        mock_splunk.search_encoded_powershell.return_value = []
+        router = ToolRouter(splunk_client=mock_splunk)
+        audit_log = AuditLog()
+
+        # Model attempts 4 consecutive valid Splunk searches
+        decisions = [self._make_splunk_request() for _ in range(4)]
+        fake_model = FakeModel(decisions)
+        orch = InvestigationOrchestrator(model=fake_model, tool_router=router, audit_log=audit_log)
+
+        with self.assertRaises(OrchestratorError) as cm:
+            orch.investigate(_VALID_INPUT)
+
+        self.assertIn("Tool budget exhausted", str(cm.exception))
+        # Exact accounting: backend called exactly MAX_TOOL_CALLS times, never 4
+        self.assertEqual(mock_splunk.search_encoded_powershell.call_count, MAX_TOOL_CALLS)
+
+        events = audit_log.events()
+        completed_events = [e for e in events if e.event_type == AuditEventType.TOOL_COMPLETED]
+        rejected_events = [e for e in events if e.event_type == AuditEventType.TOOL_REJECTED]
+        self.assertEqual(len(completed_events), MAX_TOOL_CALLS)
+        self.assertEqual(len(rejected_events), 1)
+        self.assertEqual(rejected_events[0].detail_code, "BUDGET_EXHAUSTED")
+
+    def test_repeated_map_mitre_technique_exhausts_budget(self) -> None:
+        """Requirement 2: Repeated MITRE mapping requests halt at MAX_TOOL_CALLS."""
+        from investigator.tool_router import ToolRouter
+        mock_splunk = MagicMock()
+        router = ToolRouter(splunk_client=mock_splunk)
+        audit_log = AuditLog()
+
+        decisions = [self._make_mitre_request() for _ in range(4)]
+        fake_model = FakeModel(decisions)
+        orch = InvestigationOrchestrator(model=fake_model, tool_router=router, audit_log=audit_log)
+
+        with self.assertRaises(OrchestratorError) as cm:
+            orch.investigate(_VALID_INPUT)
+
+        self.assertIn("Tool budget exhausted", str(cm.exception))
+        events = audit_log.events()
+        completed_events = [e for e in events if e.event_type == AuditEventType.TOOL_COMPLETED]
+        rejected_events = [e for e in events if e.event_type == AuditEventType.TOOL_REJECTED]
+        self.assertEqual(len(completed_events), MAX_TOOL_CALLS)
+        self.assertEqual(len(rejected_events), 1)
+        self.assertEqual(rejected_events[0].detail_code, "BUDGET_EXHAUSTED")
+
+    def test_alternating_valid_tools_exhausts_budget_at_limit(self) -> None:
+        """Requirement 3: Alternating tool sequence halts at MAX_TOOL_CALLS before 4th tool executes."""
+        from investigator.tool_router import ToolRouter
+        mock_splunk = MagicMock()
+        mock_splunk.search_encoded_powershell.return_value = []
+        router = ToolRouter(splunk_client=mock_splunk)
+        audit_log = AuditLog()
+
+        # Alternating sequence: Splunk -> MITRE -> Decoder -> MITRE (4th)
+        decisions = [
+            self._make_splunk_request(),
+            self._make_mitre_request(),
+            self._make_decoder_request(),
+            self._make_mitre_request(),
+        ]
+        fake_model = FakeModel(decisions)
+        orch = InvestigationOrchestrator(model=fake_model, tool_router=router, audit_log=audit_log)
+
+        with self.assertRaises(OrchestratorError) as cm:
+            orch.investigate(_VALID_INPUT)
+
+        self.assertIn("Tool budget exhausted", str(cm.exception))
+        # Backend execution count
+        self.assertEqual(mock_splunk.search_encoded_powershell.call_count, 1)
+
+        events = audit_log.events()
+        completed_events = [e for e in events if e.event_type == AuditEventType.TOOL_COMPLETED]
+        self.assertEqual(len(completed_events), MAX_TOOL_CALLS)
+        rejected_events = [e for e in events if e.event_type == AuditEventType.TOOL_REJECTED]
+        self.assertEqual(len(rejected_events), 1)
+        self.assertEqual(rejected_events[0].detail_code, "BUDGET_EXHAUSTED")
+
+    def test_model_never_emits_final_result_infinite_tool_requests(self) -> None:
+        """Requirement 4: Model that never emits FINAL_RESULT halts in bounded steps without infinite loop."""
+        from investigator.tool_router import ToolRouter
+
+        class InfiniteToolModel:
+            def __init__(self, tool_decision: ModelDecision) -> None:
+                self.decision = tool_decision
+                self.decide_count = 0
+
+            def decide(self, request: ModelRequest) -> ModelDecision:
+                self.decide_count += 1
+                return self.decision
+
+        mock_splunk = MagicMock()
+        router = ToolRouter(splunk_client=mock_splunk)
+        audit_log = AuditLog()
+        infinite_model = InfiniteToolModel(self._make_decoder_request())
+        orch = InvestigationOrchestrator(model=infinite_model, tool_router=router, audit_log=audit_log)
+
+        with self.assertRaises(OrchestratorError) as cm:
+            orch.investigate(_VALID_INPUT)
+
+        self.assertIn("Tool budget exhausted", str(cm.exception))
+        # Exactly MAX_MODEL_DECISIONS invocations to model
+        self.assertEqual(infinite_model.decide_count, MAX_MODEL_DECISIONS)
+        # Exactly MAX_TOOL_CALLS completed tools
+        completed_events = [e for e in audit_log.events() if e.event_type == AuditEventType.TOOL_COMPLETED]
+        self.assertEqual(len(completed_events), MAX_TOOL_CALLS)
+
+    def test_audit_behavior_under_budget_exhaustion(self) -> None:
+        """Requirement 5: Budget exhaustion produces safe static audit codes with no payload leakage."""
+        from pathlib import Path
+        import tempfile
+        from investigator.audit_writer import JsonlAuditWriter
+        from investigator.tool_router import ToolRouter
+
+        mock_splunk = MagicMock()
+        mock_splunk.search_encoded_powershell.return_value = []
+        router = ToolRouter(splunk_client=mock_splunk)
+        audit_log = AuditLog()
+
+        decisions = [self._make_splunk_request() for _ in range(4)]
+        fake_model = FakeModel(decisions)
+        orch = InvestigationOrchestrator(model=fake_model, tool_router=router, audit_log=audit_log)
+
+        with self.assertRaises(OrchestratorError):
+            orch.investigate(_VALID_INPUT)
+
+        events = audit_log.events()
+        # Verify bounded audit trail (4 model requests, 3 tool req/allowed/completed, 1 tool req, 1 tool rejected)
+        self.assertEqual(len(events), 15)
+
+        # In-memory detail code sanitization
+        for e in events:
+            self.assertLessEqual(len(e.detail_code), MAX_DETAIL_CODE_LENGTH)
+            self.assertNotIn("query_type", e.detail_code)
+            self.assertNotIn("DC01", e.detail_code)
+            self.assertNotIn("powershell.exe", e.detail_code)
+
+        # Check static codes present
+        detail_codes = [e.detail_code for e in events]
+        self.assertIn("bounded_splunk_search_requested", detail_codes)
+        self.assertIn("bounded_splunk_search_allowed", detail_codes)
+        self.assertIn("bounded_splunk_search_ok", detail_codes)
+        self.assertIn("BUDGET_EXHAUSTED", detail_codes)
+
+        # Persisted JSONL audit verification
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            audit_file = Path(tmp_dir) / "audit_9e.jsonl"
+            writer = JsonlAuditWriter(audit_file)
+            for e in events:
+                writer.write_event(e)
+
+            persisted_text = audit_file.read_text(encoding="utf-8")
+            self.assertIn("bounded_splunk_search_ok", persisted_text)
+            self.assertIn("BUDGET_EXHAUSTED", persisted_text)
+            self.assertNotIn("query_type", persisted_text)
+
+    def test_safe_control_fewer_than_max_tools_succeeds(self) -> None:
+        """Requirement 7: Safe control where model uses 2 tools then emits FINAL_RESULT."""
+        from investigator.tool_router import ToolRouter
+        mock_splunk = MagicMock()
+        router = ToolRouter(splunk_client=mock_splunk)
+        audit_log = AuditLog()
+
+        # 2 tools followed by FINAL_RESULT
+        decisions = [
+            self._make_decoder_request(),
+            self._make_mitre_request(),
+            _final_result_decision(),
+        ]
+        fake_model = FakeModel(decisions)
+        orch = InvestigationOrchestrator(model=fake_model, tool_router=router, audit_log=audit_log)
+
+        result = orch.investigate(_VALID_INPUT)
+        self.assertIsInstance(result, InvestigationResult)
+        self.assertEqual(result.summary, _VALID_RESULT.summary)
+
+        events = audit_log.events()
+        completed_events = [e for e in events if e.event_type == AuditEventType.TOOL_COMPLETED]
+        self.assertEqual(len(completed_events), 2)
+        final_events = [e for e in events if e.event_type == AuditEventType.FINAL_RESULT_ACCEPTED]
+        self.assertEqual(len(final_events), 1)
+        self.assertEqual(final_events[0].detail_code, "ok")
+        # No rejection events
+        rejected_events = [e for e in events if e.event_type == AuditEventType.TOOL_REJECTED]
+        self.assertEqual(len(rejected_events), 0)
+
+    def test_mixed_success_and_failure_tool_results_consume_budget(self) -> None:
+        """Requirement 8: Tool execution failures (ToolExecutionError) consume budget."""
+        from gateway.splunk_search import SplunkSearchError
+        from investigator.tool_router import ToolRouter
+
+        mock_splunk = MagicMock()
+        # Splunk search raises SplunkSearchError which ToolRouter maps to ToolExecutionError
+        mock_splunk.search_encoded_powershell.side_effect = SplunkSearchError("Splunk daemon unreachable")
+        router = ToolRouter(splunk_client=mock_splunk)
+        audit_log = AuditLog()
+
+        # Sequence:
+        # Tool 1: Decoder (succeeds) -> count 1
+        # Tool 2: Splunk search (fails execution) -> count 2
+        # Tool 3: MITRE (succeeds) -> count 3
+        # Tool 4: Decoder (attempts 4th tool) -> rejected because budget exhausted!
+        decisions = [
+            self._make_decoder_request(),
+            self._make_splunk_request(),
+            self._make_mitre_request(),
+            self._make_decoder_request(),
+        ]
+        fake_model = FakeModel(decisions)
+        orch = InvestigationOrchestrator(model=fake_model, tool_router=router, audit_log=audit_log)
+
+        with self.assertRaises(OrchestratorError) as cm:
+            orch.investigate(_VALID_INPUT)
+
+        self.assertIn("Tool budget exhausted", str(cm.exception))
+
+        events = audit_log.events()
+        completed_events = [e for e in events if e.event_type == AuditEventType.TOOL_COMPLETED]
+        # 3 tools attempted and counted toward budget
+        self.assertEqual(len(completed_events), MAX_TOOL_CALLS)
+        completed_codes = [e.detail_code for e in completed_events]
+        self.assertIn("decode_base64_powershell_ok", completed_codes)
+        self.assertIn("bounded_splunk_search_execution_failed", completed_codes)
+        self.assertIn("map_mitre_technique_ok", completed_codes)
+
+        # 4th tool was rejected
+        rejected_events = [e for e in events if e.event_type == AuditEventType.TOOL_REJECTED]
+        self.assertEqual(len(rejected_events), 1)
+        self.assertEqual(rejected_events[0].detail_code, "BUDGET_EXHAUSTED")
+
+
 if __name__ == "__main__":
     unittest.main()
