@@ -38,8 +38,8 @@ class TestWriteSecurityEvaluationArtifacts(unittest.TestCase):
             # 2. JSON artifact content validation
             data = json.loads(json_path.read_text(encoding="utf-8"))
             self.assertEqual(data.get("report_type"), "ai_native_soc_agent_security_evaluation")
-            self.assertEqual(data["metrics"]["total_scenarios"], 3)
-            self.assertEqual(data["metrics"]["passed"], 3)
+            self.assertEqual(data["metrics"]["total_scenarios"], 7)
+            self.assertEqual(data["metrics"]["passed"], 7)
             self.assertEqual(data["metrics"]["failed"], 0)
             self.assertEqual(data["metrics"]["pass_rate"], 1.0)
             self.assertEqual(data["metrics"]["unsafe_tool_executions"], 0)
@@ -53,6 +53,10 @@ class TestWriteSecurityEvaluationArtifacts(unittest.TestCase):
                 "eval-10c-prompt-injection",
                 "eval-10c-arbitrary-spl",
                 "eval-10c-runtime-guard",
+                "eval-11d-ti-private-ip",
+                "eval-11d-ti-argument-smuggling",
+                "eval-11d-ti-prompt-injection",
+                "eval-11d-ti-provider-failure",
             ]
             actual_ids = [res["scenario_id"] for res in data["results"]]
             self.assertEqual(actual_ids, expected_scenario_ids)
@@ -61,8 +65,8 @@ class TestWriteSecurityEvaluationArtifacts(unittest.TestCase):
             md_content = md_path.read_text(encoding="utf-8")
             self.assertIn("# AI SOC Agent Security Evaluation Report", md_content)
             self.assertIn("controlled lab environment", md_content.lower())
-            self.assertIn("Total Scenarios: 3", md_content)
-            self.assertIn("Passed: 3", md_content)
+            self.assertIn("Total Scenarios: 7", md_content)
+            self.assertIn("Passed: 7", md_content)
             self.assertIn("Failed: 0", md_content)
             self.assertIn("Pass Rate: 100.0%", md_content)
             for sc_id in expected_scenario_ids:
@@ -178,6 +182,44 @@ class TestEvaluationScriptCli(unittest.TestCase):
                 mock_run.side_effect = EvaluationHarnessError("Simulated failure")
                 exit_code = main(argv=["--output-dir", temp_dir_str])
                 self.assertNotEqual(exit_code, 0)
+
+
+class TestThreatIntelEvaluationArtifactExpectations(unittest.TestCase):
+    """Milestone 11D: Future artifact expectations when 7 scenarios are integrated."""
+
+    def test_artifacts_contain_seven_scenarios_and_threat_intel_metadata(self) -> None:
+        """Future security-evaluation artifacts must contain all 7 scenarios and 100% pass rate."""
+        with tempfile.TemporaryDirectory() as temp_dir_str:
+            output_dir = Path(temp_dir_str)
+            json_path, md_path = write_security_evaluation_artifacts(output_dir=output_dir)
+
+            data = json.loads(json_path.read_text(encoding="utf-8"))
+            if data["metrics"]["total_scenarios"] != 7:
+                self.fail(
+                    f"RED PHASE: expected 7 scenarios in evaluation artifact, got {data['metrics']['total_scenarios']}"
+                )
+
+            self.assertEqual(data["metrics"]["passed"], 7)
+            self.assertEqual(data["metrics"]["failed"], 0)
+            self.assertEqual(data["metrics"]["pass_rate"], 1.0)
+
+            expected_scenario_ids = [
+                "eval-10c-prompt-injection",
+                "eval-10c-arbitrary-spl",
+                "eval-10c-runtime-guard",
+                "eval-11d-ti-private-ip",
+                "eval-11d-ti-argument-smuggling",
+                "eval-11d-ti-prompt-injection",
+                "eval-11d-ti-provider-failure",
+            ]
+            actual_ids = [res["scenario_id"] for res in data["results"]]
+            self.assertEqual(actual_ids, expected_scenario_ids)
+
+            md_content = md_path.read_text(encoding="utf-8")
+            self.assertIn("Total Scenarios: 7", md_content)
+            self.assertIn("Passed: 7", md_content)
+            for sc_id in expected_scenario_ids:
+                self.assertIn(sc_id, md_content)
 
 
 if __name__ == "__main__":

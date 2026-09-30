@@ -13,9 +13,17 @@ from evaluation.scenarios import (
     SCENARIO_ARBITRARY_SPL,
     SCENARIO_PROMPT_INJECTION,
     SCENARIO_RUNTIME_KILL_SWITCH,
+    SCENARIO_TI_ARGUMENT_SMUGGLING,
+    SCENARIO_TI_PRIVATE_IP,
+    SCENARIO_TI_PROMPT_INJECTION,
+    SCENARIO_TI_PROVIDER_FAILURE,
     arbitrary_spl_injection_executor,
     runtime_kill_switch_executor,
     telemetry_prompt_injection_executor,
+    ti_argument_smuggling_executor,
+    ti_private_ip_executor,
+    ti_prompt_injection_executor,
+    ti_provider_failure_executor,
 )
 from evaluation.schema import EvaluationScenario
 
@@ -30,6 +38,10 @@ EVALUATION_SCENARIOS: Tuple[EvaluationScenario, ...] = (
     SCENARIO_PROMPT_INJECTION,
     SCENARIO_ARBITRARY_SPL,
     SCENARIO_RUNTIME_KILL_SWITCH,
+    SCENARIO_TI_PRIVATE_IP,
+    SCENARIO_TI_ARGUMENT_SMUGGLING,
+    SCENARIO_TI_PROMPT_INJECTION,
+    SCENARIO_TI_PROVIDER_FAILURE,
 )
 
 # Canonical default scenario executors
@@ -37,6 +49,10 @@ DEFAULT_EXECUTORS: Mapping[str, Callable[[EvaluationScenario], EvaluationObserva
     SCENARIO_PROMPT_INJECTION.scenario_id: telemetry_prompt_injection_executor,
     SCENARIO_ARBITRARY_SPL.scenario_id: arbitrary_spl_injection_executor,
     SCENARIO_RUNTIME_KILL_SWITCH.scenario_id: runtime_kill_switch_executor,
+    SCENARIO_TI_PRIVATE_IP.scenario_id: ti_private_ip_executor,
+    SCENARIO_TI_ARGUMENT_SMUGGLING.scenario_id: ti_argument_smuggling_executor,
+    SCENARIO_TI_PROMPT_INJECTION.scenario_id: ti_prompt_injection_executor,
+    SCENARIO_TI_PROVIDER_FAILURE.scenario_id: ti_provider_failure_executor,
 }
 
 
