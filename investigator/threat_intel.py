@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 import ipaddress
-from typing import Mapping, Optional, Protocol, runtime_checkable
+from typing import Any, Mapping, Optional, Protocol, runtime_checkable
 
 
 # ---------------------------------------------------------------------------
@@ -73,6 +73,10 @@ class ThreatIntelResultError(ThreatIntelError):
 
 class ThreatIntelClientError(ThreatIntelError):
     """Raised when a ThreatIntelClient encounters an internal, configuration, or binding error."""
+
+
+class ThreatIntelValidationError(ValueError, ThreatIntelError):
+    """Raised when ThreatIntelObservation schema validation fails."""
 
 
 # ---------------------------------------------------------------------------
@@ -265,6 +269,76 @@ class ThreatIntelResult:
                 raise ThreatIntelResultError(
                     "last_analysis_utc must be None when lookup_status is NOT_FOUND"
                 )
+
+
+# ---------------------------------------------------------------------------
+# Observation Schema
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class ThreatIntelObservation:
+    """Immutable normalized advisory-evidence structure for threat intelligence."""
+
+    indicator: str
+    indicator_type: str
+    provider: str
+    verdict: str
+    malicious_count: int
+    suspicious_count: int
+    harmless_count: int
+    undetected_count: int
+    source_reference: str
+
+    def __post_init__(self) -> None:
+        string_fields = (
+            ("indicator", self.indicator),
+            ("indicator_type", self.indicator_type),
+            ("provider", self.provider),
+            ("verdict", self.verdict),
+            ("source_reference", self.source_reference),
+        )
+        for field_name, value in string_fields:
+            if type(value) is not str:
+                raise ThreatIntelValidationError(
+                    f"{field_name} must be exact str type, got {type(value).__name__}"
+                )
+            if not value.strip():
+                raise ThreatIntelValidationError(
+                    f"{field_name} cannot be empty or whitespace-only"
+                )
+
+        if self.indicator_type != "ip":
+            raise ThreatIntelValidationError("indicator_type must be exact str 'ip'")
+
+        count_fields = (
+            ("malicious_count", self.malicious_count),
+            ("suspicious_count", self.suspicious_count),
+            ("harmless_count", self.harmless_count),
+            ("undetected_count", self.undetected_count),
+        )
+        for field_name, count_val in count_fields:
+            if type(count_val) is not int:
+                raise ThreatIntelValidationError(
+                    f"{field_name} must be exact int, got {type(count_val).__name__}"
+                )
+            if count_val < 0:
+                raise ThreatIntelValidationError(
+                    f"{field_name} must be non-negative, got {count_val}"
+                )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return deterministic dictionary representation of declared fields."""
+        return {
+            "indicator": self.indicator,
+            "indicator_type": self.indicator_type,
+            "provider": self.provider,
+            "verdict": self.verdict,
+            "malicious_count": self.malicious_count,
+            "suspicious_count": self.suspicious_count,
+            "harmless_count": self.harmless_count,
+            "undetected_count": self.undetected_count,
+            "source_reference": self.source_reference,
+        }
 
 
 # ---------------------------------------------------------------------------
