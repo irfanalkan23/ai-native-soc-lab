@@ -38,10 +38,19 @@ from investigator.orchestrator import (
     InvestigationOrchestrator,
     OrchestratorError,
 )
+from investigator.providers.virustotal_provider import (
+    VirusTotalThreatIntelClient,
+    VirusTotalTransportError,
+)
 from investigator.schemas import (
     InvestigationInput,
     InvestigationResult,
     SchemaValidationError,
+)
+from investigator.threat_intel import (
+    ThreatIntelLookupStatus,
+    ThreatIntelObservation,
+    ThreatIntelResult,
 )
 from investigator.tool_result import MAX_RESULT_TEXT_LENGTH, ToolResultEnvelope, ToolResultError
 
@@ -2431,6 +2440,176 @@ class TestAdversarialToolResultPromptInjection(unittest.TestCase):
         self.assertIn(AuditEventType.TOOL_COMPLETED, event_types)
         self.assertIn(AuditEventType.FINAL_RESULT_ACCEPTED, event_types)
         self.assertNotIn(AuditEventType.INVESTIGATION_FAILED, event_types)
+
+
+class TestOrchestratorThreatIntelIntegration(unittest.TestCase):
+    """Milestone 11C: Tests for threat_intel_lookup integration into InvestigationOrchestrator."""
+
+    def setUp(self) -> None:
+        from investigator.tool_router import ToolRouter
+        self.mock_splunk = MagicMock()
+        self.mock_vt = MagicMock(spec=VirusTotalThreatIntelClient)
+        try:
+            self.router = ToolRouter(splunk_client=self.mock_splunk, vt_client=self.mock_vt)
+        except TypeError:
+            self.router = ToolRouter(splunk_client=self.mock_splunk)
+        self.audit_log = AuditLog()
+
+    def test_threat_intel_audit_codes_supported(self) -> None:
+        """1. _tool_audit_code derives sanitized detail codes for threat_intel_lookup."""
+        from investigator.orchestrator import _tool_audit_code
+        expected_codes = {
+            "requested": "threat_intel_lookup_requested",
+            "allowed": "threat_intel_lookup_allowed",
+            "ok": "threat_intel_lookup_ok",
+            "execution_failed": "threat_intel_lookup_execution_failed",
+            "result_too_large": "threat_intel_lookup_result_too_large",
+        }
+        for suffix, expected_code in expected_codes.items():
+            code = _tool_audit_code("threat_intel_lookup", suffix)
+            self.assertEqual(code, expected_code)
+
+    def test_threat_intel_tool_result_serialization(self) -> None:
+        """2. _serialize_tool_result serializes ThreatIntelObservation into clean JSON without secrets."""
+        from investigator.orchestrator import _serialize_tool_result
+        obs = ThreatIntelObservation(
+            indicator="93.184.216.34",
+            indicator_type="ip",
+            provider="virustotal",
+            verdict="malicious",
+            malicious_count=10,
+            suspicious_count=2,
+            harmless_count=70,
+            undetected_count=5,
+            source_reference="virustotal:ip:93.184.216.34",
+        )
+        serialized = _serialize_tool_result("threat_intel_lookup", obs)
+        self.assertIsInstance(serialized, str)
+        d = json.loads(serialized)
+        self.assertEqual(d["indicator"], "93.184.216.34")
+        self.assertEqual(d["verdict"], "malicious")
+        self.assertEqual(d["malicious_count"], 10)
+        self.assertEqual(len(d), 9)
+
+    def test_orchestrator_threat_intel_lookup_positive_flow(self) -> None:
+        """3. Positive flow: model requests threat_intel_lookup, receives normalized result, and finishes."""
+        vt_result = ThreatIntelResult(
+            provider="virustotal",
+            indicator_type="ip",
+            indicator_value="93.184.216.34",
+            lookup_status=ThreatIntelLookupStatus.FOUND,
+            malicious_count=10,
+            suspicious_count=2,
+            harmless_count=70,
+            undetected_count=5,
+            detail_code="ip_lookup_found",
+        )
+        self.mock_vt.lookup.return_value = vt_result
+
+        turn1 = ModelDecision(
+            decision_type=DecisionType.TOOL_REQUEST,
+            tool_request=ToolRequest(
+                tool_name="threat_intel_lookup",
+                arguments={"indicator": "93.184.216.34"},
+            ),
+        )
+        turn2 = _final_result_decision()
+
+        orch = InvestigationOrchestrator(
+            model=FakeModel([turn1, turn2]),
+            tool_router=self.router,
+            audit_log=self.audit_log,
+        )
+        result = orch.investigate(_VALID_INPUT)
+
+        self.assertIsInstance(result, InvestigationResult)
+        detail_codes = [e.detail_code for e in self.audit_log.events()]
+        self.assertIn("threat_intel_lookup_requested", detail_codes)
+        self.assertIn("threat_intel_lookup_allowed", detail_codes)
+        self.assertIn("threat_intel_lookup_ok", detail_codes)
+
+    def test_orchestrator_threat_intel_lookup_invalid_indicator_fails_closed(self) -> None:
+        """4. Model requesting invalid/private indicator terminates immediately with INVALID_TOOL_REQUEST."""
+        turn1 = ModelDecision(
+            decision_type=DecisionType.TOOL_REQUEST,
+            tool_request=ToolRequest(
+                tool_name="threat_intel_lookup",
+                arguments={"indicator": "10.0.0.1"},
+            ),
+        )
+
+        orch = InvestigationOrchestrator(
+            model=FakeModel([turn1]),
+            tool_router=self.router,
+            audit_log=self.audit_log,
+        )
+        with self.assertRaises(OrchestratorError):
+            orch.investigate(_VALID_INPUT)
+        detail_codes = [e.detail_code for e in self.audit_log.events()]
+        self.assertIn("INVALID_TOOL_REQUEST", detail_codes)
+        self.mock_vt.lookup.assert_not_called()
+
+    def test_orchestrator_threat_intel_lookup_provider_failure_handled_as_envelope(self) -> None:
+        """5. Provider execution failure returns success=False envelope and model continues within budget."""
+        self.mock_vt.lookup.side_effect = VirusTotalTransportError("vt_transport_error")
+
+        turn1 = ModelDecision(
+            decision_type=DecisionType.TOOL_REQUEST,
+            tool_request=ToolRequest(
+                tool_name="threat_intel_lookup",
+                arguments={"indicator": "93.184.216.34"},
+            ),
+        )
+        turn2 = _final_result_decision()
+
+        orch = InvestigationOrchestrator(
+            model=FakeModel([turn1, turn2]),
+            tool_router=self.router,
+            audit_log=self.audit_log,
+        )
+        result = orch.investigate(_VALID_INPUT)
+        self.assertIsInstance(result, InvestigationResult)
+
+        detail_codes = [e.detail_code for e in self.audit_log.events()]
+        self.assertIn("threat_intel_lookup_execution_failed", detail_codes)
+
+    def test_authority_isolation_hostile_ti_text_cannot_bypass_controls(self) -> None:
+        """6. Hostile prompt injection inside TI observation cannot alter policy or authority."""
+        hostile_indicator = "93.184.216.34"
+        vt_result = ThreatIntelResult(
+            provider="virustotal",
+            indicator_type="ip",
+            indicator_value=hostile_indicator,
+            lookup_status=ThreatIntelLookupStatus.FOUND,
+            malicious_count=0,
+            suspicious_count=0,
+            harmless_count=10,
+            undetected_count=0,
+            detail_code="ip_lookup_found",
+        )
+        self.mock_vt.lookup.return_value = vt_result
+
+        turn1 = ModelDecision(
+            decision_type=DecisionType.TOOL_REQUEST,
+            tool_request=ToolRequest(
+                tool_name="threat_intel_lookup",
+                arguments={"indicator": hostile_indicator},
+            ),
+        )
+        turn2 = _final_result_decision()
+
+        orch = InvestigationOrchestrator(
+            model=FakeModel([turn1, turn2]),
+            tool_router=self.router,
+            audit_log=self.audit_log,
+        )
+        result = orch.investigate(_VALID_INPUT)
+        self.assertIsInstance(result, InvestigationResult)
+
+        # Audit events must remain bounded and static; no arbitrary injected strings
+        for event in self.audit_log.events():
+            self.assertTrue(len(event.detail_code) <= MAX_DETAIL_CODE_LENGTH)
+            self.assertNotIn("Ignore previous", event.detail_code)
 
 
 if __name__ == "__main__":

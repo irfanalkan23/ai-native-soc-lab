@@ -102,6 +102,7 @@ class TestToolAwareDetailCodeConstraints(unittest.TestCase):
                 "bounded_splunk_search",
                 "decode_base64_powershell",
                 "map_mitre_technique",
+                "threat_intel_lookup",
             }),
         )
 

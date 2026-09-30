@@ -19,6 +19,17 @@ from gateway.splunk_search import (
     SplunkSearchClient,
     SplunkSearchError,
 )
+from investigator.providers.virustotal_provider import (
+    VirusTotalError,
+    VirusTotalThreatIntelClient,
+)
+from investigator.threat_intel import (
+    ThreatIntelError,
+    ThreatIntelObservation,
+    ThreatIntelRequest,
+    _canonicalize_public_ip,
+    normalize_virustotal_result,
+)
 from investigator.tools.base64_decoder import (
     DecodeResult,
     DecoderError,
@@ -41,7 +52,14 @@ class ToolExecutionError(Exception):
     pass
 
 
-ALLOWED_TOOLS = frozenset({
+ALLOWED_TOOLS: frozenset[str] = frozenset({
+    "bounded_splunk_search",
+    "decode_base64_powershell",
+    "map_mitre_technique",
+    "threat_intel_lookup",
+})
+
+_BASE_ALLOWED_TOOLS: frozenset[str] = frozenset({
     "bounded_splunk_search",
     "decode_base64_powershell",
     "map_mitre_technique",
@@ -56,19 +74,27 @@ ALLOWED_SPLUNK_QUERY_TYPES = frozenset({
 class ToolRouter:
     """Deterministic tool execution router for the AI investigator."""
 
-    def __init__(self, splunk_client: Optional[SplunkSearchClient] = None) -> None:
-        """Initialize router with existing bounded Splunk client.
+    def __init__(
+        self,
+        splunk_client: Optional[SplunkSearchClient] = None,
+        vt_client: Optional[VirusTotalThreatIntelClient] = None,
+    ) -> None:
+        """Initialize router with existing bounded Splunk client and optional VT client.
 
         Args:
             splunk_client: Optional pre-configured SplunkSearchClient instance.
                            Defaults to local bounded client.
+            vt_client: Optional pre-configured VirusTotalThreatIntelClient instance.
         """
         self._splunk_client = splunk_client or SplunkSearchClient(verify_tls=False)
+        self._vt_client = vt_client
 
     @property
     def allowed_tools(self) -> frozenset[str]:
         """Return the immutable set of allowlisted tool names."""
-        return ALLOWED_TOOLS
+        if self._vt_client is not None:
+            return ALLOWED_TOOLS
+        return _BASE_ALLOWED_TOOLS
 
     def execute_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Any:
         """Execute an allowlisted tool with strictly validated arguments.
@@ -109,6 +135,8 @@ class ToolRouter:
             return self._execute_base64_decoder(arguments)
         elif tool_name == "map_mitre_technique":
             return self._execute_mitre_mapper(arguments)
+        elif tool_name == "threat_intel_lookup":
+            return self._execute_threat_intel_lookup(arguments)
         else:
             # Unreachable due to allowlist check, but fail closed defensively
             raise ToolValidationError(f"Unknown tool: {tool_name}")
@@ -215,3 +243,36 @@ class ToolRouter:
             )
         except MitreMappingError as err:
             raise ToolExecutionError(f"MITRE mapping failed: {err}") from err
+
+    def _execute_threat_intel_lookup(self, args: Dict[str, Any]) -> ThreatIntelObservation:
+        """Validate arguments and invoke bounded Threat Intelligence IP lookup."""
+        allowed_args = {"indicator"}
+        unrecognized = set(args.keys()) - allowed_args
+        if unrecognized:
+            raise ToolValidationError(
+                f"Unrecognized arguments for threat_intel_lookup: {sorted(unrecognized)}"
+            )
+
+        if "indicator" not in args:
+            raise ToolValidationError(
+                "Missing required argument 'indicator' for threat_intel_lookup"
+            )
+
+        raw_indicator = args["indicator"]
+        try:
+            canonical_ip = _canonicalize_public_ip(raw_indicator)
+        except (ValueError, TypeError) as err:
+            raise ToolValidationError(f"Invalid indicator for threat_intel_lookup: {err}") from err
+
+        if self._vt_client is None:
+            raise ToolExecutionError("Threat intelligence client is not configured")
+
+        try:
+            req = ThreatIntelRequest(
+                indicator_value=canonical_ip,
+                indicator_type="ip",
+            )
+            result = self._vt_client.lookup(req)
+            return normalize_virustotal_result(result)
+        except (VirusTotalError, ThreatIntelError) as err:
+            raise ToolExecutionError("Threat intelligence lookup execution failed") from err

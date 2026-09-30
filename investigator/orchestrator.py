@@ -59,6 +59,7 @@ _TOOL_AUDIT_PREFIX: Dict[str, str] = {
     "bounded_splunk_search": "bounded_splunk_search",
     "decode_base64_powershell": "decode_base64_powershell",
     "map_mitre_technique": "map_mitre_technique",
+    "threat_intel_lookup": "threat_intel_lookup",
 }
 
 _ALLOWED_AUDIT_SUFFIXES = frozenset({
@@ -74,7 +75,7 @@ def _tool_audit_code(tool_name: str, suffix: str) -> str:
     """Derive a fixed machine-readable audit detail code for an allowlisted tool.
 
     Security Guarantees:
-      - Accepts only the 3 strictly allowlisted tool names.
+      - Accepts only the 4 strictly allowlisted tool names.
       - Accepts only fixed internal lifecycle suffixes.
       - Never interpolates arbitrary strings or model inputs into audit.
       - Fails closed for unknown tool names or unknown suffixes.
@@ -117,6 +118,22 @@ def _serialize_tool_result(tool_name: str, raw_result: Any) -> str:
         elif tool_name == "bounded_splunk_search":
             # List[Dict[str, Any]]
             payload = {"events": raw_result, "event_count": len(raw_result)}
+        elif tool_name == "threat_intel_lookup":
+            # ThreatIntelObservation dataclass
+            if hasattr(raw_result, "to_dict"):
+                payload = raw_result.to_dict()
+            else:
+                payload = {
+                    "indicator": raw_result.indicator,
+                    "indicator_type": raw_result.indicator_type,
+                    "provider": raw_result.provider,
+                    "verdict": raw_result.verdict,
+                    "malicious_count": raw_result.malicious_count,
+                    "suspicious_count": raw_result.suspicious_count,
+                    "harmless_count": raw_result.harmless_count,
+                    "undetected_count": raw_result.undetected_count,
+                    "source_reference": raw_result.source_reference,
+                }
         else:
             raise ValueError(f"Unknown tool_name for serialization: {tool_name}")
 

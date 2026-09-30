@@ -187,5 +187,34 @@ class TestInvestigatorModelPrompt(unittest.TestCase):
         )
 
 
+class TestInvestigatorModelThreatIntelPrompt(unittest.TestCase):
+    """Milestone 11C: System instructions contract for threat_intel_lookup tool."""
+
+    def test_investigator_system_instructions_threat_intel_lookup_contract(self) -> None:
+        """Verify threat_intel_lookup instructions specify public IP and untrusted advisory boundary."""
+        instructions = INVESTIGATOR_SYSTEM_INSTRUCTIONS
+
+        self.assertIn("threat_intel_lookup", instructions)
+        ti_section = instructions[instructions.index("threat_intel_lookup"):]
+
+        self.assertIn("indicator", ti_section)
+        self.assertTrue(
+            "public ip" in ti_section.lower() or "public" in ti_section.lower(),
+            msg="threat_intel_lookup instructions must specify public IP indicator",
+        )
+        self.assertTrue(
+            "no additional arguments" in ti_section.lower() or "no arbitrary" in ti_section.lower(),
+            msg="threat_intel_lookup instructions must forbid additional arguments or arbitrary URLs",
+        )
+        self.assertTrue(
+            "untrusted" in instructions.lower(),
+            msg="System instructions must clearly treat threat intelligence evidence as untrusted",
+        )
+        self.assertTrue(
+            "approval" in instructions.lower() or "authority" in instructions.lower(),
+            msg="System instructions must constrain tool results from bearing approval authority",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

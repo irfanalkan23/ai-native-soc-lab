@@ -3,9 +3,21 @@
 import unittest
 from unittest.mock import MagicMock
 
+from investigator.providers.virustotal_provider import (
+    VirusTotalResponseError,
+    VirusTotalThreatIntelClient,
+    VirusTotalTransportError,
+)
+from investigator.threat_intel import (
+    ThreatIntelLookupStatus,
+    ThreatIntelObservation,
+    ThreatIntelRequest,
+    ThreatIntelResult,
+)
 from investigator.tool_router import (
     ALLOWED_SPLUNK_QUERY_TYPES,
     ALLOWED_TOOLS,
+    ToolExecutionError,
     ToolRouter,
     ToolValidationError,
 )
@@ -268,6 +280,134 @@ class TestToolRouterArgumentSmugglingAndTypeConfusion(unittest.TestCase):
             {"encoded_input": valid_b64},
         )
         self.assertIn("AI-NativeSOC-LAB-TEST", decode_result.decoded_text)
+
+
+class TestToolRouterThreatIntelLookup(unittest.TestCase):
+    """Milestone 11C: Tests for bounded threat_intel_lookup tool contract and VirusTotal integration."""
+
+    def setUp(self) -> None:
+        self.mock_splunk = MagicMock()
+        self.mock_vt = MagicMock(spec=VirusTotalThreatIntelClient)
+        # Pass mock_vt if ToolRouter supports it, or instantiate standard router
+        try:
+            self.router = ToolRouter(splunk_client=self.mock_splunk, vt_client=self.mock_vt)
+        except TypeError:
+            self.router = ToolRouter(splunk_client=self.mock_splunk)
+
+    def test_allowed_tools_contains_exactly_four_tools(self) -> None:
+        """1. ALLOWED_TOOLS contains exactly the 4 audited tools including threat_intel_lookup."""
+        self.assertEqual(
+            ALLOWED_TOOLS,
+            frozenset({
+                "bounded_splunk_search",
+                "decode_base64_powershell",
+                "map_mitre_technique",
+                "threat_intel_lookup",
+            }),
+        )
+        # Router with vt_client exposes all 4 tools
+        self.assertIn("threat_intel_lookup", self.router.allowed_tools)
+        self.assertEqual(self.router.allowed_tools, ALLOWED_TOOLS)
+
+        # Router without vt_client exposes only the 3 base tools
+        router_no_vt = ToolRouter(splunk_client=self.mock_splunk)
+        self.assertEqual(
+            router_no_vt.allowed_tools,
+            frozenset({
+                "bounded_splunk_search",
+                "decode_base64_powershell",
+                "map_mitre_technique",
+            }),
+        )
+
+    def test_threat_intel_lookup_valid_public_ip_dispatches_and_normalizes(self) -> None:
+        """2. Valid public IP dispatches to VirusTotal client and returns normalized ThreatIntelObservation."""
+        expected_result = ThreatIntelResult(
+            provider="virustotal",
+            indicator_type="ip",
+            indicator_value="93.184.216.34",
+            lookup_status=ThreatIntelLookupStatus.FOUND,
+            malicious_count=10,
+            suspicious_count=2,
+            harmless_count=70,
+            undetected_count=5,
+            detail_code="ip_lookup_found",
+            last_analysis_utc="2026-09-30T10:00:00Z",
+        )
+        self.mock_vt.lookup.return_value = expected_result
+
+        obs = self.router.execute_tool("threat_intel_lookup", {"indicator": "93.184.216.34"})
+
+        self.assertIsInstance(obs, ThreatIntelObservation)
+        self.assertEqual(obs.indicator, "93.184.216.34")
+        self.assertEqual(obs.indicator_type, "ip")
+        self.assertEqual(obs.provider, "virustotal")
+        self.assertEqual(obs.verdict, "malicious")
+        self.assertEqual(obs.malicious_count, 10)
+        self.assertEqual(obs.suspicious_count, 2)
+        self.assertEqual(obs.harmless_count, 70)
+        self.assertEqual(obs.undetected_count, 5)
+        self.assertEqual(obs.source_reference, "virustotal:ip:93.184.216.34")
+
+        # Must have dispatched via ThreatIntelRequest
+        self.mock_vt.lookup.assert_called_once()
+        req = self.mock_vt.lookup.call_args[0][0]
+        self.assertIsInstance(req, ThreatIntelRequest)
+        self.assertEqual(req.indicator_value, "93.184.216.34")
+        self.assertEqual(req.indicator_type, "ip")
+
+    def test_threat_intel_lookup_rejects_invalid_and_private_indicators(self) -> None:
+        """3. Private, loopback, multicast, domain, and malformed indicators are rejected fail-closed."""
+        invalid_indicators = [
+            "127.0.0.1",
+            "10.0.0.1",
+            "192.168.1.10",
+            "169.254.1.1",
+            "0.0.0.0",
+            "224.0.0.1",
+            "example.com",
+            "https://8.8.8.8",
+            "not-an-ip",
+            "",
+            None,
+            123,
+            True,
+        ]
+        for bad_indicator in invalid_indicators:
+            with self.subTest(indicator=bad_indicator):
+                self.mock_vt.reset_mock()
+                with self.assertRaises(ToolValidationError):
+                    self.router.execute_tool("threat_intel_lookup", {"indicator": bad_indicator})
+                self.mock_vt.lookup.assert_not_called()
+
+    def test_threat_intel_lookup_rejects_additional_argument_smuggling(self) -> None:
+        """4. Extra arguments like url, provider, api_key, headers are rejected before provider execution."""
+        smuggled_payloads = [
+            {"indicator": "8.8.8.8", "url": "https://evil.example"},
+            {"indicator": "8.8.8.8", "provider": "custom"},
+            {"indicator": "8.8.8.8", "api_key": "SECRET_KEY_123"},
+            {"indicator": "8.8.8.8", "headers": {"Authorization": "Bearer token"}},
+            {"indicator": "8.8.8.8", "endpoint": "/api/v3/ip_addresses/8.8.8.8"},
+            {"indicator": "8.8.8.8", "extra": "forbidden"},
+        ]
+        for payload in smuggled_payloads:
+            with self.subTest(payload=payload):
+                self.mock_vt.reset_mock()
+                with self.assertRaises(ToolValidationError):
+                    self.router.execute_tool("threat_intel_lookup", payload)
+                self.mock_vt.lookup.assert_not_called()
+
+    def test_threat_intel_lookup_missing_indicator_fails_closed(self) -> None:
+        """5. Invoking threat_intel_lookup without indicator argument raises ToolValidationError."""
+        with self.assertRaises(ToolValidationError):
+            self.router.execute_tool("threat_intel_lookup", {})
+        self.mock_vt.lookup.assert_not_called()
+
+    def test_threat_intel_lookup_provider_failures_map_to_tool_execution_error(self) -> None:
+        """6. Provider transport or response errors fail closed as sanitized ToolExecutionError."""
+        self.mock_vt.lookup.side_effect = VirusTotalTransportError("vt_transport_error")
+        with self.assertRaises(ToolExecutionError):
+            self.router.execute_tool("threat_intel_lookup", {"indicator": "8.8.8.8"})
 
 
 if __name__ == "__main__":
