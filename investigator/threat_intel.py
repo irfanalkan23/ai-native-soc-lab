@@ -342,6 +342,64 @@ class ThreatIntelObservation:
 
 
 # ---------------------------------------------------------------------------
+# Normalization Helpers
+# ---------------------------------------------------------------------------
+
+def normalize_virustotal_result(
+    result: ThreatIntelResult,
+) -> ThreatIntelObservation:
+    """Deterministically normalize a VirusTotal ThreatIntelResult into ThreatIntelObservation.
+
+    Trust & Scope Boundaries:
+        - Fails closed on any unexpected type, missing attribute, or malformed counter.
+        - Public IP indicator scope only ("ip"); no URL, domain, or hash expansion.
+        - Pure advisory data structure; contains no authority-bearing or execution logic.
+        - Strict secret hygiene: credentials and raw network headers are never mapped.
+    """
+    if type(result) is not ThreatIntelResult:
+        raise ThreatIntelValidationError(
+            f"result must be exact ThreatIntelResult instance, got {type(result).__name__}"
+        )
+
+    if result.indicator_type != "ip":
+        raise ThreatIntelValidationError("indicator_type must be exact str 'ip'")
+
+    if type(result.indicator_value) is not str or not result.indicator_value.strip():
+        raise ThreatIntelValidationError("indicator_value must be a non-empty string")
+
+    for count_name in ("malicious_count", "suspicious_count", "harmless_count", "undetected_count"):
+        val = getattr(result, count_name, None)
+        if type(val) is not int or val < 0:
+            raise ThreatIntelValidationError(
+                f"{count_name} must be exact non-negative int, got {val!r}"
+            )
+
+    # Deterministic verdict rule
+    if result.malicious_count > 0:
+        verdict = "malicious"
+    elif result.suspicious_count > 0:
+        verdict = "suspicious"
+    elif result.harmless_count > 0:
+        verdict = "harmless"
+    else:
+        verdict = "unknown"
+
+    source_reference = f"virustotal:ip:{result.indicator_value}"
+
+    return ThreatIntelObservation(
+        indicator=result.indicator_value,
+        indicator_type="ip",
+        provider="virustotal",
+        verdict=verdict,
+        malicious_count=result.malicious_count,
+        suspicious_count=result.suspicious_count,
+        harmless_count=result.harmless_count,
+        undetected_count=result.undetected_count,
+        source_reference=source_reference,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Client Protocol
 # ---------------------------------------------------------------------------
 
