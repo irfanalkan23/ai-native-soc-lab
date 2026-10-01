@@ -14,7 +14,8 @@ Trust & Scope Boundaries:
 
 from dataclasses import dataclass
 import ipaddress
-from typing import Any, Dict
+import re
+from typing import Any, Dict, Optional
 
 
 # ---------------------------------------------------------------------------
@@ -186,3 +187,132 @@ class ModSecuritySqliEvidence:
             "anomaly_score": self.anomaly_score,
             "unique_id": self.unique_id,
         }
+
+
+# ---------------------------------------------------------------------------
+# Deterministic Raw Event Parser
+# ---------------------------------------------------------------------------
+
+def parse_modsecurity_sqli_event(raw_event: str, host: str) -> ModSecuritySqliEvidence:
+    """Parse a raw ModSecurity audit log transaction and extract SQLi evidence.
+
+    Deterministic Extraction Strategy:
+    1. Validate input types and non-empty invariants.
+    2. Extract transaction identifiers and client IPv4 from Section A header:
+       --<unique_id>-A--
+       [timestamp] <unique_id> <client_ip> <client_port> <server_ip> <server_port>
+    3. Isolate CRS alert messages and specifically target rule 942100.
+       Extract severity strictly from rule 942100's alert block to avoid
+       capturing earlier rules (e.g. 920350 WARNING).
+    4. Extract inbound anomaly score from correlation rule result.
+    5. Construct and return ModSecuritySqliEvidence, enforcing final schema
+       invariants and deep immutability.
+    """
+    if type(raw_event) is not str:
+        raise ModSecurityValidationError(
+            f"raw_event must be a string, got {type(raw_event).__name__}"
+        )
+    if not raw_event.strip():
+        raise ModSecurityValidationError("raw_event cannot be empty or whitespace-only")
+
+    if type(host) is not str:
+        raise ModSecurityValidationError(
+            f"host must be a string, got {type(host).__name__}"
+        )
+    if not host.strip():
+        raise ModSecurityValidationError("host cannot be empty or whitespace-only")
+
+    # 1. Extract Section A (Transaction Header)
+    sec_a_match = re.search(
+        r"--([A-Za-z0-9_\-]+)-A--[^\n]*\n\s*\[[^\]]+\]\s+(\S+)\s+(\S+)",
+        raw_event,
+    )
+    if not sec_a_match:
+        raise ModSecurityValidationError(
+            "Transaction Section A header containing unique_id and client IP not found"
+        )
+
+    delim_uid, header_uid, raw_src_ip = sec_a_match.groups()
+    if delim_uid in DISALLOWED_UNIQUE_IDS or header_uid in DISALLOWED_UNIQUE_IDS:
+        raise ModSecurityValidationError("Transaction contains invalid or placeholder unique_id")
+    if delim_uid != header_uid:
+        raise ModSecurityValidationError(
+            f"Transaction unique_id mismatch between delimiter '{delim_uid}' and header '{header_uid}'"
+        )
+    unique_id = header_uid
+
+    # 2. Extract SQLi detection block (Rule 942100)
+    # Split on Message: boundaries to isolate individual rule alerts
+    message_chunks = re.split(r"(?:^|\n)Message:\s*", raw_event)
+
+    sqli_rule_found = False
+    extracted_rule_id: Optional[int] = None
+    extracted_rule_msg: Optional[str] = None
+    extracted_severity: Optional[str] = None
+
+    for chunk in message_chunks:
+        id_match = re.search(r'\[id\s+"(\d+)"\]', chunk)
+        if not id_match:
+            continue
+        rule_id_int = int(id_match.group(1))
+        if rule_id_int == 942100:
+            sqli_rule_found = True
+            extracted_rule_id = rule_id_int
+
+            msg_match = re.search(r'\[msg\s+"([^"]+)"\]', chunk)
+            if msg_match:
+                extracted_rule_msg = msg_match.group(1)
+
+            sev_match = re.search(r'\[severity\s+"([^"]+)"\]', chunk)
+            if sev_match:
+                extracted_severity = sev_match.group(1)
+            break
+
+    if not sqli_rule_found or extracted_rule_id is None:
+        raise ModSecurityValidationError(
+            "Supported SQLi rule ID 942100 not found in transaction"
+        )
+
+    if extracted_rule_msg != "SQL Injection Attack Detected via libinjection":
+        raise ModSecurityValidationError(
+            f"Rule 942100 missing required SQLi detection message; found '{extracted_rule_msg}'"
+        )
+
+    if not extracted_severity:
+        raise ModSecurityValidationError(
+            "Rule 942100 missing severity tag"
+        )
+
+    # 3. Extract Inbound Anomaly Score
+    score_match = re.search(
+        r"Inbound Anomaly Score Exceeded[^(]*\(Total Score:\s*([^)]+)\)",
+        raw_event,
+    )
+    if not score_match:
+        raise ModSecurityValidationError(
+            "Inbound anomaly score correlation entry not found in transaction"
+        )
+
+    raw_score_str = score_match.group(1).strip()
+    try:
+        anomaly_score = int(raw_score_str)
+    except ValueError as exc:
+        raise ModSecurityValidationError(
+            f"Malformed anomaly score '{raw_score_str}': must be an integer"
+        ) from exc
+
+    if anomaly_score < 0:
+        raise ModSecurityValidationError(
+            f"Negative anomaly score '{anomaly_score}' is not allowed"
+        )
+
+    # 4. Construct and return normalized evidence record
+    return ModSecuritySqliEvidence(
+        host=host,
+        src_ip=raw_src_ip,
+        rule_id=extracted_rule_id,
+        rule_msg=extracted_rule_msg,
+        severity=extracted_severity,
+        anomaly_score=anomaly_score,
+        unique_id=unique_id,
+    )
