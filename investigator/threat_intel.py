@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 import ipaddress
-from typing import Any, Mapping, Optional, Protocol, runtime_checkable
+from typing import Any, Dict, Mapping, Optional, Protocol, runtime_checkable
 
 
 # ---------------------------------------------------------------------------
@@ -77,6 +77,158 @@ class ThreatIntelClientError(ThreatIntelError):
 
 class ThreatIntelValidationError(ValueError, ThreatIntelError):
     """Raised when ThreatIntelObservation schema validation fails."""
+
+
+# ---------------------------------------------------------------------------
+# Scope Classification Constants & Models
+# ---------------------------------------------------------------------------
+
+ALLOWED_IP_SCOPES = frozenset({
+    "public",
+    "private",
+    "loopback",
+    "link_local",
+    "multicast",
+    "reserved",
+    "unspecified",
+    "non_global",
+})
+
+_RFC1918_NETWORKS = (
+    ipaddress.IPv4Network("10.0.0.0/8"),
+    ipaddress.IPv4Network("172.16.0.0/12"),
+    ipaddress.IPv4Network("192.168.0.0/16"),
+)
+
+
+@dataclass(frozen=True)
+class IndicatorScope:
+    """Immutable normalized indicator scope classification.
+
+    Guarantees:
+    - All fields are strictly validated on instantiation.
+    - external_ti_eligible is True strictly when scope is 'public'.
+    - Immutable dataclass (frozen=True) prevents modification after validation.
+    - Deterministic to_dict() returns stable fields with strict types.
+    """
+
+    indicator: str
+    scope: str
+    external_ti_eligible: bool
+
+    def __post_init__(self) -> None:
+        if type(self.indicator) is not str:
+            raise ThreatIntelValidationError(
+                f"indicator must be str, got {type(self.indicator).__name__}"
+            )
+        if not self.indicator or self.indicator != self.indicator.strip():
+            raise ThreatIntelValidationError("indicator cannot be empty or have whitespace")
+
+        if type(self.scope) is not str:
+            raise ThreatIntelValidationError(
+                f"scope must be str, got {type(self.scope).__name__}"
+            )
+        if self.scope not in ALLOWED_IP_SCOPES:
+            raise ThreatIntelValidationError(
+                f"scope '{self.scope}' is not in allowed scopes: {sorted(ALLOWED_IP_SCOPES)}"
+            )
+
+        if type(self.external_ti_eligible) is not bool:
+            raise ThreatIntelValidationError(
+                f"external_ti_eligible must be bool, got {type(self.external_ti_eligible).__name__}"
+            )
+
+        expected_eligible = (self.scope == "public")
+        if self.external_ti_eligible != expected_eligible:
+            raise ThreatIntelValidationError(
+                f"external_ti_eligible must be {expected_eligible} for scope '{self.scope}', "
+                f"got {self.external_ti_eligible}"
+            )
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Return deterministic dictionary representation of indicator scope."""
+        return {
+            "indicator": self.indicator,
+            "scope": self.scope,
+            "external_ti_eligible": self.external_ti_eligible,
+        }
+
+
+def classify_ipv4_scope(ip_value: str) -> IndicatorScope:
+    """Classify an IPv4 address into a deterministic network scope.
+
+    Fails closed on invalid types, whitespace padding, malformed values, IPv6,
+    CIDR, URLs, and port notation.
+
+    Enforces specific-to-general deterministic precedence:
+    1. unspecified (0.0.0.0)
+    2. loopback (127.0.0.0/8)
+    3. link_local (169.254.0.0/16)
+    4. multicast (224.0.0.0/4)
+    5. reserved (240.0.0.0/4)
+    6. private (RFC 1918 strictly: 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16)
+    7. non_global (CGNAT 100.64.0.0/10 or any remaining non-global)
+    8. public (globally routable unicast IPv4)
+    """
+    if type(ip_value) is not str:
+        raise ValueError(f"ip_value must be exact str type, got {type(ip_value).__name__}")
+
+    if ip_value != ip_value.strip():
+        raise ValueError("ip_value contains leading or trailing whitespace")
+
+    if not ip_value:
+        raise ValueError("ip_value cannot be empty")
+
+    if len(ip_value) > MAX_INDICATOR_VALUE_LENGTH:
+        raise ValueError(f"ip_value exceeds maximum length of {MAX_INDICATOR_VALUE_LENGTH}")
+
+    # Disallow structural characters indicative of CIDR, URLs, zones, host:port
+    if "/" in ip_value:
+        raise ValueError(f"CIDR notation or path separators not allowed: '{ip_value}'")
+    if "://" in ip_value:
+        raise ValueError(f"URLs not allowed: '{ip_value}'")
+    if "%" in ip_value:
+        raise ValueError(f"IPv6 zone identifiers not allowed: '{ip_value}'")
+    if ":" in ip_value:
+        raise ValueError(f"Colons or port notation not allowed: '{ip_value}'")
+
+    try:
+        ip = ipaddress.IPv4Address(ip_value)
+    except (ipaddress.AddressValueError, ValueError) as err:
+        raise ValueError(f"Invalid IPv4 address: '{ip_value}': {err}") from err
+
+    # Deterministic specific-to-general precedence:
+    # a. unspecified
+    if ip.is_unspecified:
+        scope = "unspecified"
+    # b. loopback
+    elif ip.is_loopback:
+        scope = "loopback"
+    # c. link_local
+    elif ip.is_link_local:
+        scope = "link_local"
+    # d. multicast
+    elif ip.is_multicast:
+        scope = "multicast"
+    # e. reserved
+    elif ip.is_reserved:
+        scope = "reserved"
+    # f. private (RFC 1918 strictly)
+    elif any(ip in net for net in _RFC1918_NETWORKS):
+        scope = "private"
+    # g. non_global
+    elif not ip.is_global:
+        scope = "non_global"
+    # h. public
+    else:
+        scope = "public"
+
+    external_ti_eligible = (scope == "public")
+    return IndicatorScope(
+        indicator=str(ip),
+        scope=scope,
+        external_ti_eligible=external_ti_eligible,
+    )
 
 
 # ---------------------------------------------------------------------------
