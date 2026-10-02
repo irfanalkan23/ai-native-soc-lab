@@ -15,7 +15,7 @@ Trust & Scope Boundaries:
 from dataclasses import dataclass
 import ipaddress
 import re
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 
 # ---------------------------------------------------------------------------
@@ -316,3 +316,52 @@ def parse_modsecurity_sqli_event(raw_event: str, host: str) -> ModSecuritySqliEv
         anomaly_score=anomaly_score,
         unique_id=unique_id,
     )
+
+
+# ---------------------------------------------------------------------------
+# Deterministic Result Normalization
+# ---------------------------------------------------------------------------
+
+def normalize_modsecurity_sqli_record(record: Dict[str, Any]) -> ModSecuritySqliEvidence:
+    """Normalize a single Splunk result record into an immutable ModSecuritySqliEvidence.
+
+    Expects a dictionary with:
+    - '_raw': Non-empty string of raw ModSecurity transaction log text.
+    - 'host': Non-empty string of the target host (e.g. 'web01').
+
+    Fails closed with ModSecurityValidationError if:
+    - record is not a dict
+    - '_raw' or 'host' is missing, empty, or whitespace-only
+    - parsing '_raw' fails via parse_modsecurity_sqli_event
+    """
+    if not isinstance(record, dict):
+        raise ModSecurityValidationError(
+            f"record must be a dict, got {type(record).__name__}"
+        )
+    if "_raw" not in record:
+        raise ModSecurityValidationError("Record missing mandatory '_raw' field")
+    if "host" not in record:
+        raise ModSecurityValidationError("Record missing mandatory 'host' field")
+
+    raw_event = record["_raw"]
+    host = record["host"]
+
+    if type(raw_event) is not str or not raw_event.strip():
+        raise ModSecurityValidationError("Record '_raw' field must be a non-empty string")
+    if type(host) is not str or not host.strip():
+        raise ModSecurityValidationError("Record 'host' field must be a non-empty string")
+
+    return parse_modsecurity_sqli_event(raw_event=raw_event, host=host)
+
+
+def normalize_modsecurity_sqli_results(records: List[Dict[str, Any]]) -> List[ModSecuritySqliEvidence]:
+    """Normalize a batch of Splunk result records into a list of ModSecuritySqliEvidence.
+
+    Preserves deterministic ordering. Fails closed with ModSecurityValidationError
+    if any record in the batch fails normalization.
+    """
+    if not isinstance(records, list):
+        raise ModSecurityValidationError(
+            f"records must be a list, got {type(records).__name__}"
+        )
+    return [normalize_modsecurity_sqli_record(rec) for rec in records]

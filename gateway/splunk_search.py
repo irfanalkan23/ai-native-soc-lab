@@ -124,7 +124,7 @@ class SplunkSearchClient:
         raw_response = self._execute_http(req)
 
         # Parse structured response and extract allowlisted fields
-        records = self._parse_json_stream(raw_response)
+        records = self._parse_json_stream(raw_response, query_type=request.query_type)
 
         # Defense-in-depth: enforce post-parsing result count limit
         if len(records) > request.limit:
@@ -204,6 +204,40 @@ class SplunkSearchClient:
         )
         return self._execute_bounded_search(request)
 
+    def search_modsecurity_sqli(
+        self,
+        host: str = "web01",
+        minutes: int = 15,
+        limit: int = 10,
+    ) -> List[Dict[str, Any]]:
+        """Query Splunk for ModSecurity SQLi detection events on host web01.
+
+        Enforces policy validation before dispatching the request. The caller can
+        only supply bounded parameters (host, minutes, limit); arbitrary SPL and
+        endpoint paths cannot be supplied.
+
+        Args:
+            host: Target host name (strictly 'web01').
+            minutes: Lookback window in minutes (1-60).
+            limit: Maximum events to return (1-50).
+
+        Returns:
+            List of dictionaries containing host, _raw (and optionally _time).
+
+        Raises:
+            PolicyValidationError: If inputs violate policy boundaries.
+            SplunkConnectionError: If Splunk cannot be reached or times out.
+            SplunkResponseError: If Splunk returns an error envelope, HTTP error,
+                                 malformed data, missing mandatory fields, or excess events.
+        """
+        request = validate_search_request(
+            query_type="modsecurity_sqli_matches",
+            host=host,
+            minutes=minutes,
+            limit=limit,
+        )
+        return self._execute_bounded_search(request)
+
     def _execute_http(self, req: urllib.request.Request) -> str:
         """Execute the HTTP request using bounded reads and sanitized error reporting."""
         try:
@@ -236,12 +270,16 @@ class SplunkSearchClient:
                 f"Failed to connect to Splunk at {SPLUNK_EXPORT_ENDPOINT}: {type(err).__name__}"
             ) from err
 
-    def _parse_json_stream(self, raw_data: str) -> List[Dict[str, Any]]:
+    def _parse_json_stream(
+        self,
+        raw_data: str,
+        query_type: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
         """Parse Splunk export output_mode=json stream into structured records.
 
         Enforces:
         - Rejection of server messages (WARN, ERROR, FATAL envelopes).
-        - Schema completeness: all 7 detection fields must be present and non-empty.
+        - Schema completeness: mandatory detection fields must be present and non-empty.
         - Fail-closed parsing on malformed JSON or unexpected structures.
         """
         stripped = raw_data.strip()
@@ -285,22 +323,41 @@ class SplunkSearchClient:
                     f"Event envelope on line {line_num} contains non-dict result payload"
                 )
 
-            # Enforce mandatory detection fields contract:
-            # All 7 fields must exist and be non-empty strings. Partial records are rejected.
-            missing_or_empty = [
-                field for field in ALLOWED_FIELDS
-                if field not in result_map or not str(result_map[field]).strip()
-            ]
-            if missing_or_empty:
-                raise SplunkResponseError(
-                    f"Event record on line {line_num} missing required detection fields: {sorted(missing_or_empty)}"
-                )
+            if query_type == "modsecurity_sqli_matches":
+                # Mandatory fields for ModSecurity event records
+                required_fields = ("host", "_raw")
+                missing_or_empty = [
+                    field for field in required_fields
+                    if field not in result_map or not str(result_map[field]).strip()
+                ]
+                if missing_or_empty:
+                    raise SplunkResponseError(
+                        f"Event record on line {line_num} missing required detection fields: {sorted(missing_or_empty)}"
+                    )
+                record = {
+                    "host": str(result_map["host"]),
+                    "_raw": str(result_map["_raw"]),
+                }
+                if "_time" in result_map:
+                    record["_time"] = str(result_map["_time"])
+                records.append(record)
+            else:
+                # Enforce mandatory detection fields contract:
+                # All 7 fields must exist and be non-empty strings. Partial records are rejected.
+                missing_or_empty = [
+                    field for field in ALLOWED_FIELDS
+                    if field not in result_map or not str(result_map[field]).strip()
+                ]
+                if missing_or_empty:
+                    raise SplunkResponseError(
+                        f"Event record on line {line_num} missing required detection fields: {sorted(missing_or_empty)}"
+                    )
 
-            # Extract strictly the allowlisted fields
-            record = {
-                field: str(result_map[field])
-                for field in ALLOWED_FIELDS
-            }
-            records.append(record)
+                # Extract strictly the allowlisted fields
+                record = {
+                    field: str(result_map[field])
+                    for field in ALLOWED_FIELDS
+                }
+                records.append(record)
 
         return records

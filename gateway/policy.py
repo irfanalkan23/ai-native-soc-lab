@@ -17,8 +17,9 @@ class PolicyValidationError(ValueError):
 ALLOWED_QUERY_TYPES = frozenset({
     "encoded_powershell_matches",
     "powershell_network_retrieval_matches",
+    "modsecurity_sqli_matches",
 })
-ALLOWED_HOSTS = frozenset({"DC01"})
+ALLOWED_HOSTS = frozenset({"DC01", "web01"})
 
 MIN_MINUTES = 1
 MAX_MINUTES = 60
@@ -136,6 +137,14 @@ def build_allowlisted_spl(request: SearchRequest) -> str:
         cmd_predicate = r"(?i)(^|[[:space:]])-(encodedcommand|enc)([[:space:]]|$)"
     elif request.query_type == "powershell_network_retrieval_matches":
         cmd_predicate = r"(?i)(Invoke-WebRequest|Invoke-RestMethod|[.]DownloadString\()"
+    elif request.query_type == "modsecurity_sqli_matches":
+        return (
+            f'search index=main sourcetype=modsecurity host="{request.host}" earliest="-{request.minutes}m" '
+            '(942100 OR "SQL Injection Attack Detected via libinjection") '
+            '| sort - _time '
+            f'| head {request.limit} '
+            '| table _time host _raw'
+        )
     else:
         raise PolicyValidationError(f"Unauthorized query type: {request.query_type}")
 

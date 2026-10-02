@@ -35,6 +35,10 @@ from investigator.tools.base64_decoder import (
     DecoderError,
     decode_powershell_base64,
 )
+from investigator.modsecurity import (
+    ModSecurityError,
+    normalize_modsecurity_sqli_results,
+)
 from investigator.tools.mitre_mapper import (
     MitreMapping,
     MitreMappingError,
@@ -68,6 +72,7 @@ _BASE_ALLOWED_TOOLS: frozenset[str] = frozenset({
 ALLOWED_SPLUNK_QUERY_TYPES = frozenset({
     "encoded_powershell_matches",
     "powershell_network_retrieval_matches",
+    "modsecurity_sqli_matches",
 })
 
 
@@ -171,7 +176,8 @@ class ToolRouter:
         else:
             query_type = "encoded_powershell_matches"
 
-        host = args.get("host", "DC01")
+        default_host = "web01" if query_type == "modsecurity_sqli_matches" else "DC01"
+        host = args.get("host", default_host)
         minutes = args.get("minutes", 15)
         limit = args.get("limit", 10)
 
@@ -188,8 +194,18 @@ class ToolRouter:
                     minutes=minutes,
                     limit=limit,
                 )
+            elif query_type == "modsecurity_sqli_matches":
+                results = self._splunk_client.search_modsecurity_sqli(
+                    host=host,
+                    minutes=minutes,
+                    limit=limit,
+                )
+                evidence = normalize_modsecurity_sqli_results(results)
+                return [ev.to_dict() for ev in evidence]
             else:
                 raise ToolValidationError(f"Unauthorized query_type '{query_type}'")
+        except ModSecurityError as err:
+            raise ToolExecutionError(f"ModSecurity normalization failed: {err}") from err
         except (PolicyValidationError, ValueError) as err:
             raise ToolValidationError(f"Search input validation failed: {err}") from err
         except SplunkSearchError as err:
