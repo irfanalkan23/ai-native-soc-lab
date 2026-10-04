@@ -17,6 +17,16 @@ from evaluation.scenarios import (
     SCENARIO_TI_PRIVATE_IP,
     SCENARIO_TI_PROMPT_INJECTION,
     SCENARIO_TI_PROVIDER_FAILURE,
+    SCENARIO_WEB01_ARGUMENT_SMUGGLING,
+    SCENARIO_WEB01_JIRA_PAYLOAD_INJECTION,
+    SCENARIO_WEB01_LIVE_DERIVED_PRIVATE,
+    SCENARIO_WEB01_MODSECURITY_PROMPT_INJECTION,
+    SCENARIO_WEB01_PRIVATE_IP_TI_BYPASS,
+    SCENARIO_WEB01_RAW_PARSER_BYPASS,
+    SCENARIO_WEB01_RAW_SPL_BYPASS,
+    SCENARIO_WEB01_SEMANTIC_CONFUSION,
+    SCENARIO_WEB01_TI_PROVIDER_FAILURE,
+    SCENARIO_WEB01_UNAUTHORIZED_JIRA_CONFIG,
     arbitrary_spl_injection_executor,
     runtime_kill_switch_executor,
     telemetry_prompt_injection_executor,
@@ -24,6 +34,16 @@ from evaluation.scenarios import (
     ti_private_ip_executor,
     ti_prompt_injection_executor,
     ti_provider_failure_executor,
+    web01_argument_smuggling_executor,
+    web01_jira_payload_injection_executor,
+    web01_live_derived_private_executor,
+    web01_modsecurity_prompt_injection_executor,
+    web01_private_ip_ti_bypass_executor,
+    web01_raw_parser_bypass_executor,
+    web01_raw_spl_bypass_executor,
+    web01_semantic_confusion_executor,
+    web01_ti_provider_failure_executor,
+    web01_unauthorized_jira_config_executor,
 )
 from evaluation.schema import EvaluationScenario
 
@@ -42,6 +62,16 @@ EVALUATION_SCENARIOS: Tuple[EvaluationScenario, ...] = (
     SCENARIO_TI_ARGUMENT_SMUGGLING,
     SCENARIO_TI_PROMPT_INJECTION,
     SCENARIO_TI_PROVIDER_FAILURE,
+    SCENARIO_WEB01_MODSECURITY_PROMPT_INJECTION,
+    SCENARIO_WEB01_RAW_PARSER_BYPASS,
+    SCENARIO_WEB01_PRIVATE_IP_TI_BYPASS,
+    SCENARIO_WEB01_ARGUMENT_SMUGGLING,
+    SCENARIO_WEB01_TI_PROVIDER_FAILURE,
+    SCENARIO_WEB01_JIRA_PAYLOAD_INJECTION,
+    SCENARIO_WEB01_UNAUTHORIZED_JIRA_CONFIG,
+    SCENARIO_WEB01_RAW_SPL_BYPASS,
+    SCENARIO_WEB01_SEMANTIC_CONFUSION,
+    SCENARIO_WEB01_LIVE_DERIVED_PRIVATE,
 )
 
 # Canonical default scenario executors
@@ -53,6 +83,16 @@ DEFAULT_EXECUTORS: Mapping[str, Callable[[EvaluationScenario], EvaluationObserva
     SCENARIO_TI_ARGUMENT_SMUGGLING.scenario_id: ti_argument_smuggling_executor,
     SCENARIO_TI_PROMPT_INJECTION.scenario_id: ti_prompt_injection_executor,
     SCENARIO_TI_PROVIDER_FAILURE.scenario_id: ti_provider_failure_executor,
+    SCENARIO_WEB01_MODSECURITY_PROMPT_INJECTION.scenario_id: web01_modsecurity_prompt_injection_executor,
+    SCENARIO_WEB01_RAW_PARSER_BYPASS.scenario_id: web01_raw_parser_bypass_executor,
+    SCENARIO_WEB01_PRIVATE_IP_TI_BYPASS.scenario_id: web01_private_ip_ti_bypass_executor,
+    SCENARIO_WEB01_ARGUMENT_SMUGGLING.scenario_id: web01_argument_smuggling_executor,
+    SCENARIO_WEB01_TI_PROVIDER_FAILURE.scenario_id: web01_ti_provider_failure_executor,
+    SCENARIO_WEB01_JIRA_PAYLOAD_INJECTION.scenario_id: web01_jira_payload_injection_executor,
+    SCENARIO_WEB01_UNAUTHORIZED_JIRA_CONFIG.scenario_id: web01_unauthorized_jira_config_executor,
+    SCENARIO_WEB01_RAW_SPL_BYPASS.scenario_id: web01_raw_spl_bypass_executor,
+    SCENARIO_WEB01_SEMANTIC_CONFUSION.scenario_id: web01_semantic_confusion_executor,
+    SCENARIO_WEB01_LIVE_DERIVED_PRIVATE.scenario_id: web01_live_derived_private_executor,
 }
 
 

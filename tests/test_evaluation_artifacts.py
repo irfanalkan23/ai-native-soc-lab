@@ -38,8 +38,8 @@ class TestWriteSecurityEvaluationArtifacts(unittest.TestCase):
             # 2. JSON artifact content validation
             data = json.loads(json_path.read_text(encoding="utf-8"))
             self.assertEqual(data.get("report_type"), "ai_native_soc_agent_security_evaluation")
-            self.assertEqual(data["metrics"]["total_scenarios"], 7)
-            self.assertEqual(data["metrics"]["passed"], 7)
+            self.assertEqual(data["metrics"]["total_scenarios"], 17)
+            self.assertEqual(data["metrics"]["passed"], 17)
             self.assertEqual(data["metrics"]["failed"], 0)
             self.assertEqual(data["metrics"]["pass_rate"], 1.0)
             self.assertEqual(data["metrics"]["unsafe_tool_executions"], 0)
@@ -57,6 +57,16 @@ class TestWriteSecurityEvaluationArtifacts(unittest.TestCase):
                 "eval-11d-ti-argument-smuggling",
                 "eval-11d-ti-prompt-injection",
                 "eval-11d-ti-provider-failure",
+                "eval-12g-web01-modsecurity-prompt-injection",
+                "eval-12g-web01-raw-parser-bypass",
+                "eval-12g-web01-private-ip-ti-bypass",
+                "eval-12g-web01-argument-smuggling",
+                "eval-12g-web01-ti-provider-failure",
+                "eval-12g-web01-jira-payload-injection",
+                "eval-12g-web01-unauthorized-jira-config",
+                "eval-12g-web01-raw-spl-bypass",
+                "eval-12g-web01-semantic-confusion",
+                "eval-12g-web01-live-derived-private",
             ]
             actual_ids = [res["scenario_id"] for res in data["results"]]
             self.assertEqual(actual_ids, expected_scenario_ids)
@@ -65,8 +75,8 @@ class TestWriteSecurityEvaluationArtifacts(unittest.TestCase):
             md_content = md_path.read_text(encoding="utf-8")
             self.assertIn("# AI SOC Agent Security Evaluation Report", md_content)
             self.assertIn("controlled lab environment", md_content.lower())
-            self.assertIn("Total Scenarios: 7", md_content)
-            self.assertIn("Passed: 7", md_content)
+            self.assertIn("Total Scenarios: 17", md_content)
+            self.assertIn("Passed: 17", md_content)
             self.assertIn("Failed: 0", md_content)
             self.assertIn("Pass Rate: 100.0%", md_content)
             for sc_id in expected_scenario_ids:
@@ -194,12 +204,11 @@ class TestThreatIntelEvaluationArtifactExpectations(unittest.TestCase):
             json_path, md_path = write_security_evaluation_artifacts(output_dir=output_dir)
 
             data = json.loads(json_path.read_text(encoding="utf-8"))
-            if data["metrics"]["total_scenarios"] != 7:
+            if data["metrics"]["total_scenarios"] < 7:
                 self.fail(
-                    f"RED PHASE: expected 7 scenarios in evaluation artifact, got {data['metrics']['total_scenarios']}"
+                    f"expected at least 7 scenarios in evaluation artifact, got {data['metrics']['total_scenarios']}"
                 )
 
-            self.assertEqual(data["metrics"]["passed"], 7)
             self.assertEqual(data["metrics"]["failed"], 0)
             self.assertEqual(data["metrics"]["pass_rate"], 1.0)
 
@@ -213,11 +222,12 @@ class TestThreatIntelEvaluationArtifactExpectations(unittest.TestCase):
                 "eval-11d-ti-provider-failure",
             ]
             actual_ids = [res["scenario_id"] for res in data["results"]]
-            self.assertEqual(actual_ids, expected_scenario_ids)
+            for sc_id in expected_scenario_ids:
+                self.assertIn(sc_id, actual_ids)
 
             md_content = md_path.read_text(encoding="utf-8")
-            self.assertIn("Total Scenarios: 7", md_content)
-            self.assertIn("Passed: 7", md_content)
+            self.assertIn(f"Total Scenarios: {data['metrics']['total_scenarios']}", md_content)
+            self.assertIn(f"Passed: {data['metrics']['passed']}", md_content)
             for sc_id in expected_scenario_ids:
                 self.assertIn(sc_id, md_content)
 
