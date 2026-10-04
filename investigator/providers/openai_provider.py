@@ -38,7 +38,7 @@ Retry policy:
 
 import json
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Union
 
 from investigator.model import (
     DecisionType,
@@ -48,8 +48,11 @@ from investigator.model import (
     ToolRequest,
 )
 from investigator.schemas import (
+    InvestigationInput,
     InvestigationResult,
     SchemaValidationError,
+    Web01InvestigationAssessment,
+    Web01InvestigationRequest,
 )
 
 
@@ -87,7 +90,7 @@ RESPONSE_FORMAT_INSTRUCTIONS: str = """\
 JSON OUTPUT CONTRACT
 ========================
 You MUST respond with a single valid JSON object. No markdown, no commentary.
-The JSON object must have exactly ONE of the following two forms:
+The JSON object must have exactly ONE of the following forms:
 
 Form A — Tool request:
 {
@@ -96,7 +99,7 @@ Form A — Tool request:
   "arguments": { "<key>": "<primitive value>" }
 }
 
-Form B — Final result:
+Form B — Final result (Endpoint investigation):
 {
   "decision_type": "final_result",
   "final_result": {
@@ -111,12 +114,27 @@ Form B — Final result:
   }
 }
 
+Form B (WEB01) — Final result (Web01InvestigationAssessment):
+{
+  "decision_type": "final_result",
+  "final_result": {
+    "assessment": "<non-empty string, max 2000 chars>",
+    "confidence": "<low | medium | high>",
+    "evidence_summary": "<non-empty string, max 2000 chars>",
+    "attack_type": "sql_injection",
+    "escalation_recommended": true|false,
+    "recommended_next_step": "<non-empty string, max 500 chars>"
+  }
+}
+
 Rules:
 - decision_type must be exactly "tool_request" or "final_result".
 - Do not include both tool_name and final_result in the same response.
 - argument values must be strings, numbers, booleans, or null (no nested objects/lists).
-- confidence_level must be exactly one of: low, medium, high.
+- confidence and confidence_level must be exactly one of: low, medium, high.
 - Do not include markdown code fences or any text outside the JSON object.
+- Advisory analysis only: no execution fields (isolate_host, block_ip, etc.) and no raw telemetry fields.
+- No response action may be claimed as executed.
 """
 
 
@@ -195,23 +213,35 @@ class _OpenAIConfig:
 # ---------------------------------------------------------------------------
 
 def _serialize_investigation_input(inp: Any) -> Dict[str, str]:
-    """Return a plain dict of all InvestigationInput fields.
+    """Return a plain dict of InvestigationInput or Web01InvestigationRequest fields.
 
     No dynamic serialization — each field is listed explicitly so that
     no unexpected attributes can be inadvertently included.
     """
-    return {
-        "incident_id": inp.incident_id,
-        "timestamp": inp.timestamp,
-        "host": inp.host,
-        "user": inp.user,
-        "image": inp.image,
-        "command_line": inp.command_line,
-        "parent_image": inp.parent_image,
-        "parent_command_line": inp.parent_command_line,
-        "detection_name": inp.detection_name,
-        "detection_id": inp.detection_id,
-    }
+    if isinstance(inp, InvestigationInput):
+        return {
+            "incident_id": inp.incident_id,
+            "timestamp": inp.timestamp,
+            "host": inp.host,
+            "user": inp.user,
+            "image": inp.image,
+            "command_line": inp.command_line,
+            "parent_image": inp.parent_image,
+            "parent_command_line": inp.parent_command_line,
+            "detection_name": inp.detection_name,
+            "detection_id": inp.detection_id,
+        }
+    elif isinstance(inp, Web01InvestigationRequest):
+        return {
+            "detection_id": inp.detection_id,
+            "host": inp.host,
+            "detection_type": inp.detection_type,
+            "rule_id": str(inp.rule_id),
+        }
+    else:
+        raise OpenAIResponseError(
+            f"provider_unsupported_request_type: {type(inp).__name__}"
+        )
 
 
 def _serialize_prior_results(prior_tool_results: tuple) -> list:
@@ -373,16 +403,32 @@ def _parse_tool_request(data: dict) -> ModelDecision:
     )
 
 
+_ALLOWED_DC01_FINAL_FIELDS = frozenset({
+    "summary",
+    "observations",
+    "decoded_command",
+    "mitre_techniques",
+    "suspicious_indicators",
+    "recommended_next_step",
+    "confidence_level",
+    "evidence_refs",
+})
+
+_ALLOWED_WEB01_FINAL_FIELDS = frozenset({
+    "assessment",
+    "confidence",
+    "evidence_summary",
+    "attack_type",
+    "escalation_recommended",
+    "recommended_next_step",
+})
+
+
 def _parse_final_result(data: dict) -> ModelDecision:
-    """Build a FINAL_RESULT ModelDecision from a parsed provider dict.
+    """Build a FINAL_RESULT ModelDecision from a parsed provider dict for DC01.
 
     All InvestigationResult bounds are enforced by the InvestigationResult
-    constructor. This function only maps JSON keys to constructor arguments.
-
-    Raises:
-        OpenAIResponseError: If the final_result field is missing or not a dict.
-        SchemaValidationError: If InvestigationResult validation fails.
-        ModelValidationError: If ModelDecision validation fails.
+    constructor. Unknown/unexpected fields fail closed with OpenAIResponseError.
     """
     fr_data = data.get("final_result")
     if not isinstance(fr_data, dict):
@@ -390,8 +436,13 @@ def _parse_final_result(data: dict) -> ModelDecision:
             "provider_final_result_missing: final_result must be a JSON object"
         )
 
-    # Map JSON fields → InvestigationResult constructor
-    # Any missing/wrong-type field will be caught by InvestigationResult.__post_init__
+    # Fail closed on unexpected fields (e.g. isolate_host, block_ip, _raw, etc.)
+    unexpected_fields = set(fr_data.keys()) - _ALLOWED_DC01_FINAL_FIELDS
+    if unexpected_fields:
+        raise OpenAIResponseError(
+            f"provider_final_result_unsupported_fields: unexpected fields {sorted(unexpected_fields)}"
+        )
+
     try:
         result = InvestigationResult(
             summary=fr_data.get("summary", ""),
@@ -414,16 +465,63 @@ def _parse_final_result(data: dict) -> ModelDecision:
     )
 
 
-def _parse_response_to_decision(raw_text: str) -> ModelDecision:
+def _parse_web01_final_result(data: dict) -> ModelDecision:
+    """Build a FINAL_RESULT ModelDecision for Web01InvestigationAssessment.
+
+    Enforces:
+      - Exactly allowlisted fields; rejects unexpected execution/remediation fields.
+      - Schema validation via Web01InvestigationAssessment.__post_init__.
+      - Raises OpenAIResponseError on any failure.
+    """
+    fr_data = data.get("final_result")
+    if not isinstance(fr_data, dict):
+        raise OpenAIResponseError(
+            "provider_final_result_missing: final_result must be a JSON object"
+        )
+
+    # Fail closed on unexpected fields (e.g. isolate_host, block_ip, _raw, etc.)
+    unexpected_fields = set(fr_data.keys()) - _ALLOWED_WEB01_FINAL_FIELDS
+    if unexpected_fields:
+        raise OpenAIResponseError(
+            f"provider_final_result_unsupported_fields: unexpected fields {sorted(unexpected_fields)}"
+        )
+
+    try:
+        result = Web01InvestigationAssessment(
+            assessment=fr_data.get("assessment", ""),
+            confidence=fr_data.get("confidence", ""),
+            evidence_summary=fr_data.get("evidence_summary", ""),
+            attack_type=fr_data.get("attack_type", ""),
+            escalation_recommended=fr_data.get("escalation_recommended"),
+            recommended_next_step=fr_data.get("recommended_next_step", ""),
+        )
+    except (SchemaValidationError, TypeError) as exc:
+        raise OpenAIResponseError(
+            f"provider_final_result_invalid: {type(exc).__name__}"
+        ) from exc
+
+    return ModelDecision(
+        decision_type=DecisionType.FINAL_RESULT,
+        final_result=result,
+    )
+
+
+def _parse_response_to_decision(
+    raw_text: str,
+    investigation_input: Optional[Union[InvestigationInput, Web01InvestigationRequest]] = None,
+) -> ModelDecision:
     """Parse and validate a raw provider JSON string into a ModelDecision.
 
     Enforces the discriminated-union contract:
       - Exactly one branch (tool_request OR final_result) must be present.
       - decision_type must be a known value.
+      - Selection of final_result schema is deterministically driven by
+        investigation_input type (defaults to DC01 InvestigationResult when unsupplied).
       - No raw provider objects or strings pass through.
 
     Args:
         raw_text: Raw JSON string from the model output.
+        investigation_input: Active investigation context (InvestigationInput or Web01InvestigationRequest).
 
     Returns:
         Validated ModelDecision.
@@ -431,7 +529,7 @@ def _parse_response_to_decision(raw_text: str) -> ModelDecision:
     Raises:
         OpenAIResponseError: On any structural, type, or parsing failure.
         ModelValidationError: Propagated from ToolRequest/ModelDecision.
-        SchemaValidationError: Propagated from InvestigationResult.
+        SchemaValidationError: Propagated from InvestigationResult/Web01InvestigationAssessment.
     """
     data = _parse_json_response(raw_text)
 
@@ -458,7 +556,10 @@ def _parse_response_to_decision(raw_text: str) -> ModelDecision:
                 "provider_ambiguous_decision: final_result branch "
                 "must not include tool_name"
             )
-        return _parse_final_result(data)
+        if isinstance(investigation_input, Web01InvestigationRequest):
+            return _parse_web01_final_result(data)
+        else:
+            return _parse_final_result(data)
 
     else:
         raise OpenAIResponseError(
@@ -580,4 +681,7 @@ class OpenAIModel:
 
         # Extract and parse text — all failures are OpenAIResponseError
         raw_text = _extract_text_from_response(response)
-        return _parse_response_to_decision(raw_text)
+        return _parse_response_to_decision(
+            raw_text,
+            investigation_input=request.investigation_input,
+        )
