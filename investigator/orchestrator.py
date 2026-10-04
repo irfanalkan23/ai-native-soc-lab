@@ -18,7 +18,7 @@ Architecture Guarantees:
 """
 
 import json
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from investigator.audit import AuditEvent, AuditEventType, AuditLog
 from investigator.model import (
@@ -36,6 +36,7 @@ from investigator.schemas import (
     Web01InvestigationAssessment,
     Web01InvestigationRequest,
 )
+from investigator.threat_intel import ThreatIntelError, classify_ipv4_scope
 from investigator.tool_result import MAX_RESULT_TEXT_LENGTH, ToolResultEnvelope
 from investigator.tool_router import ToolRouter, ToolValidationError, ToolExecutionError
 
@@ -97,7 +98,11 @@ def _tool_audit_code(tool_name: str, suffix: str) -> str:
 # Result serialization helpers
 # ---------------------------------------------------------------------------
 
-def _serialize_tool_result(tool_name: str, raw_result: Any) -> str:
+def _serialize_tool_result(
+    tool_name: str,
+    raw_result: Any,
+    threat_intel: Optional[Dict[str, Any]] = None,
+) -> str:
     """Serialize a ToolRouter result into a bounded JSON string for the model.
 
     Returns a JSON string. Raises ValueError if the result cannot be serialized
@@ -124,6 +129,8 @@ def _serialize_tool_result(tool_name: str, raw_result: Any) -> str:
         elif tool_name == "bounded_splunk_search":
             # List[Dict[str, Any]]
             payload = {"events": raw_result, "event_count": len(raw_result)}
+            if threat_intel is not None:
+                payload["threat_intel"] = threat_intel
         elif tool_name == "threat_intel_lookup":
             # ThreatIntelObservation dataclass
             if hasattr(raw_result, "to_dict"):
@@ -194,6 +201,100 @@ class InvestigationOrchestrator:
     def guard(self) -> RuntimeGuard:
         """Return the runtime guard attached to this orchestrator instance."""
         return self._guard
+
+    def _evaluate_web01_threat_intel(
+        self,
+        src_ip: str,
+        _audit: Callable[[AuditEventType, str], None],
+        current_tool_calls: int,
+    ) -> Tuple[Dict[str, Any], int]:
+        """Deterministically evaluate source IP scope and optional bounded TI lookup.
+
+        Guarantees:
+        - Deterministic policy gating via classify_ipv4_scope.
+        - Private/non-eligible IP produces SKIPPED_INELIGIBLE; zero lookups executed,
+          zero tool execution budget consumed, no false tool audit events emitted.
+        - Public eligible IP requires RuntimeGuard permission and tool budget availability.
+        - If RuntimeGuard halts (kill switch or budget), halts immediately with 0 lookups.
+        - Public eligible lookup emits static audit lifecycle events (REQUESTED, ALLOWED, COMPLETED).
+        - ToolExecutionError / ThreatIntelError at orchestration boundary produces LOOKUP_FAILED
+          without leaking provider internals, allowing investigation to proceed.
+        - Returned dict contains strictly sanitized normalized fields without secrets.
+        """
+        try:
+            scope = classify_ipv4_scope(src_ip)
+        except (ValueError, TypeError):
+            return {
+                "scope": "non_global",
+                "external_ti_eligible": False,
+                "threat_intel_status": "SKIPPED_INELIGIBLE",
+                "skip_reason": "ineligible_scope:non_global",
+            }, 0
+
+        if not scope.external_ti_eligible:
+            return {
+                "scope": scope.scope,
+                "external_ti_eligible": False,
+                "threat_intel_status": "SKIPPED_INELIGIBLE",
+                "skip_reason": f"ineligible_scope:{scope.scope}",
+            }, 0
+
+        # Public eligible IP: policy requests threat_intel_lookup
+        _audit(AuditEventType.TOOL_REQUESTED, _tool_audit_code("threat_intel_lookup", "requested"))
+
+        # Budget check: ensure orchestrator tool budget is not exhausted
+        if current_tool_calls >= MAX_TOOL_CALLS:
+            _audit(AuditEventType.TOOL_REJECTED, "BUDGET_EXHAUSTED")
+            raise OrchestratorError(
+                f"Tool budget exhausted: {MAX_TOOL_CALLS} tool calls already used. "
+                f"Cannot execute threat_intel_lookup."
+            )
+
+        _audit(AuditEventType.TOOL_ALLOWED, _tool_audit_code("threat_intel_lookup", "allowed"))
+
+        # RuntimeGuard check: ensure kill switch is inactive and runtime budget permits execution
+        try:
+            self._guard.before_tool_execution()
+        except RuntimeHaltError as exc:
+            raise OrchestratorError(
+                f"Runtime guard halted tool execution: {exc.detail_code}"
+            ) from exc
+
+        # Execute bounded lookup via ToolRouter
+        try:
+            obs = self._tool_router.execute_tool(
+                "threat_intel_lookup",
+                {"indicator": scope.indicator},
+            )
+            _audit(AuditEventType.TOOL_COMPLETED, _tool_audit_code("threat_intel_lookup", "ok"))
+            obs_dict = {
+                "indicator": obs.indicator,
+                "indicator_type": obs.indicator_type,
+                "provider": obs.provider,
+                "verdict": obs.verdict,
+                "malicious_count": obs.malicious_count,
+                "suspicious_count": obs.suspicious_count,
+                "harmless_count": obs.harmless_count,
+                "undetected_count": obs.undetected_count,
+                "source_reference": obs.source_reference,
+            }
+            return {
+                "scope": scope.scope,
+                "external_ti_eligible": True,
+                "threat_intel_status": "ENRICHED",
+                "observation": obs_dict,
+            }, 1
+        except (ToolExecutionError, ThreatIntelError):
+            _audit(
+                AuditEventType.TOOL_COMPLETED,
+                _tool_audit_code("threat_intel_lookup", "execution_failed"),
+            )
+            return {
+                "scope": scope.scope,
+                "external_ti_eligible": True,
+                "threat_intel_status": "LOOKUP_FAILED",
+                "failure_reason": "provider_lookup_failed",
+            }, 1
 
     def investigate(
         self,
@@ -395,9 +496,25 @@ class InvestigationOrchestrator:
                     _audit(AuditEventType.TOOL_COMPLETED, exec_failed_audit_code)
                     continue
 
+                # Deterministically evaluate TI policy for WEB01 ModSecurity evidence
+                ti_context: Optional[Dict[str, Any]] = None
+                if is_web01 and tool_req.tool_name == "bounded_splunk_search" and isinstance(raw_result, list) and raw_result:
+                    src_ip = raw_result[0].get("src_ip")
+                    if isinstance(src_ip, str):
+                        ti_context, added_calls = self._evaluate_web01_threat_intel(
+                            src_ip,
+                            _audit,
+                            tool_calls_used + 1,
+                        )
+                        tool_calls_used += added_calls
+
                 # Serialize result to bounded JSON string
                 try:
-                    result_text = _serialize_tool_result(tool_req.tool_name, raw_result)
+                    result_text = _serialize_tool_result(
+                        tool_req.tool_name,
+                        raw_result,
+                        threat_intel=ti_context,
+                    )
                     envelope = ToolResultEnvelope(
                         tool_name=tool_req.tool_name,
                         success=True,
