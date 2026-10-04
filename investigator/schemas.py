@@ -9,7 +9,7 @@ enforcement logic.
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional, Sequence, Tuple, Union
+from typing import Any, Dict, Optional, Sequence, Tuple, Union
 
 
 class SchemaValidationError(ValueError):
@@ -173,3 +173,153 @@ class InvestigationResult:
 
             # Convert to deeply immutable tuple
             object.__setattr__(self, field, tuple(validated_elements))
+
+
+# --- Milestone 13A: WEB01 Investigation Contracts ---
+
+WEB01_SUPPORTED_DETECTION_ID: str = "DET-WEB-001"
+WEB01_SUPPORTED_HOST: str = "web01"
+WEB01_SUPPORTED_DETECTION_TYPE: str = "modsecurity_sqli"
+WEB01_SUPPORTED_RULE_ID: int = 942100
+
+ALLOWED_WEB01_ATTACK_TYPES = frozenset({"sql_injection"})
+
+
+@dataclass(frozen=True)
+class Web01InvestigationRequest:
+    """Immutable input contract for a WEB01 AI-assisted investigation.
+
+    Captures bounded alert identification without exposing raw telemetry,
+    arbitrary SPL, provider controls, or credentials.
+    """
+    detection_id: str
+    host: str
+    detection_type: str
+    rule_id: int
+
+    def __post_init__(self) -> None:
+        """Validate exact supported detection context fail-closed."""
+        if type(self.detection_id) is not str:
+            raise SchemaValidationError(
+                f"Field 'detection_id' must be a str, got {type(self.detection_id).__name__}"
+            )
+        if not self.detection_id.strip():
+            raise SchemaValidationError(
+                "Field 'detection_id' cannot be empty or whitespace-only"
+            )
+        if self.detection_id != WEB01_SUPPORTED_DETECTION_ID:
+            raise SchemaValidationError(
+                f"Unsupported detection_id '{self.detection_id}'. Supported: '{WEB01_SUPPORTED_DETECTION_ID}'"
+            )
+
+        if type(self.host) is not str:
+            raise SchemaValidationError(
+                f"Field 'host' must be a str, got {type(self.host).__name__}"
+            )
+        if not self.host.strip():
+            raise SchemaValidationError(
+                "Field 'host' cannot be empty or whitespace-only"
+            )
+        if self.host != WEB01_SUPPORTED_HOST:
+            raise SchemaValidationError(
+                f"Unsupported host '{self.host}'. Supported: '{WEB01_SUPPORTED_HOST}'"
+            )
+
+        if type(self.detection_type) is not str:
+            raise SchemaValidationError(
+                f"Field 'detection_type' must be a str, got {type(self.detection_type).__name__}"
+            )
+        if not self.detection_type.strip():
+            raise SchemaValidationError(
+                "Field 'detection_type' cannot be empty or whitespace-only"
+            )
+        if self.detection_type != WEB01_SUPPORTED_DETECTION_TYPE:
+            raise SchemaValidationError(
+                f"Unsupported detection_type '{self.detection_type}'. Supported: '{WEB01_SUPPORTED_DETECTION_TYPE}'"
+            )
+
+        if type(self.rule_id) is not int or isinstance(self.rule_id, bool):
+            raise SchemaValidationError(
+                f"Field 'rule_id' must be an int, got {type(self.rule_id).__name__}"
+            )
+        if self.rule_id != WEB01_SUPPORTED_RULE_ID:
+            raise SchemaValidationError(
+                f"Unsupported rule_id '{self.rule_id}'. Supported: {WEB01_SUPPORTED_RULE_ID}"
+            )
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Return deterministic dictionary representation of the request."""
+        return {
+            "detection_id": self.detection_id,
+            "host": self.host,
+            "detection_type": self.detection_type,
+            "rule_id": self.rule_id,
+        }
+
+
+@dataclass(frozen=True)
+class Web01InvestigationAssessment:
+    """Immutable output contract for WEB01 AI-assisted investigation analysis.
+
+    Carries bounded, human-reviewable advisory assessments and recommendations.
+    Carries zero execution authority and cannot contain execution status or state fields.
+    """
+    assessment: str
+    confidence: str
+    evidence_summary: str
+    attack_type: str
+    escalation_recommended: bool
+    recommended_next_step: str
+
+    def __post_init__(self) -> None:
+        """Validate advisory assessment schema invariants fail-closed."""
+        if type(self.assessment) is not str or not self.assessment.strip():
+            raise SchemaValidationError("Field 'assessment' must be a non-empty string")
+        if len(self.assessment) > MAX_SUMMARY_LENGTH:
+            raise SchemaValidationError(
+                f"Field 'assessment' length {len(self.assessment)} exceeds maximum {MAX_SUMMARY_LENGTH}"
+            )
+
+        if type(self.confidence) is not str or self.confidence not in ALLOWED_CONFIDENCE_LEVELS:
+            raise SchemaValidationError(
+                f"Invalid confidence '{self.confidence}'. Allowed: {sorted(ALLOWED_CONFIDENCE_LEVELS)}"
+            )
+
+        if type(self.evidence_summary) is not str or not self.evidence_summary.strip():
+            raise SchemaValidationError(
+                "Field 'evidence_summary' must be a non-empty string"
+            )
+        if len(self.evidence_summary) > MAX_SUMMARY_LENGTH:
+            raise SchemaValidationError(
+                f"Field 'evidence_summary' length {len(self.evidence_summary)} exceeds maximum {MAX_SUMMARY_LENGTH}"
+            )
+
+        if type(self.attack_type) is not str or self.attack_type not in ALLOWED_WEB01_ATTACK_TYPES:
+            raise SchemaValidationError(
+                f"Invalid attack_type '{self.attack_type}'. Allowed: {sorted(ALLOWED_WEB01_ATTACK_TYPES)}"
+            )
+
+        if type(self.escalation_recommended) is not bool:
+            raise SchemaValidationError(
+                f"Field 'escalation_recommended' must be a bool, got {type(self.escalation_recommended).__name__}"
+            )
+
+        if type(self.recommended_next_step) is not str or not self.recommended_next_step.strip():
+            raise SchemaValidationError(
+                "Field 'recommended_next_step' must be a non-empty string"
+            )
+        if len(self.recommended_next_step) > MAX_RECOMMENDED_STEP_LENGTH:
+            raise SchemaValidationError(
+                f"Field 'recommended_next_step' length {len(self.recommended_next_step)} exceeds maximum {MAX_RECOMMENDED_STEP_LENGTH}"
+            )
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Return deterministic dictionary representation of the assessment."""
+        return {
+            "assessment": self.assessment,
+            "confidence": self.confidence,
+            "evidence_summary": self.evidence_summary,
+            "attack_type": self.attack_type,
+            "escalation_recommended": self.escalation_recommended,
+            "recommended_next_step": self.recommended_next_step,
+        }
