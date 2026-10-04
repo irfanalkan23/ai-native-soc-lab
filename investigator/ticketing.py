@@ -42,7 +42,7 @@ MAX_ISSUE_TYPE_LENGTH = 32
 MAX_SUMMARY_LENGTH = 255
 MAX_DESCRIPTION_LENGTH = 4096
 MAX_LABEL_LENGTH = 64
-MAX_LABELS_COUNT = 9
+MAX_LABELS_COUNT = 10
 MAX_EXTERNAL_REF_LENGTH = 64
 MAX_PROVIDER_LENGTH = 32
 MAX_TICKET_KEY_LENGTH = 64
@@ -65,6 +65,7 @@ ALLOWED_TICKET_LABELS = frozenset({
     "approval-not-required",
     "simulated-containment",
     "action-not-executed",
+    "web-attack",
 })
 
 SUCCESS_DETAIL_CODE_BY_PROVIDER = {
@@ -385,6 +386,10 @@ def build_ticket_request(
     if incident_record.mitre_technique_id == "T1105":
         derived_labels.append("network-retrieval")
 
+    # "web-attack" label is derived ONLY from validated ModSecurity evidence
+    if incident_record.modsecurity_evidence is not None:
+        derived_labels.append("web-attack")
+
     # "benign-test" label is derived ONLY from validated policy reason code,
     # NOT solely from risk_score == 0.
     if "benign_lab_fixture_matched" in incident_record.policy_reason_codes:
@@ -441,6 +446,44 @@ def build_ticket_request(
         f"* Simulation Status: {incident_record.simulation_status}",
         f"* Simulation Detail: {incident_record.simulation_detail_code}",
     ]
+
+    # 5. ModSecurity Evidence (if present)
+    if incident_record.modsecurity_evidence is not None:
+        ev = incident_record.modsecurity_evidence
+        desc_lines.extend([
+            "",
+            "h2. ModSecurity Evidence",
+            f"* Source IP: {ev.src_ip}",
+            f"* Rule ID: {ev.rule_id}",
+            f"* Rule Message: {ev.rule_msg}",
+            f"* Severity: {ev.severity}",
+            f"* Anomaly Score: {ev.anomaly_score}",
+            f"* Unique ID: {ev.unique_id}",
+        ])
+
+    # 6. Threat Intelligence State (if present)
+    if incident_record.threat_intel_status is not None:
+        desc_lines.extend([
+            "",
+            "h2. Threat Intelligence",
+            f"* Status: {incident_record.threat_intel_status}",
+        ])
+        if incident_record.threat_intel_status == "SKIPPED_INELIGIBLE":
+            desc_lines.append(f"* Reason: {incident_record.threat_intel_skip_reason}")
+        elif incident_record.threat_intel_status == "ENRICHED":
+            obs = incident_record.threat_intel_observation
+            if obs is not None:
+                desc_lines.extend([
+                    f"* Indicator: {obs.indicator}",
+                    f"* Provider: {obs.provider}",
+                    f"* Verdict: {obs.verdict}",
+                    f"* Malicious Count: {obs.malicious_count}",
+                    f"* Suspicious Count: {obs.suspicious_count}",
+                    f"* Harmless Count: {obs.harmless_count}",
+                    f"* Undetected Count: {obs.undetected_count}",
+                ])
+        elif incident_record.threat_intel_status == "LOOKUP_FAILED":
+            desc_lines.append(f"* Error Detail: {incident_record.threat_intel_skip_reason}")
 
     base_desc_text = "\n".join(desc_lines)
     if len(base_desc_text) > MAX_DESCRIPTION_LENGTH:
