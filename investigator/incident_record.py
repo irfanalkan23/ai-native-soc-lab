@@ -63,8 +63,19 @@ from investigator.simulator import (
 )
 
 
+from investigator.modsecurity import ModSecuritySqliEvidence
+from investigator.modsecurity_enrichment import ModSecurityEnrichmentResult
+from investigator.threat_intel import ThreatIntelObservation
+
+
 SCHEMA_VERSION = "1.0.0"
 DEFAULT_INCIDENTS_DIR = Path("artifacts/incidents")
+
+ALLOWED_THREAT_INTEL_STATUSES = frozenset({
+    "SKIPPED_INELIGIBLE",
+    "ENRICHED",
+    "LOOKUP_FAILED",
+})
 
 # Maximum string lengths for incident record fields
 MAX_INCIDENT_ID_LENGTH = 64
@@ -188,6 +199,10 @@ class IncidentRecord:
     approval_reason_code: Optional[str]
     simulation_status: str
     simulation_detail_code: str
+    modsecurity_evidence: Optional[ModSecuritySqliEvidence] = None
+    threat_intel_status: Optional[str] = None
+    threat_intel_skip_reason: Optional[str] = None
+    threat_intel_observation: Optional[ThreatIntelObservation] = None
 
     def __post_init__(self) -> None:
         """Validate all field types, bounds, and allowlisted enums."""
@@ -339,9 +354,72 @@ class IncidentRecord:
                 f"simulation_detail_code must be one of {sorted(SIMULATION_DETAIL_CODES)}, got {self.simulation_detail_code!r}"
             )
 
+        # 17. modsecurity_evidence & threat_intel fields (Optional)
+        if self.modsecurity_evidence is not None:
+            if type(self.modsecurity_evidence) is not ModSecuritySqliEvidence:
+                raise IncidentRecordError(
+                    f"modsecurity_evidence must be ModSecuritySqliEvidence, got {type(self.modsecurity_evidence).__name__}"
+                )
+
+        if self.threat_intel_status is not None:
+            if type(self.threat_intel_status) is not str or self.threat_intel_status not in ALLOWED_THREAT_INTEL_STATUSES:
+                raise IncidentRecordError(
+                    f"threat_intel_status must be one of {sorted(ALLOWED_THREAT_INTEL_STATUSES)}, got {self.threat_intel_status!r}"
+                )
+
+        if self.threat_intel_status == "SKIPPED_INELIGIBLE":
+            if self.threat_intel_observation is not None:
+                raise IncidentRecordError(
+                    "threat_intel_observation must be None when threat_intel_status is SKIPPED_INELIGIBLE"
+                )
+            if type(self.threat_intel_skip_reason) is not str or not self.threat_intel_skip_reason.strip():
+                raise IncidentRecordError(
+                    "threat_intel_skip_reason must be a non-empty str when threat_intel_status is SKIPPED_INELIGIBLE"
+                )
+            lower_reason = self.threat_intel_skip_reason.lower()
+            if "lookup_failed" in lower_reason or "fail" in lower_reason or "error" in lower_reason:
+                raise IncidentRecordError(
+                    f"threat_intel_skip_reason cannot represent a lookup failure when status is SKIPPED_INELIGIBLE: {self.threat_intel_skip_reason!r}"
+                )
+
+        elif self.threat_intel_status == "ENRICHED":
+            if type(self.threat_intel_observation) is not ThreatIntelObservation:
+                raise IncidentRecordError(
+                    "threat_intel_observation must be ThreatIntelObservation when threat_intel_status is ENRICHED"
+                )
+            if self.threat_intel_skip_reason is not None:
+                raise IncidentRecordError(
+                    "threat_intel_skip_reason must be None when threat_intel_status is ENRICHED"
+                )
+
+        elif self.threat_intel_status == "LOOKUP_FAILED":
+            if self.threat_intel_observation is not None:
+                raise IncidentRecordError(
+                    "threat_intel_observation must be None when threat_intel_status is LOOKUP_FAILED"
+                )
+            if type(self.threat_intel_skip_reason) is not str or not self.threat_intel_skip_reason.strip():
+                raise IncidentRecordError(
+                    "threat_intel_skip_reason must be a non-empty str when threat_intel_status is LOOKUP_FAILED"
+                )
+            if self.threat_intel_skip_reason.startswith("ineligible_"):
+                raise IncidentRecordError(
+                    f"threat_intel_skip_reason cannot represent an ineligible scope skip when status is LOOKUP_FAILED: {self.threat_intel_skip_reason!r}"
+                )
+
+        else:
+            # threat_intel_status is None
+            if self.threat_intel_observation is not None:
+                raise IncidentRecordError(
+                    "threat_intel_observation must be None when threat_intel_status is None"
+                )
+            if self.threat_intel_skip_reason is not None:
+                raise IncidentRecordError(
+                    "threat_intel_skip_reason must be None when threat_intel_status is None"
+                )
+
     def to_dict(self) -> Dict[str, Any]:
         """Return a structured dictionary representation with allowlisted fields only."""
-        return {
+        d: Dict[str, Any] = {
             "schema_version": self.schema_version,
             "incident_id": self.incident_id,
             "created_at_utc": self.created_at_utc,
@@ -367,6 +445,15 @@ class IncidentRecord:
             "simulation_status": self.simulation_status,
             "simulation_detail_code": self.simulation_detail_code,
         }
+        if self.modsecurity_evidence is not None:
+            d["modsecurity_evidence"] = self.modsecurity_evidence.to_dict()
+        if self.threat_intel_status is not None:
+            d["threat_intel_status"] = self.threat_intel_status
+        if self.threat_intel_skip_reason is not None:
+            d["threat_intel_skip_reason"] = self.threat_intel_skip_reason
+        if self.threat_intel_observation is not None:
+            d["threat_intel_observation"] = self.threat_intel_observation.to_dict()
+        return d
 
     def to_json(self, indent: int = 2) -> str:
         """Return deterministic JSON string formatted with sorted keys and indentation."""
@@ -543,6 +630,155 @@ def build_incident_record(
         approval_reason_code=approval_reason_code,
         simulation_status=simulation_result.status.value,
         simulation_detail_code=simulation_result.detail_code,
+    )
+
+
+def build_modsecurity_incident_record(
+    evidence: Optional[ModSecuritySqliEvidence] = None,
+    *,
+    enrichment_result: Optional[ModSecurityEnrichmentResult] = None,
+    enrichment_failure_reason: Optional[str] = None,
+    enrichment: Optional[ModSecurityEnrichmentResult] = None,
+    threat_intel_status: Optional[str] = None,
+    threat_intel_skip_reason: Optional[str] = None,
+    threat_intel_observation: Optional[ThreatIntelObservation] = None,
+    threat_intel_error: Optional[str] = None,
+    incident_id: Optional[str] = None,
+    created_at_utc: Optional[str] = None,
+) -> IncidentRecord:
+    """Build and validate an immutable IncidentRecord for a WEB01 ModSecurity SQLi incident.
+
+    Architecture Principle:
+        Deterministic ModSecurity evidence and deterministic threat intelligence
+        state are coupled safely into the standard IncidentRecord model.
+
+    Invariants:
+        - Evidence must be an exact ModSecuritySqliEvidence instance.
+        - Exactly one of enrichment_result or enrichment_failure_reason represents TI outcome.
+        - Zero raw ModSecurity transaction dumps or API secrets serialized.
+    """
+    # 1. Resolve enrichment_result and failure_reason
+    res = enrichment_result if enrichment_result is not None else enrichment
+    fail_reason = enrichment_failure_reason if enrichment_failure_reason is not None else threat_intel_error
+
+    if res is not None and type(res) is not ModSecurityEnrichmentResult:
+        raise IncidentRecordError(
+            f"enrichment_result must be ModSecurityEnrichmentResult, got {type(res).__name__}"
+        )
+
+    # Resolve evidence
+    ev = evidence
+    if ev is None and res is not None:
+        ev = res.evidence
+    if ev is None:
+        raise IncidentRecordError("evidence is required and must be ModSecuritySqliEvidence")
+
+    if type(ev) is not ModSecuritySqliEvidence:
+        raise IncidentRecordError(
+            f"evidence must be ModSecuritySqliEvidence, got {type(ev).__name__}"
+        )
+
+    if res is not None and res.evidence != ev:
+        raise IncidentRecordError("evidence does not match enrichment_result.evidence")
+
+    # 2. Invariant: Exactly one of enrichment_result or enrichment_failure_reason
+    if res is not None and fail_reason is not None:
+        raise IncidentRecordError(
+            "Contradictory TI outcome: cannot provide both enrichment_result and enrichment_failure_reason"
+        )
+
+    if res is not None:
+        if res.enriched:
+            status = "ENRICHED"
+            skip_reason = None
+            observation = res.observation
+        else:
+            status = "SKIPPED_INELIGIBLE"
+            skip_reason = res.skip_reason
+            observation = None
+    elif fail_reason is not None:
+        if type(fail_reason) is not str or not fail_reason.strip():
+            raise IncidentRecordError("enrichment_failure_reason must be a non-empty string")
+        status = "LOOKUP_FAILED"
+        skip_reason = fail_reason
+        observation = None
+    elif threat_intel_status is not None:
+        status = threat_intel_status
+        skip_reason = threat_intel_skip_reason
+        observation = threat_intel_observation
+    else:
+        raise IncidentRecordError(
+            "TI state required: must provide either enrichment_result or enrichment_failure_reason"
+        )
+
+    # 3. Resolve incident_id
+    if incident_id is None:
+        clean_uid = re.sub(r"[^A-Za-z0-9_-]", "", ev.unique_id)
+        final_incident_id = f"INC-WEB01-{clean_uid[:16]}"
+    else:
+        if type(incident_id) is not str or not incident_id.strip():
+            raise IncidentRecordError("incident_id must be a non-empty str")
+        final_incident_id = incident_id
+
+    # 4. Resolve created_at_utc
+    final_created_at = created_at_utc or datetime.now(timezone.utc).isoformat()
+
+    # 5. Fixed deterministic identity mappings for WEB01
+    detection_id = "DET-WEB-001"
+    detection_name = "ModSecurity SQL Injection Attack (Rule 942100)"
+    target_host = ev.host
+    target_user = "www-data"
+    evidence_source = "WEB01 ModSecurity audit log"
+    decoded_command = None
+    mitre_technique_id = "T1190"
+    investigation_summary = (
+        f"ModSecurity CRS detected SQL injection attack on {ev.host} via rule {ev.rule_id} from {ev.src_ip}."
+    )
+    confidence_level = "high"
+    suspicious_indicator_count = 1
+    recommended_next_step = (
+        "Review ModSecurity SQLi transaction, assess WAF blocking disposition, and escalate to human review."
+    )
+    risk_score = 80
+    risk_level = "HIGH"
+    disposition = ActionDisposition.HUMAN_REVIEW.value
+    proposed_action = ProposedAction.REQUEST_HUMAN_REVIEW.value
+    requires_human_approval = False
+    policy_reason_codes: Tuple[str, ...] = ()
+    approval_status = IncidentApprovalStatus.NOT_REQUIRED.value
+    approval_reason_code = None
+    simulation_status = SimulationStatus.NOT_EXECUTED.value
+    simulation_detail_code = "simulation_not_required"
+
+    return IncidentRecord(
+        schema_version=SCHEMA_VERSION,
+        incident_id=final_incident_id,
+        created_at_utc=final_created_at,
+        detection_id=detection_id,
+        detection_name=detection_name,
+        target_host=target_host,
+        target_user=target_user,
+        evidence_source=evidence_source,
+        decoded_command=decoded_command,
+        mitre_technique_id=mitre_technique_id,
+        investigation_summary=investigation_summary,
+        confidence_level=confidence_level,
+        suspicious_indicator_count=suspicious_indicator_count,
+        recommended_next_step=recommended_next_step,
+        risk_score=risk_score,
+        risk_level=risk_level,
+        disposition=disposition,
+        proposed_action=proposed_action,
+        requires_human_approval=requires_human_approval,
+        policy_reason_codes=policy_reason_codes,
+        approval_status=approval_status,
+        approval_reason_code=approval_reason_code,
+        simulation_status=simulation_status,
+        simulation_detail_code=simulation_detail_code,
+        modsecurity_evidence=ev,
+        threat_intel_status=status,
+        threat_intel_skip_reason=skip_reason,
+        threat_intel_observation=observation,
     )
 
 
