@@ -18,18 +18,24 @@ Architecture Guarantees:
 """
 
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from investigator.audit import AuditEvent, AuditEventType, AuditLog
 from investigator.model import (
     INVESTIGATOR_SYSTEM_INSTRUCTIONS,
+    WEB01_INVESTIGATOR_SYSTEM_INSTRUCTIONS,
     DecisionType,
     ModelDecision,
     ModelRequest,
     ToolRequest,
 )
 from investigator.runtime_guard import RuntimeGuard, RuntimeHaltError
-from investigator.schemas import InvestigationInput, InvestigationResult
+from investigator.schemas import (
+    InvestigationInput,
+    InvestigationResult,
+    Web01InvestigationAssessment,
+    Web01InvestigationRequest,
+)
 from investigator.tool_result import MAX_RESULT_TEXT_LENGTH, ToolResultEnvelope
 from investigator.tool_router import ToolRouter, ToolValidationError, ToolExecutionError
 
@@ -189,26 +195,45 @@ class InvestigationOrchestrator:
         """Return the runtime guard attached to this orchestrator instance."""
         return self._guard
 
-    def investigate(self, investigation_input: InvestigationInput) -> InvestigationResult:
-        """Drive one investigation session to a validated InvestigationResult.
+    def investigate(
+        self,
+        investigation_input: Union[InvestigationInput, Web01InvestigationRequest],
+    ) -> Union[InvestigationResult, Web01InvestigationAssessment]:
+        """Drive one investigation session to a validated result.
+
+        Supports both DC01 endpoint detections (InvestigationInput -> InvestigationResult)
+        and WEB01 web application detections (Web01InvestigationRequest -> Web01InvestigationAssessment).
 
         Args:
-            investigation_input: Validated alert context for this investigation.
+            investigation_input: Validated alert context (InvestigationInput or Web01InvestigationRequest).
 
         Returns:
-            A validated InvestigationResult.
+            A validated InvestigationResult (for DC01) or Web01InvestigationAssessment (for WEB01).
 
         Raises:
             OrchestratorError: On any policy violation, budget exhaustion, invalid
-                               model decision, or failure to produce a final result.
+                              model decision, or failure to produce a final result.
         """
-        if not isinstance(investigation_input, InvestigationInput):
+        if isinstance(investigation_input, InvestigationInput):
+            incident_id = investigation_input.incident_id
+            is_web01 = False
+            system_instructions = INVESTIGATOR_SYSTEM_INSTRUCTIONS
+        elif isinstance(investigation_input, Web01InvestigationRequest):
+            # For WEB01, Milestone 13A establishes the bounded input contract containing
+            # detection_id ("DET-WEB-001") without an arbitrary caller-controlled incident ID.
+            # We bind detection_id as the correlation scope for RuntimeGuard and AuditLog
+            # for this investigation session. It represents the detection alert context,
+            # not a globally unique incident UUID. End-to-end incident lifecycle correlation
+            # is reserved for subsequent milestones.
+            incident_id = investigation_input.detection_id
+            is_web01 = True
+            system_instructions = WEB01_INVESTIGATOR_SYSTEM_INSTRUCTIONS
+        else:
             raise OrchestratorError(
-                f"investigation_input must be InvestigationInput, "
+                f"investigation_input must be InvestigationInput or Web01InvestigationRequest, "
                 f"got {type(investigation_input).__name__}"
             )
 
-        incident_id = investigation_input.incident_id
         self._guard.bind_incident_id(incident_id)
         tool_calls_used: int = 0
         prior_tool_results: List[ToolResultEnvelope] = []
@@ -235,7 +260,7 @@ class InvestigationOrchestrator:
 
             # --- Build ModelRequest ---
             request = ModelRequest(
-                system_instructions=INVESTIGATOR_SYSTEM_INSTRUCTIONS,
+                system_instructions=system_instructions,
                 investigation_input=investigation_input,
                 prior_tool_results=tuple(prior_tool_results),
                 remaining_tool_budget=MAX_TOOL_CALLS - tool_calls_used,
@@ -262,13 +287,47 @@ class InvestigationOrchestrator:
             # --- Branch: FINAL_RESULT ---
             if decision.decision_type == DecisionType.FINAL_RESULT:
                 result = decision.final_result
-                # InvestigationResult is already validated by its own __post_init__
+                if is_web01:
+                    if not isinstance(result, Web01InvestigationAssessment):
+                        _audit(AuditEventType.INVESTIGATION_FAILED, "INVALID_FINAL_RESULT_TYPE")
+                        raise OrchestratorError(
+                            f"Expected Web01InvestigationAssessment for WEB01 investigation, "
+                            f"got {type(result).__name__}"
+                        )
+                else:
+                    if not isinstance(result, InvestigationResult):
+                        _audit(AuditEventType.INVESTIGATION_FAILED, "INVALID_FINAL_RESULT_TYPE")
+                        raise OrchestratorError(
+                            f"Expected InvestigationResult for DC01 investigation, "
+                            f"got {type(result).__name__}"
+                        )
                 _audit(AuditEventType.FINAL_RESULT_ACCEPTED, "ok")
                 return result
 
             # --- Branch: TOOL_REQUEST ---
             if decision.decision_type == DecisionType.TOOL_REQUEST:
                 tool_req: ToolRequest = decision.tool_request
+
+                # WEB01 workflow tool restriction: bounded_splunk_search only
+                if is_web01:
+                    if tool_req.tool_name != "bounded_splunk_search":
+                        _audit(AuditEventType.INVESTIGATION_FAILED, "UNAUTHORIZED_TOOL")
+                        raise OrchestratorError(
+                            f"Unauthorized tool '{tool_req.tool_name}' for WEB01 investigation. "
+                            f"Only 'bounded_splunk_search' is permitted."
+                        )
+                    raw_args = tool_req.arguments
+                    if raw_args.get("query_type") != "modsecurity_sqli_matches":
+                        _audit(AuditEventType.INVESTIGATION_FAILED, "INVALID_TOOL_REQUEST")
+                        raise OrchestratorError(
+                            f"Unauthorized query_type '{raw_args.get('query_type')}' for WEB01 investigation"
+                        )
+                    if raw_args.get("host") != "web01":
+                        _audit(AuditEventType.INVESTIGATION_FAILED, "INVALID_TOOL_REQUEST")
+                        raise OrchestratorError(
+                            f"Unauthorized host '{raw_args.get('host')}' for WEB01 investigation"
+                        )
+
                 is_allowlisted_tool = tool_req.tool_name in _TOOL_AUDIT_PREFIX
 
                 # Use a static detail code — never place model-supplied arbitrary tool name
