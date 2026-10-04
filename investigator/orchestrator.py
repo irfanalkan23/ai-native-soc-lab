@@ -29,6 +29,7 @@ from investigator.model import (
     ModelRequest,
     ToolRequest,
 )
+from investigator.modsecurity import ModSecuritySqliEvidence
 from investigator.runtime_guard import RuntimeGuard, RuntimeHaltError
 from investigator.schemas import (
     InvestigationInput,
@@ -36,7 +37,11 @@ from investigator.schemas import (
     Web01InvestigationAssessment,
     Web01InvestigationRequest,
 )
-from investigator.threat_intel import ThreatIntelError, classify_ipv4_scope
+from investigator.threat_intel import (
+    ThreatIntelError,
+    ThreatIntelObservation,
+    classify_ipv4_scope,
+)
 from investigator.tool_result import MAX_RESULT_TEXT_LENGTH, ToolResultEnvelope
 from investigator.tool_router import ToolRouter, ToolValidationError, ToolExecutionError
 
@@ -191,6 +196,10 @@ class InvestigationOrchestrator:
                 raise OrchestratorError("RuntimeGuard already bound to a different AuditLog")
         else:
             self._guard = RuntimeGuard(audit_log=self._audit_log)
+        self._last_web01_evidence: Optional[ModSecuritySqliEvidence] = None
+        self._last_web01_ti_status: Optional[str] = None
+        self._last_web01_ti_skip_reason: Optional[str] = None
+        self._last_web01_ti_observation: Optional[ThreatIntelObservation] = None
 
     @property
     def audit_log(self) -> AuditLog:
@@ -201,6 +210,26 @@ class InvestigationOrchestrator:
     def guard(self) -> RuntimeGuard:
         """Return the runtime guard attached to this orchestrator instance."""
         return self._guard
+
+    @property
+    def last_web01_evidence(self) -> Optional[ModSecuritySqliEvidence]:
+        """Return the validated ModSecurity evidence from the most recent WEB01 investigation."""
+        return self._last_web01_evidence
+
+    @property
+    def last_web01_ti_status(self) -> Optional[str]:
+        """Return the deterministic TI status from the most recent WEB01 investigation."""
+        return self._last_web01_ti_status
+
+    @property
+    def last_web01_ti_skip_reason(self) -> Optional[str]:
+        """Return the TI skip reason or failure reason from the most recent WEB01 investigation."""
+        return self._last_web01_ti_skip_reason
+
+    @property
+    def last_web01_ti_observation(self) -> Optional[ThreatIntelObservation]:
+        """Return the normalized ThreatIntelObservation from the most recent WEB01 investigation."""
+        return self._last_web01_ti_observation
 
     def _evaluate_web01_threat_intel(
         self,
@@ -224,6 +253,9 @@ class InvestigationOrchestrator:
         try:
             scope = classify_ipv4_scope(src_ip)
         except (ValueError, TypeError):
+            self._last_web01_ti_status = "SKIPPED_INELIGIBLE"
+            self._last_web01_ti_skip_reason = "ineligible_scope:non_global"
+            self._last_web01_ti_observation = None
             return {
                 "scope": "non_global",
                 "external_ti_eligible": False,
@@ -232,6 +264,9 @@ class InvestigationOrchestrator:
             }, 0
 
         if not scope.external_ti_eligible:
+            self._last_web01_ti_status = "SKIPPED_INELIGIBLE"
+            self._last_web01_ti_skip_reason = f"ineligible_scope:{scope.scope}"
+            self._last_web01_ti_observation = None
             return {
                 "scope": scope.scope,
                 "external_ti_eligible": False,
@@ -266,6 +301,9 @@ class InvestigationOrchestrator:
                 "threat_intel_lookup",
                 {"indicator": scope.indicator},
             )
+            self._last_web01_ti_status = "ENRICHED"
+            self._last_web01_ti_skip_reason = None
+            self._last_web01_ti_observation = obs
             _audit(AuditEventType.TOOL_COMPLETED, _tool_audit_code("threat_intel_lookup", "ok"))
             obs_dict = {
                 "indicator": obs.indicator,
@@ -285,6 +323,9 @@ class InvestigationOrchestrator:
                 "observation": obs_dict,
             }, 1
         except (ToolExecutionError, ThreatIntelError):
+            self._last_web01_ti_status = "LOOKUP_FAILED"
+            self._last_web01_ti_skip_reason = "provider_lookup_failed"
+            self._last_web01_ti_observation = None
             _audit(
                 AuditEventType.TOOL_COMPLETED,
                 _tool_audit_code("threat_intel_lookup", "execution_failed"),
@@ -315,6 +356,12 @@ class InvestigationOrchestrator:
             OrchestratorError: On any policy violation, budget exhaustion, invalid
                               model decision, or failure to produce a final result.
         """
+        # Invariant: unconditionally clear retained per-investigation state at the start
+        self._last_web01_evidence = None
+        self._last_web01_ti_status = None
+        self._last_web01_ti_skip_reason = None
+        self._last_web01_ti_observation = None
+
         if isinstance(investigation_input, InvestigationInput):
             incident_id = investigation_input.incident_id
             is_web01 = False
@@ -350,209 +397,221 @@ class InvestigationOrchestrator:
             ))
             audit_seq += 1
 
-        for _decision_idx in range(MAX_MODEL_DECISIONS):
-            # Check runtime guard before model invocation
-            try:
-                self._guard.before_model_invocation()
-            except RuntimeHaltError as exc:
-                raise OrchestratorError(
-                    f"Runtime guard halted model invocation: {exc.detail_code}"
-                ) from exc
-
-            # --- Build ModelRequest ---
-            request = ModelRequest(
-                system_instructions=system_instructions,
-                investigation_input=investigation_input,
-                prior_tool_results=tuple(prior_tool_results),
-                remaining_tool_budget=MAX_TOOL_CALLS - tool_calls_used,
-            )
-
-            # --- Call model ---
-            _audit(AuditEventType.MODEL_REQUESTED, f"decision_idx={_decision_idx}")
-            try:
-                decision: ModelDecision = self._model.decide(request)
-            except Exception as exc:
-                _audit(AuditEventType.INVESTIGATION_FAILED, "MODEL_ERROR")
-                raise OrchestratorError(
-                    f"Model raised an unexpected error: {type(exc).__name__}"
-                ) from exc
-
-            # --- Validate model return type before accessing any attribute ---
-            if not isinstance(decision, ModelDecision):
-                _audit(AuditEventType.INVESTIGATION_FAILED, "INVALID_MODEL_DECISION")
-                raise OrchestratorError(
-                    f"Model returned invalid type: expected ModelDecision, "
-                    f"got {type(decision).__name__}"
-                )
-
-            # --- Branch: FINAL_RESULT ---
-            if decision.decision_type == DecisionType.FINAL_RESULT:
-                result = decision.final_result
-                if is_web01:
-                    if not isinstance(result, Web01InvestigationAssessment):
-                        _audit(AuditEventType.INVESTIGATION_FAILED, "INVALID_FINAL_RESULT_TYPE")
-                        raise OrchestratorError(
-                            f"Expected Web01InvestigationAssessment for WEB01 investigation, "
-                            f"got {type(result).__name__}"
-                        )
-                else:
-                    if not isinstance(result, InvestigationResult):
-                        _audit(AuditEventType.INVESTIGATION_FAILED, "INVALID_FINAL_RESULT_TYPE")
-                        raise OrchestratorError(
-                            f"Expected InvestigationResult for DC01 investigation, "
-                            f"got {type(result).__name__}"
-                        )
-                _audit(AuditEventType.FINAL_RESULT_ACCEPTED, "ok")
-                return result
-
-            # --- Branch: TOOL_REQUEST ---
-            if decision.decision_type == DecisionType.TOOL_REQUEST:
-                tool_req: ToolRequest = decision.tool_request
-
-                # WEB01 workflow tool restriction: bounded_splunk_search only
-                if is_web01:
-                    if tool_req.tool_name != "bounded_splunk_search":
-                        _audit(AuditEventType.INVESTIGATION_FAILED, "UNAUTHORIZED_TOOL")
-                        raise OrchestratorError(
-                            f"Unauthorized tool '{tool_req.tool_name}' for WEB01 investigation. "
-                            f"Only 'bounded_splunk_search' is permitted."
-                        )
-                    raw_args = tool_req.arguments
-                    if raw_args.get("query_type") != "modsecurity_sqli_matches":
-                        _audit(AuditEventType.INVESTIGATION_FAILED, "INVALID_TOOL_REQUEST")
-                        raise OrchestratorError(
-                            f"Unauthorized query_type '{raw_args.get('query_type')}' for WEB01 investigation"
-                        )
-                    if raw_args.get("host") != "web01":
-                        _audit(AuditEventType.INVESTIGATION_FAILED, "INVALID_TOOL_REQUEST")
-                        raise OrchestratorError(
-                            f"Unauthorized host '{raw_args.get('host')}' for WEB01 investigation"
-                        )
-
-                is_allowlisted_tool = tool_req.tool_name in _TOOL_AUDIT_PREFIX
-
-                # Use a static detail code — never place model-supplied arbitrary tool name
-                # directly into audit. If allowlisted, derive fixed code; otherwise use generic.
-                req_audit_code = (
-                    _tool_audit_code(tool_req.tool_name, "requested")
-                    if is_allowlisted_tool
-                    else "tool_requested"
-                )
-                _audit(AuditEventType.TOOL_REQUESTED, req_audit_code)
-
-                # Budget check — reject 4th tool call
-                if tool_calls_used >= MAX_TOOL_CALLS:
-                    _audit(AuditEventType.TOOL_REJECTED, "BUDGET_EXHAUSTED")
-                    raise OrchestratorError(
-                        f"Tool budget exhausted: {MAX_TOOL_CALLS} tool calls already used. "
-                        f"Model must emit FINAL_RESULT."
-                    )
-
-                allowed_audit_code = (
-                    _tool_audit_code(tool_req.tool_name, "allowed")
-                    if is_allowlisted_tool
-                    else "tool_allowed"
-                )
-                _audit(AuditEventType.TOOL_ALLOWED, allowed_audit_code)
-
-                # Check runtime guard before tool execution
+        try:
+            for _decision_idx in range(MAX_MODEL_DECISIONS):
+                # Check runtime guard before model invocation
                 try:
-                    self._guard.before_tool_execution()
+                    self._guard.before_model_invocation()
                 except RuntimeHaltError as exc:
                     raise OrchestratorError(
-                        f"Runtime guard halted tool execution: {exc.detail_code}"
+                        f"Runtime guard halted model invocation: {exc.detail_code}"
                     ) from exc
 
-                # Execute via ToolRouter only
+                # --- Build ModelRequest ---
+                request = ModelRequest(
+                    system_instructions=system_instructions,
+                    investigation_input=investigation_input,
+                    prior_tool_results=tuple(prior_tool_results),
+                    remaining_tool_budget=MAX_TOOL_CALLS - tool_calls_used,
+                )
+
+                # --- Call model ---
+                _audit(AuditEventType.MODEL_REQUESTED, f"decision_idx={_decision_idx}")
                 try:
-                    raw_result = self._tool_router.execute_tool(
-                        tool_req.tool_name,
-                        tool_req.arguments_as_dict(),
-                    )
-                except ToolValidationError as exc:
-                    # Invalid/forbidden request (unknown tool, arbitrary SPL, bad args)
-                    # → fail-closed immediately; do not continue investigation
-                    _audit(AuditEventType.INVESTIGATION_FAILED, "INVALID_TOOL_REQUEST")
+                    decision: ModelDecision = self._model.decide(request)
+                except Exception as exc:
+                    _audit(AuditEventType.INVESTIGATION_FAILED, "MODEL_ERROR")
                     raise OrchestratorError(
-                        f"Invalid or forbidden tool request '{tool_req.tool_name}': "
-                        f"{type(exc).__name__}"
+                        f"Model raised an unexpected error: {type(exc).__name__}"
                     ) from exc
-                except ToolExecutionError as exc:
-                    # Allowed tool ran but failed at execution
-                    # → produce success=False envelope; model may still recover
-                    envelope = ToolResultEnvelope(
-                        tool_name=tool_req.tool_name,
-                        success=False,
-                        result_text=json.dumps({"error": "tool_execution_failed"}),
-                        error_code="TOOL_EXECUTION_FAILED",
+
+                # --- Validate model return type before accessing any attribute ---
+                if not isinstance(decision, ModelDecision):
+                    _audit(AuditEventType.INVESTIGATION_FAILED, "INVALID_MODEL_DECISION")
+                    raise OrchestratorError(
+                        f"Model returned invalid type: expected ModelDecision, "
+                        f"got {type(decision).__name__}"
                     )
+
+                # --- Branch: FINAL_RESULT ---
+                if decision.decision_type == DecisionType.FINAL_RESULT:
+                    result = decision.final_result
+                    if is_web01:
+                        if not isinstance(result, Web01InvestigationAssessment):
+                            _audit(AuditEventType.INVESTIGATION_FAILED, "INVALID_FINAL_RESULT_TYPE")
+                            raise OrchestratorError(
+                                f"Expected Web01InvestigationAssessment for WEB01 investigation, "
+                                f"got {type(result).__name__}"
+                            )
+                    else:
+                        if not isinstance(result, InvestigationResult):
+                            _audit(AuditEventType.INVESTIGATION_FAILED, "INVALID_FINAL_RESULT_TYPE")
+                            raise OrchestratorError(
+                                f"Expected InvestigationResult for DC01 investigation, "
+                                f"got {type(result).__name__}"
+                            )
+                    _audit(AuditEventType.FINAL_RESULT_ACCEPTED, "ok")
+                    return result
+
+                # --- Branch: TOOL_REQUEST ---
+                if decision.decision_type == DecisionType.TOOL_REQUEST:
+                    tool_req: ToolRequest = decision.tool_request
+
+                    # WEB01 workflow tool restriction: bounded_splunk_search only
+                    if is_web01:
+                        if tool_req.tool_name != "bounded_splunk_search":
+                            _audit(AuditEventType.INVESTIGATION_FAILED, "UNAUTHORIZED_TOOL")
+                            raise OrchestratorError(
+                                f"Unauthorized tool '{tool_req.tool_name}' for WEB01 investigation. "
+                                f"Only 'bounded_splunk_search' is permitted."
+                            )
+                        raw_args = tool_req.arguments
+                        if raw_args.get("query_type") != "modsecurity_sqli_matches":
+                            _audit(AuditEventType.INVESTIGATION_FAILED, "INVALID_TOOL_REQUEST")
+                            raise OrchestratorError(
+                                f"Unauthorized query_type '{raw_args.get('query_type')}' for WEB01 investigation"
+                            )
+                        if raw_args.get("host") != "web01":
+                            _audit(AuditEventType.INVESTIGATION_FAILED, "INVALID_TOOL_REQUEST")
+                            raise OrchestratorError(
+                                f"Unauthorized host '{raw_args.get('host')}' for WEB01 investigation"
+                            )
+
+                    is_allowlisted_tool = tool_req.tool_name in _TOOL_AUDIT_PREFIX
+
+                    # Use a static detail code — never place model-supplied arbitrary tool name
+                    # directly into audit. If allowlisted, derive fixed code; otherwise use generic.
+                    req_audit_code = (
+                        _tool_audit_code(tool_req.tool_name, "requested")
+                        if is_allowlisted_tool
+                        else "tool_requested"
+                    )
+                    _audit(AuditEventType.TOOL_REQUESTED, req_audit_code)
+
+                    # Budget check — reject 4th tool call
+                    if tool_calls_used >= MAX_TOOL_CALLS:
+                        _audit(AuditEventType.TOOL_REJECTED, "BUDGET_EXHAUSTED")
+                        raise OrchestratorError(
+                            f"Tool budget exhausted: {MAX_TOOL_CALLS} tool calls already used. "
+                            f"Model must emit FINAL_RESULT."
+                        )
+
+                    allowed_audit_code = (
+                        _tool_audit_code(tool_req.tool_name, "allowed")
+                        if is_allowlisted_tool
+                        else "tool_allowed"
+                    )
+                    _audit(AuditEventType.TOOL_ALLOWED, allowed_audit_code)
+
+                    # Check runtime guard before tool execution
+                    try:
+                        self._guard.before_tool_execution()
+                    except RuntimeHaltError as exc:
+                        raise OrchestratorError(
+                            f"Runtime guard halted tool execution: {exc.detail_code}"
+                        ) from exc
+
+                    # Execute via ToolRouter only
+                    try:
+                        raw_result = self._tool_router.execute_tool(
+                            tool_req.tool_name,
+                            tool_req.arguments_as_dict(),
+                        )
+                    except ToolValidationError as exc:
+                        # Invalid/forbidden request (unknown tool, arbitrary SPL, bad args)
+                        # → fail-closed immediately; do not continue investigation
+                        _audit(AuditEventType.INVESTIGATION_FAILED, "INVALID_TOOL_REQUEST")
+                        raise OrchestratorError(
+                            f"Invalid or forbidden tool request '{tool_req.tool_name}': "
+                            f"{type(exc).__name__}"
+                        ) from exc
+                    except ToolExecutionError as exc:
+                        # Allowed tool ran but failed at execution
+                        # → produce success=False envelope; model may still recover
+                        envelope = ToolResultEnvelope(
+                            tool_name=tool_req.tool_name,
+                            success=False,
+                            result_text=json.dumps({"error": "tool_execution_failed"}),
+                            error_code="TOOL_EXECUTION_FAILED",
+                        )
+                        prior_tool_results.append(envelope)
+                        tool_calls_used += 1
+                        exec_failed_audit_code = (
+                            _tool_audit_code(tool_req.tool_name, "execution_failed")
+                            if is_allowlisted_tool
+                            else "execution_failed"
+                        )
+                        _audit(AuditEventType.TOOL_COMPLETED, exec_failed_audit_code)
+                        continue
+
+                    # Deterministically evaluate TI policy for WEB01 ModSecurity evidence
+                    ti_context: Optional[Dict[str, Any]] = None
+                    if is_web01 and tool_req.tool_name == "bounded_splunk_search":
+                        if isinstance(raw_result, list) and raw_result:
+                            try:
+                                self._last_web01_evidence = ModSecuritySqliEvidence(**raw_result[0])
+                            except Exception:
+                                self._last_web01_evidence = None
+                            src_ip = raw_result[0].get("src_ip")
+                            if isinstance(src_ip, str):
+                                ti_context, added_calls = self._evaluate_web01_threat_intel(
+                                    src_ip,
+                                    _audit,
+                                    tool_calls_used + 1,
+                                )
+                                tool_calls_used += added_calls
+
+                    # Serialize result to bounded JSON string
+                    try:
+                        result_text = _serialize_tool_result(
+                            tool_req.tool_name,
+                            raw_result,
+                            threat_intel=ti_context,
+                        )
+                        envelope = ToolResultEnvelope(
+                            tool_name=tool_req.tool_name,
+                            success=True,
+                            result_text=result_text,
+                            error_code=None,
+                        )
+                        audit_detail = (
+                            _tool_audit_code(tool_req.tool_name, "ok")
+                            if is_allowlisted_tool
+                            else "ok"
+                        )
+                    except ValueError:
+                        # Result was too large or could not be serialized → fail closed with code
+                        envelope = ToolResultEnvelope(
+                            tool_name=tool_req.tool_name,
+                            success=False,
+                            result_text=json.dumps({"error": "result_too_large"}),
+                            error_code="RESULT_TOO_LARGE",
+                        )
+                        audit_detail = (
+                            _tool_audit_code(tool_req.tool_name, "result_too_large")
+                            if is_allowlisted_tool
+                            else "result_too_large"
+                        )
+
                     prior_tool_results.append(envelope)
                     tool_calls_used += 1
-                    exec_failed_audit_code = (
-                        _tool_audit_code(tool_req.tool_name, "execution_failed")
-                        if is_allowlisted_tool
-                        else "execution_failed"
-                    )
-                    _audit(AuditEventType.TOOL_COMPLETED, exec_failed_audit_code)
+                    _audit(AuditEventType.TOOL_COMPLETED, audit_detail)
                     continue
 
-                # Deterministically evaluate TI policy for WEB01 ModSecurity evidence
-                ti_context: Optional[Dict[str, Any]] = None
-                if is_web01 and tool_req.tool_name == "bounded_splunk_search" and isinstance(raw_result, list) and raw_result:
-                    src_ip = raw_result[0].get("src_ip")
-                    if isinstance(src_ip, str):
-                        ti_context, added_calls = self._evaluate_web01_threat_intel(
-                            src_ip,
-                            _audit,
-                            tool_calls_used + 1,
-                        )
-                        tool_calls_used += added_calls
+                # --- Unknown decision type (defensive; ModelDecision validates at construction) ---
+                _audit(AuditEventType.INVESTIGATION_FAILED, "UNKNOWN_DECISION_TYPE")
+                raise OrchestratorError(
+                    f"Unexpected decision_type from model: {decision.decision_type!r}"
+                )
 
-                # Serialize result to bounded JSON string
-                try:
-                    result_text = _serialize_tool_result(
-                        tool_req.tool_name,
-                        raw_result,
-                        threat_intel=ti_context,
-                    )
-                    envelope = ToolResultEnvelope(
-                        tool_name=tool_req.tool_name,
-                        success=True,
-                        result_text=result_text,
-                        error_code=None,
-                    )
-                    audit_detail = (
-                        _tool_audit_code(tool_req.tool_name, "ok")
-                        if is_allowlisted_tool
-                        else "ok"
-                    )
-                except ValueError:
-                    # Result was too large or could not be serialized → fail closed with code
-                    envelope = ToolResultEnvelope(
-                        tool_name=tool_req.tool_name,
-                        success=False,
-                        result_text=json.dumps({"error": "result_too_large"}),
-                        error_code="RESULT_TOO_LARGE",
-                    )
-                    audit_detail = (
-                        _tool_audit_code(tool_req.tool_name, "result_too_large")
-                        if is_allowlisted_tool
-                        else "result_too_large"
-                    )
-
-                prior_tool_results.append(envelope)
-                tool_calls_used += 1
-                _audit(AuditEventType.TOOL_COMPLETED, audit_detail)
-                continue
-
-            # --- Unknown decision type (defensive; ModelDecision validates at construction) ---
-            _audit(AuditEventType.INVESTIGATION_FAILED, "UNKNOWN_DECISION_TYPE")
+            # Loop exhausted without FINAL_RESULT
+            _audit(AuditEventType.INVESTIGATION_FAILED, "NO_FINAL_RESULT")
             raise OrchestratorError(
-                f"Unexpected decision_type from model: {decision.decision_type!r}"
+                f"Investigation produced no FINAL_RESULT within {MAX_MODEL_DECISIONS} model decisions."
             )
-
-        # Loop exhausted without FINAL_RESULT
-        _audit(AuditEventType.INVESTIGATION_FAILED, "NO_FINAL_RESULT")
-        raise OrchestratorError(
-            f"Investigation produced no FINAL_RESULT within {MAX_MODEL_DECISIONS} model decisions."
-        )
+        except Exception:
+            self._last_web01_evidence = None
+            self._last_web01_ti_status = None
+            self._last_web01_ti_skip_reason = None
+            self._last_web01_ti_observation = None
+            raise
