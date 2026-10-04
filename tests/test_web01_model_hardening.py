@@ -475,15 +475,16 @@ class TestWeb01ModelHardening(unittest.TestCase):
 
     def test_web01_rejects_execution_field_in_final_result(self) -> None:
         """Verify model output containing execution parameters is rejected."""
+        bad_kwargs: Dict[str, Any] = {"isolate_host": True}
         with self.assertRaises(TypeError):
-            Web01InvestigationAssessment(  # type: ignore[call-arg]
+            Web01InvestigationAssessment(
                 assessment="SQLi detected",
                 confidence="high",
                 evidence_summary="Rule 942100 triggered",
                 attack_type="sql_injection",
                 escalation_recommended=True,
                 recommended_next_step="Review logs",
-                isolate_host=True,
+                **bad_kwargs,
             )
 
     def test_web01_rejects_wrong_final_result_type(self) -> None:
