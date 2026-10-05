@@ -18,7 +18,7 @@ Architecture Guarantees:
 """
 
 import json
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple, Union
 
 from investigator.audit import AuditEvent, AuditEventType, AuditLog
 from investigator.model import (
@@ -80,6 +80,7 @@ _ALLOWED_AUDIT_SUFFIXES = frozenset({
     "ok",
     "execution_failed",
     "result_too_large",
+    "reused",
 })
 
 
@@ -97,6 +98,21 @@ def _tool_audit_code(tool_name: str, suffix: str) -> str:
             f"Invalid tool audit mapping: tool_name={tool_name!r}, suffix={suffix!r}"
         )
     return f"{_TOOL_AUDIT_PREFIX[tool_name]}_{suffix}"
+
+
+def _canonical_tool_key(
+    tool_name: str,
+    arguments: Mapping[str, Any],
+) -> Tuple[str, Tuple[Tuple[str, str], ...]]:
+    """Produce a deterministic, canonical hashable key for a tool request.
+
+    Normalizes argument key order and JSON-encodes values with sorted keys
+    to guarantee identical requests produce identical keys regardless of dict ordering.
+    """
+    normalized_items = tuple(
+        sorted((str(k), json.dumps(v, sort_keys=True)) for k, v in arguments.items())
+    )
+    return (tool_name, normalized_items)
 
 
 # ---------------------------------------------------------------------------
@@ -361,6 +377,7 @@ class InvestigationOrchestrator:
         self._last_web01_ti_status = None
         self._last_web01_ti_skip_reason = None
         self._last_web01_ti_observation = None
+        self._completed_tool_cache = {}
 
         if isinstance(investigation_input, InvestigationInput):
             incident_id = investigation_input.incident_id
@@ -385,6 +402,7 @@ class InvestigationOrchestrator:
         self._guard.bind_incident_id(incident_id)
         tool_calls_used: int = 0
         prior_tool_results: List[ToolResultEnvelope] = []
+        completed_tool_cache: Dict[Tuple[str, Tuple[Tuple[str, str], ...]], ToolResultEnvelope] = {}
         audit_seq: int = 0
 
         def _audit(event_type: AuditEventType, detail_code: str) -> None:
@@ -487,6 +505,20 @@ class InvestigationOrchestrator:
                         else "tool_requested"
                     )
                     _audit(AuditEventType.TOOL_REQUESTED, req_audit_code)
+
+                    # Deduplication: reuse identical completed tool result if already succeeded (WEB01)
+                    if is_web01:
+                        cache_key = _canonical_tool_key(tool_req.tool_name, tool_req.arguments_as_dict())
+                        if cache_key in completed_tool_cache:
+                            cached_envelope = completed_tool_cache[cache_key]
+                            prior_tool_results.append(cached_envelope)
+                            reused_audit_code = (
+                                _tool_audit_code(tool_req.tool_name, "reused")
+                                if is_allowlisted_tool
+                                else "tool_reused"
+                            )
+                            _audit(AuditEventType.TOOL_COMPLETED, reused_audit_code)
+                            continue
 
                     # Budget check — reject 4th tool call
                     if tool_calls_used >= MAX_TOOL_CALLS:
@@ -593,6 +625,10 @@ class InvestigationOrchestrator:
                             else "result_too_large"
                         )
 
+                    # Only cache successful tool execution results (WEB01)
+                    if is_web01 and envelope.success:
+                        completed_tool_cache[cache_key] = envelope
+
                     prior_tool_results.append(envelope)
                     tool_calls_used += 1
                     _audit(AuditEventType.TOOL_COMPLETED, audit_detail)
@@ -607,7 +643,7 @@ class InvestigationOrchestrator:
             # Loop exhausted without FINAL_RESULT
             _audit(AuditEventType.INVESTIGATION_FAILED, "NO_FINAL_RESULT")
             raise OrchestratorError(
-                f"Investigation produced no FINAL_RESULT within {MAX_MODEL_DECISIONS} model decisions."
+                f"Model decision budget exhausted: investigation produced no FINAL_RESULT within {MAX_MODEL_DECISIONS} model decisions."
             )
         except Exception:
             self._last_web01_evidence = None

@@ -65,6 +65,15 @@ _VALID_WEB01_REQUEST = Web01InvestigationRequest(
     rule_id=942100,
 )
 
+_VALID_WEB01_ASSESSMENT = Web01InvestigationAssessment(
+    assessment="SQL injection attempt detected on web01.",
+    confidence="high",
+    evidence_summary="ModSecurity rule 942100 triggered with score 8.",
+    attack_type="sql_injection",
+    escalation_recommended=True,
+    recommended_next_step="Confirm HTTP 403 blocking in Apache logs.",
+)
+
 _SANITIZED_MODSEC_EVIDENCE: Dict[str, Any] = {
     "host": "web01",
     "src_ip": "192.168.1.100",
@@ -507,6 +516,274 @@ class TestWeb01InvestigatorToolIntegration(unittest.TestCase):
         ))
         self.assertEqual(len(audit_log.events()), 1)
         self.assertEqual(audit_log.events()[0].detail_code, "bounded_splunk_search_allowed")
+
+    def test_identical_web01_tool_request_reuses_completed_result(self) -> None:
+        """Verify identical completed tool request reuses previous result without backend re-execution."""
+        mock_splunk = MagicMock(spec=SplunkSearchClient)
+        mock_splunk.search_modsecurity_sqli.return_value = [_RAW_MODSEC_TELEMETRY]
+        router = ToolRouter(splunk_client=mock_splunk)
+        audit_log = AuditLog()
+
+        # Model requests identical bounded_splunk_search twice, then emits final assessment
+        model = ScriptedModel([
+            ModelDecision(
+                decision_type=DecisionType.TOOL_REQUEST,
+                tool_request=ToolRequest(
+                    tool_name="bounded_splunk_search",
+                    arguments={"query_type": "modsecurity_sqli_matches", "host": "web01", "minutes": 15, "limit": 10},
+                ),
+            ),
+            ModelDecision(
+                decision_type=DecisionType.TOOL_REQUEST,
+                tool_request=ToolRequest(
+                    tool_name="bounded_splunk_search",
+                    arguments={"query_type": "modsecurity_sqli_matches", "host": "web01", "minutes": 15, "limit": 10},
+                ),
+            ),
+            ModelDecision(
+                decision_type=DecisionType.FINAL_RESULT,
+                final_result=_VALID_WEB01_ASSESSMENT,
+            ),
+        ])
+
+        orchestrator = InvestigationOrchestrator(
+            model=model,
+            tool_router=router,
+            audit_log=audit_log,
+        )
+        assessment = orchestrator.investigate(_VALID_WEB01_REQUEST)
+
+        # Invariant 1: Backend executed exactly once
+        self.assertEqual(mock_splunk.search_modsecurity_sqli.call_count, 1)
+
+        # Invariant 2: Investigation completes with valid assessment
+        self.assertIsInstance(assessment, Web01InvestigationAssessment)
+        self.assertEqual(assessment.attack_type, "sql_injection")
+
+        # Invariant 3: Model received 2 tool envelopes across turns with identical content
+        self.assertEqual(len(model.recorded_requests[-1].prior_tool_results), 2)
+        env1, env2 = model.recorded_requests[-1].prior_tool_results
+        self.assertEqual(env1.result_text, env2.result_text)
+        self.assertTrue(env1.success)
+        self.assertTrue(env2.success)
+
+        # Invariant 4: Audit trail records requested/allowed/ok for turn 1 and requested/reused for turn 2
+        detail_codes = [e.detail_code for e in audit_log.events()]
+        self.assertIn("bounded_splunk_search_requested", detail_codes)
+        self.assertIn("bounded_splunk_search_allowed", detail_codes)
+        self.assertIn("bounded_splunk_search_ok", detail_codes)
+        self.assertIn("bounded_splunk_search_reused", detail_codes)
+        self.assertEqual(detail_codes.count("bounded_splunk_search_allowed"), 1)
+
+    def test_duplicate_tool_reuse_does_not_consume_second_tool_budget(self) -> None:
+        """Verify duplicate tool reuse does not increment backend tool execution count."""
+        mock_splunk = MagicMock(spec=SplunkSearchClient)
+        mock_splunk.search_modsecurity_sqli.return_value = [_RAW_MODSEC_TELEMETRY]
+        router = ToolRouter(splunk_client=mock_splunk)
+
+        # 4 decisions (within MAX_MODEL_DECISIONS=4):
+        # Turn 1: tool A (minutes=15) -> backend executed (count=1)
+        # Turn 2: tool A (minutes=15) -> duplicate reused (backend count=1)
+        # Turn 3: tool B (minutes=60) -> distinct arguments, backend executed (count=2)
+        # Turn 4: final assessment -> investigation completes successfully
+        decisions = [
+            ModelDecision(
+                decision_type=DecisionType.TOOL_REQUEST,
+                tool_request=ToolRequest(
+                    tool_name="bounded_splunk_search",
+                    arguments={"query_type": "modsecurity_sqli_matches", "host": "web01", "minutes": 15},
+                ),
+            ),
+            ModelDecision(
+                decision_type=DecisionType.TOOL_REQUEST,
+                tool_request=ToolRequest(
+                    tool_name="bounded_splunk_search",
+                    arguments={"query_type": "modsecurity_sqli_matches", "host": "web01", "minutes": 15},
+                ),
+            ),
+            ModelDecision(
+                decision_type=DecisionType.TOOL_REQUEST,
+                tool_request=ToolRequest(
+                    tool_name="bounded_splunk_search",
+                    arguments={"query_type": "modsecurity_sqli_matches", "host": "web01", "minutes": 60},
+                ),
+            ),
+            ModelDecision(
+                decision_type=DecisionType.FINAL_RESULT,
+                final_result=_VALID_WEB01_ASSESSMENT,
+            ),
+        ]
+        model = ScriptedModel(decisions)
+        orchestrator = InvestigationOrchestrator(model=model, tool_router=router)
+
+        assessment = orchestrator.investigate(_VALID_WEB01_REQUEST)
+        self.assertIsInstance(assessment, Web01InvestigationAssessment)
+        # Backend executed exactly 2 times (Turn 1 and Turn 3), not 3 times
+        self.assertEqual(mock_splunk.search_modsecurity_sqli.call_count, 2)
+
+    def test_tool_result_cache_is_cleared_between_investigations(self) -> None:
+        """Verify tool result cache is strictly isolated and reset on subsequent investigations."""
+        mock_splunk = MagicMock(spec=SplunkSearchClient)
+        mock_splunk.search_modsecurity_sqli.return_value = [_RAW_MODSEC_TELEMETRY]
+        router = ToolRouter(splunk_client=mock_splunk)
+
+        model = ScriptedModel([
+            # Run 1
+            ModelDecision(
+                decision_type=DecisionType.TOOL_REQUEST,
+                tool_request=ToolRequest(
+                    tool_name="bounded_splunk_search",
+                    arguments={"query_type": "modsecurity_sqli_matches", "host": "web01"},
+                ),
+            ),
+            ModelDecision(
+                decision_type=DecisionType.FINAL_RESULT,
+                final_result=_VALID_WEB01_ASSESSMENT,
+            ),
+            # Run 2
+            ModelDecision(
+                decision_type=DecisionType.TOOL_REQUEST,
+                tool_request=ToolRequest(
+                    tool_name="bounded_splunk_search",
+                    arguments={"query_type": "modsecurity_sqli_matches", "host": "web01"},
+                ),
+            ),
+            ModelDecision(
+                decision_type=DecisionType.FINAL_RESULT,
+                final_result=_VALID_WEB01_ASSESSMENT,
+            ),
+        ])
+        orchestrator = InvestigationOrchestrator(model=model, tool_router=router)
+
+        orchestrator.investigate(_VALID_WEB01_REQUEST)
+        self.assertEqual(mock_splunk.search_modsecurity_sqli.call_count, 1)
+
+        # Run 2 on the exact same orchestrator instance: backend called again, proving cache was cleared
+        orchestrator.investigate(_VALID_WEB01_REQUEST)
+        self.assertEqual(mock_splunk.search_modsecurity_sqli.call_count, 2)
+
+    def test_failed_tool_result_is_not_reused_as_success(self) -> None:
+        """Verify failed tool executions are never cached or reused as successful results."""
+        mock_splunk = MagicMock(spec=SplunkSearchClient)
+        mock_splunk.search_modsecurity_sqli.side_effect = ToolExecutionError("Splunk down")
+        router = ToolRouter(splunk_client=mock_splunk)
+
+        model = ScriptedModel([
+            ModelDecision(
+                decision_type=DecisionType.TOOL_REQUEST,
+                tool_request=ToolRequest(
+                    tool_name="bounded_splunk_search",
+                    arguments={"query_type": "modsecurity_sqli_matches", "host": "web01"},
+                ),
+            ),
+            ModelDecision(
+                decision_type=DecisionType.TOOL_REQUEST,
+                tool_request=ToolRequest(
+                    tool_name="bounded_splunk_search",
+                    arguments={"query_type": "modsecurity_sqli_matches", "host": "web01"},
+                ),
+            ),
+            ModelDecision(
+                decision_type=DecisionType.FINAL_RESULT,
+                final_result=_VALID_WEB01_ASSESSMENT,
+            ),
+        ])
+        orchestrator = InvestigationOrchestrator(model=model, tool_router=router)
+        orchestrator.investigate(_VALID_WEB01_REQUEST)
+
+        # Backend was invoked both times because failure was not cached
+        self.assertEqual(mock_splunk.search_modsecurity_sqli.call_count, 2)
+        # Verify both tool results received by model were failures with error_code
+        self.assertEqual(len(model.recorded_requests[-1].prior_tool_results), 2)
+        for env in model.recorded_requests[-1].prior_tool_results:
+            self.assertFalse(env.success)
+            self.assertEqual(env.error_code, "TOOL_EXECUTION_FAILED")
+
+    def test_completed_tool_cache_cleared_after_successful_investigation(self) -> None:
+        """Verify completed-tool cache is scoped strictly to one investigation execution."""
+        from investigator.runtime_guard import RuntimeGuard, RuntimeGuardConfig
+
+        mock_splunk = MagicMock(spec=SplunkSearchClient)
+        mock_splunk.search_modsecurity_sqli.return_value = [_RAW_MODSEC_TELEMETRY]
+        router = ToolRouter(splunk_client=mock_splunk)
+        audit_log = AuditLog()
+        guard = RuntimeGuard(config=RuntimeGuardConfig(max_model_invocations=10))
+
+        model = ScriptedModel([
+            # Investigation 1 (3 decisions: tool, duplicate tool, final)
+            ModelDecision(
+                decision_type=DecisionType.TOOL_REQUEST,
+                tool_request=ToolRequest(
+                    tool_name="bounded_splunk_search",
+                    arguments={"query_type": "modsecurity_sqli_matches", "host": "web01"},
+                ),
+            ),
+            ModelDecision(
+                decision_type=DecisionType.TOOL_REQUEST,
+                tool_request=ToolRequest(
+                    tool_name="bounded_splunk_search",
+                    arguments={"query_type": "modsecurity_sqli_matches", "host": "web01"},
+                ),
+            ),
+            ModelDecision(
+                decision_type=DecisionType.FINAL_RESULT,
+                final_result=_VALID_WEB01_ASSESSMENT,
+            ),
+            # Investigation 2 (2 decisions: tool, final)
+            ModelDecision(
+                decision_type=DecisionType.TOOL_REQUEST,
+                tool_request=ToolRequest(
+                    tool_name="bounded_splunk_search",
+                    arguments={"query_type": "modsecurity_sqli_matches", "host": "web01"},
+                ),
+            ),
+            ModelDecision(
+                decision_type=DecisionType.FINAL_RESULT,
+                final_result=_VALID_WEB01_ASSESSMENT,
+            ),
+        ])
+        orchestrator = InvestigationOrchestrator(
+            model=model,
+            tool_router=router,
+            audit_log=audit_log,
+            guard=guard,
+        )
+
+        # Run 1: duplicate is reused, backend called once
+        res1 = orchestrator.investigate(_VALID_WEB01_REQUEST)
+        self.assertIsInstance(res1, Web01InvestigationAssessment)
+        self.assertEqual(mock_splunk.search_modsecurity_sqli.call_count, 1)
+
+        # Run 2 on same orchestrator instance: backend called again (count=2), NOT reused from Run 1
+        res2 = orchestrator.investigate(_VALID_WEB01_REQUEST)
+        self.assertIsInstance(res2, Web01InvestigationAssessment)
+        self.assertEqual(mock_splunk.search_modsecurity_sqli.call_count, 2)
+
+        # Audit events prove:
+        # Run 1 had 1 allowed and 1 reused
+        # Run 2 had 1 allowed and 0 reused
+        events = audit_log.events()
+        allowed_events = [e for e in events if e.detail_code == "bounded_splunk_search_allowed"]
+        reused_events = [e for e in events if e.detail_code == "bounded_splunk_search_reused"]
+        self.assertEqual(len(allowed_events), 2)
+        self.assertEqual(len(reused_events), 1)
+
+    def test_unauthorized_tool_is_not_allowed_by_duplicate_cache(self) -> None:
+        """Verify unauthorized tool request fails closed immediately without consulting cache."""
+        router = ToolRouter(splunk_client=MagicMock(spec=SplunkSearchClient))
+        model = ScriptedModel([
+            ModelDecision(
+                decision_type=DecisionType.TOOL_REQUEST,
+                tool_request=ToolRequest(
+                    tool_name="isolate_host",
+                    arguments={"host": "web01"},
+                ),
+            )
+        ])
+        orchestrator = InvestigationOrchestrator(model=model, tool_router=router)
+        with self.assertRaises(OrchestratorError) as ctx:
+            orchestrator.investigate(_VALID_WEB01_REQUEST)
+        self.assertIn("Unauthorized tool 'isolate_host'", str(ctx.exception))
 
 
 if __name__ == "__main__":
