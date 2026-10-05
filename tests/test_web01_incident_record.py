@@ -488,13 +488,13 @@ class TestWeb01IncidentRecordIntegration(unittest.TestCase):
         )
 
         ticket_config = TicketConfig(
-            project_key="SEC",
+            project_key="KAN",
             issue_type="Incident",
             allowed_labels=("ai-native-soc", "approval-not-required", "action-not-executed"),
         )
         ticket_req = build_ticket_request(record, ticket_config)
 
-        self.assertEqual(ticket_req.project_key, "SEC")
+        self.assertEqual(ticket_req.project_key, "KAN")
         self.assertIn("web01", ticket_req.summary.lower())
         self.assertIn("INC-WEB01-TKT01", ticket_req.summary)
         self.assertIn("ModSecurity", ticket_req.description)

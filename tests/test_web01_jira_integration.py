@@ -152,7 +152,7 @@ class TestWeb01JiraIntegration(unittest.TestCase):
     def _get_ticket_config(self) -> TicketConfig:
         """Construct ticket config with WEB01 labels after support is verified."""
         return TicketConfig(
-            project_key="SEC",
+            project_key="KAN",
             issue_type="Incident",
             allowed_labels=(
                 "ai-native-soc",
@@ -180,7 +180,7 @@ class TestWeb01JiraIntegration(unittest.TestCase):
         ticket_req = build_ticket_request(LIVE_WEB01_INCIDENT, self._get_ticket_config())
 
         self.assertIsInstance(ticket_req, TicketRequest)
-        self.assertEqual(ticket_req.project_key, "SEC")
+        self.assertEqual(ticket_req.project_key, "KAN")
         self.assertEqual(ticket_req.issue_type, "Incident")
         self.assertEqual(ticket_req.incident_id, "INC-WEB01-001")
         self.assertEqual(ticket_req.priority, TicketPriority.HIGH)
@@ -377,7 +377,7 @@ class TestWeb01JiraIntegration(unittest.TestCase):
         mock_resp = MagicMock()
         mock_resp.status = 201
         mock_resp.read.return_value = json.dumps(
-            {"id": "10099", "key": "SEC-0088"}
+            {"id": "10099", "key": "KAN-0088"}
         ).encode("utf-8")
         mock_conn.getresponse.return_value = mock_resp
 
@@ -389,7 +389,7 @@ class TestWeb01JiraIntegration(unittest.TestCase):
         self.assertIsInstance(result, TicketResult)
         self.assertTrue(result.success)
         self.assertEqual(result.provider, "jira_cloud")
-        self.assertEqual(result.ticket_key, "SEC-0088")
+        self.assertEqual(result.ticket_key, "KAN-0088")
         self.assertEqual(result.detail_code, "ticket_created_jira")
 
     @patch("http.client.HTTPSConnection")
@@ -405,7 +405,7 @@ class TestWeb01JiraIntegration(unittest.TestCase):
         mock_resp = MagicMock()
         mock_resp.status = 201
         mock_resp.read.return_value = json.dumps(
-            {"id": "10099", "key": "SEC-0088"}
+            {"id": "10099", "key": "KAN-0088"}
         ).encode("utf-8")
         mock_conn.getresponse.return_value = mock_resp
 
@@ -421,7 +421,7 @@ class TestWeb01JiraIntegration(unittest.TestCase):
 
         sent_body = json.loads(kwargs["body"].decode("utf-8"))
         fields = sent_body["fields"]
-        self.assertEqual(fields["project"]["key"], "SEC")
+        self.assertEqual(fields["project"]["key"], "KAN")
         self.assertEqual(fields["issuetype"]["name"], "Incident")
         self.assertEqual(fields["summary"], ticket_req.summary)
         self.assertIn("web-attack", fields["labels"])
@@ -486,7 +486,7 @@ class TestWeb01JiraIntegration(unittest.TestCase):
 
         with self.assertRaises(TicketConfigError):
             TicketConfig(
-                project_key="SEC",
+                project_key="KAN",
                 issue_type="",
                 allowed_labels=("ai-native-soc",),
             )

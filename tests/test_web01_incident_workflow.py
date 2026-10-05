@@ -168,7 +168,7 @@ _NORMALIZED_TI_OBSERVATION = ThreatIntelObservation(
 )
 
 _VALID_TICKET_CONFIG = TicketConfig(
-    project_key="SEC",
+    project_key="KAN",
     issue_type="Incident",
     allowed_labels=tuple(sorted(ALLOWED_TICKET_LABELS)),
 )
@@ -258,7 +258,7 @@ class TestWeb01IncidentWorkflow(unittest.TestCase):
         self.assertIsInstance(result.ticket_request, TicketRequest)
         self.assertIsInstance(result.ticket_result, TicketResult)
         self.assertTrue(result.ticket_result.success)
-        self.assertTrue(result.ticket_result.ticket_key.startswith("SEC-"))
+        self.assertTrue(result.ticket_result.ticket_key.startswith("KAN-"))
 
     # =========================================================================
     # 2. IncidentRecord Integration (Section 4)
@@ -451,19 +451,43 @@ class TestWeb01IncidentWorkflow(unittest.TestCase):
         self.assertNotIn("Verdict: clean", ticket_req.description)
         self.assertNotIn("Verdict: harmless", ticket_req.description)
 
+    def _create_orchestrator(self) -> InvestigationOrchestrator:
+        """Construct standard test orchestrator for WEB01 workflow execution."""
+        mock_splunk = MagicMock(spec=SplunkSearchClient)
+        mock_splunk.search_modsecurity_sqli.return_value = [_RAW_MODSEC_PRIVATE_TELEMETRY]
+        router = ToolRouter(splunk_client=mock_splunk)
+        model = ScriptedModel([
+            ModelDecision(
+                decision_type=DecisionType.TOOL_REQUEST,
+                tool_request=ToolRequest(
+                    tool_name="bounded_splunk_search",
+                    arguments={"query_type": "modsecurity_sqli_matches", "host": "web01"},
+                ),
+            ),
+            ModelDecision(
+                decision_type=DecisionType.FINAL_RESULT,
+                final_result=_VALID_WEB01_ASSESSMENT,
+            ),
+        ])
+        return InvestigationOrchestrator(
+            model=model,
+            tool_router=router,
+            audit_log=AuditLog(),
+        )
+
     # =========================================================================
     # 7. Jira Remains Bounded and Offline (Section 9)
     # =========================================================================
 
     def test_web01_ticket_uses_bounded_project(self) -> None:
-        """Verify ticket project key is strictly bound to trusted config (SEC)."""
+        """Verify ticket project key is strictly bound to trusted config (KAN)."""
         record = build_modsecurity_incident_record(
             evidence=_VALID_MODSECURITY_EVIDENCE,
             threat_intel_status="SKIPPED_INELIGIBLE",
             threat_intel_skip_reason="ineligible_scope:private",
         )
         ticket_req = build_ticket_request(record, _VALID_TICKET_CONFIG)
-        self.assertEqual(ticket_req.project_key, "SEC")
+        self.assertEqual(ticket_req.project_key, "KAN")
 
     def test_web01_ticket_uses_bounded_issue_type(self) -> None:
         """Verify ticket issue type is strictly bound to trusted config (Incident)."""
@@ -494,6 +518,76 @@ class TestWeb01IncidentWorkflow(unittest.TestCase):
                 allowed_labels=_VALID_TICKET_CONFIG.allowed_labels,
             )
 
+    def test_web01_workflow_accepts_kan_project(self) -> None:
+        """Verify WEB01 workflow accepts valid KAN project configuration."""
+        orchestrator = self._create_orchestrator()
+        result = self._run_workflow(
+            request=_VALID_WEB01_REQUEST,
+            orchestrator=orchestrator,
+            ticket_config=_VALID_TICKET_CONFIG,
+            ticket_client=FakeTicketClient(),
+        )
+        self.assertEqual(result.ticket_request.project_key, "KAN")
+
+    def test_web01_workflow_rejects_sec_project(self) -> None:
+        """Verify WEB01 workflow rejects legacy/unauthorized SEC project fail-closed."""
+        orchestrator = self._create_orchestrator()
+        sec_config = TicketConfig(
+            project_key="SEC",
+            issue_type="Incident",
+            allowed_labels=_VALID_TICKET_CONFIG.allowed_labels,
+        )
+        with self.assertRaises(OrchestratorError):
+            self._run_workflow(
+                request=_VALID_WEB01_REQUEST,
+                orchestrator=orchestrator,
+                ticket_config=sec_config,
+                ticket_client=FakeTicketClient(),
+            )
+
+    def test_web01_workflow_rejects_arbitrary_project(self) -> None:
+        """Verify WEB01 workflow rejects arbitrary unallowlisted project keys."""
+        orchestrator = self._create_orchestrator()
+        arbitrary_config = TicketConfig(
+            project_key="PROJ",
+            issue_type="Incident",
+            allowed_labels=_VALID_TICKET_CONFIG.allowed_labels,
+        )
+        with self.assertRaises(OrchestratorError):
+            self._run_workflow(
+                request=_VALID_WEB01_REQUEST,
+                orchestrator=orchestrator,
+                ticket_config=arbitrary_config,
+                ticket_client=FakeTicketClient(),
+            )
+
+    def test_web01_workflow_accepts_incident_issue_type(self) -> None:
+        """Verify WEB01 workflow accepts Incident issue type."""
+        orchestrator = self._create_orchestrator()
+        result = self._run_workflow(
+            request=_VALID_WEB01_REQUEST,
+            orchestrator=orchestrator,
+            ticket_config=_VALID_TICKET_CONFIG,
+            ticket_client=FakeTicketClient(),
+        )
+        self.assertEqual(result.ticket_request.issue_type, "Incident")
+
+    def test_web01_workflow_rejects_task_issue_type(self) -> None:
+        """Verify WEB01 workflow rejects Task issue type even if available in Jira tenant."""
+        orchestrator = self._create_orchestrator()
+        task_config = TicketConfig(
+            project_key="KAN",
+            issue_type="Task",
+            allowed_labels=_VALID_TICKET_CONFIG.allowed_labels,
+        )
+        with self.assertRaises(OrchestratorError):
+            self._run_workflow(
+                request=_VALID_WEB01_REQUEST,
+                orchestrator=orchestrator,
+                ticket_config=task_config,
+                ticket_client=FakeTicketClient(),
+            )
+
     # =========================================================================
     # 8. AI Assessment Remains Advisory (Section 10)
     # =========================================================================
@@ -516,7 +610,7 @@ class TestWeb01IncidentWorkflow(unittest.TestCase):
             threat_intel_skip_reason="ineligible_scope:private",
         )
         ticket_req = build_ticket_request(record, _VALID_TICKET_CONFIG)
-        self.assertEqual(ticket_req.project_key, "SEC")
+        self.assertEqual(ticket_req.project_key, "KAN")
         self.assertEqual(ticket_req.issue_type, "Incident")
 
     def test_web01_ai_assessment_cannot_override_risk_policy(self) -> None:

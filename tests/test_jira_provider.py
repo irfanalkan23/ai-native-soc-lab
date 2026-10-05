@@ -519,6 +519,75 @@ class TestJiraTicketClient(unittest.TestCase):
             self.client.create_ticket(self.sample_request)
         self.assertEqual(str(ctx.exception), "jira_transport_error")
 
+    @patch("http.client.HTTPSConnection")
+    def test_http_400_captures_sanitized_diagnostic_errors(self, mock_conn_cls: MagicMock) -> None:
+        """HTTP 400 response preserves safe error details while maintaining deterministic error code."""
+        mock_conn = MagicMock()
+        mock_conn_cls.return_value = mock_conn
+
+        mock_resp = MagicMock()
+        mock_resp.status = 400
+        mock_resp.read.return_value = json.dumps({
+            "errorMessages": ["Project SEC does not exist or you do not have permission."],
+            "errors": {
+                "issuetype": "Issue type is invalid",
+                "description": "Operation value must be an Atlassian Document (ADF)",
+            },
+        }).encode("utf-8")
+        mock_conn.getresponse.return_value = mock_resp
+
+        with self.assertRaises(JiraResponseError) as ctx:
+            self.client.create_ticket(self.sample_request)
+
+        # 1. Deterministic error code preserved in str()
+        self.assertEqual(str(ctx.exception), "jira_payload_rejected")
+
+        # 2. HTTP status preserved
+        self.assertEqual(ctx.exception.http_status, 400)
+
+        # 3. Sanitized error fields preserved
+        self.assertEqual(
+            ctx.exception.jira_errors,
+            {
+                "issuetype": "Issue type is invalid",
+                "description": "Operation value must be an Atlassian Document (ADF)",
+            },
+        )
+        self.assertEqual(
+            ctx.exception.jira_error_messages,
+            ("Project SEC does not exist or you do not have permission.",),
+        )
+
+        # 4. Invariants: no raw headers or body leaked in exception str
+        exc_str = str(ctx.exception)
+        self.assertNotIn("Authorization", exc_str)
+        self.assertNotIn("Bearer", exc_str)
+        self.assertNotIn("Project SEC does not exist", exc_str)
+
+    @patch("http.client.HTTPSConnection")
+    def test_http_400_redacts_secrets_in_diagnostics(self, mock_conn_cls: MagicMock) -> None:
+        """Secrets in Jira error responses are sanitized before exposure in diagnostics."""
+        mock_conn = MagicMock()
+        mock_conn_cls.return_value = mock_conn
+
+        mock_resp = MagicMock()
+        mock_resp.status = 400
+        mock_resp.read.return_value = json.dumps({
+            "errorMessages": ["Failed with Bearer secret-token-xyz123 and Basic dXNlcjpwYXNz"],
+            "errors": {
+                "auth": "Invalid token Bearer abc-123-def",
+            },
+        }).encode("utf-8")
+        mock_conn.getresponse.return_value = mock_resp
+
+        with self.assertRaises(JiraResponseError) as ctx:
+            self.client.create_ticket(self.sample_request)
+
+        self.assertEqual(str(ctx.exception), "jira_payload_rejected")
+        self.assertNotIn("secret-token-xyz123", ctx.exception.jira_error_messages[0])
+        self.assertNotIn("dXNlcjpwYXNz", ctx.exception.jira_error_messages[0])
+        self.assertNotIn("abc-123-def", ctx.exception.jira_errors["auth"])
+
 
 class TestJiraSecurityBoundaries(unittest.TestCase):
     """Test architectural and security boundaries for Jira provider."""

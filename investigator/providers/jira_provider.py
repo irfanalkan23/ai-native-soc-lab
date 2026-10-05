@@ -34,7 +34,7 @@ import json
 import os
 import re
 import ssl
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, Mapping, Optional, Tuple
 import urllib.parse
 
 from investigator.ticketing import (
@@ -64,6 +64,19 @@ ATLASSIAN_HOST_PATTERN = re.compile(
     r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.atlassian\.net$"
 )
 
+_SECRET_PATTERNS = (
+    re.compile(r"bearer\s+[a-zA-Z0-9_\-\.]+", re.IGNORECASE),
+    re.compile(r"basic\s+[a-zA-Z0-9+/=]+", re.IGNORECASE),
+)
+
+
+def _sanitize_diagnostic_text(text: str) -> str:
+    """Sanitize diagnostic text by masking tokens and bounding string length."""
+    cleaned = text
+    for pat in _SECRET_PATTERNS:
+        cleaned = pat.sub("[REDACTED]", cleaned)
+    return cleaned[:256]
+
 
 # ---------------------------------------------------------------------------
 # Exceptions
@@ -91,7 +104,19 @@ class JiraTransportError(JiraError, TicketClientError):
 
 class JiraResponseError(JiraError, TicketClientError):
     """Raised when Jira returns a non-201 response, oversized body, or invalid JSON/schema."""
-    pass
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        http_status: Optional[int] = None,
+        jira_errors: Optional[Mapping[str, Any]] = None,
+        jira_error_messages: Optional[Tuple[str, ...]] = None,
+    ) -> None:
+        super().__init__(message)
+        self.http_status = http_status
+        self.jira_errors: Dict[str, str] = dict(jira_errors) if jira_errors else {}
+        self.jira_error_messages: Tuple[str, ...] = tuple(jira_error_messages) if jira_error_messages else ()
 
 
 # ---------------------------------------------------------------------------
@@ -373,7 +398,32 @@ class JiraTicketClient:
 
             # Status check for non-201
             if resp.status != 201:
-                raise JiraResponseError(map_jira_http_status_to_error_code(resp.status))
+                safe_errors: Dict[str, str] = {}
+                safe_error_messages: list[str] = []
+                try:
+                    raw_err_body = resp.read(MAX_RESPONSE_BYTES + 1)
+                    if len(raw_err_body) <= MAX_RESPONSE_BYTES:
+                        err_data = json.loads(raw_err_body.decode("utf-8", errors="replace"))
+                        if isinstance(err_data, dict):
+                            raw_errs = err_data.get("errors")
+                            if isinstance(raw_errs, dict):
+                                for k, v in raw_errs.items():
+                                    if isinstance(k, str) and isinstance(v, str):
+                                        safe_errors[k[:64]] = _sanitize_diagnostic_text(v)
+                            raw_msgs = err_data.get("errorMessages")
+                            if isinstance(raw_msgs, list):
+                                for msg in raw_msgs:
+                                    if isinstance(msg, str):
+                                        safe_error_messages.append(_sanitize_diagnostic_text(msg))
+                except Exception:
+                    pass
+
+                raise JiraResponseError(
+                    map_jira_http_status_to_error_code(resp.status),
+                    http_status=resp.status,
+                    jira_errors=safe_errors,
+                    jira_error_messages=tuple(safe_error_messages),
+                )
 
             # Bounded response read (MUST occur before connection close)
             try:
@@ -382,24 +432,24 @@ class JiraTicketClient:
                 raise JiraTransportError("jira_transport_error") from exc
 
             if len(raw_body) > MAX_RESPONSE_BYTES:
-                raise JiraResponseError("response exceeded maximum size limit")
+                raise JiraResponseError("response exceeded maximum size limit", http_status=resp.status)
 
             # Parse JSON
             try:
                 data = json.loads(raw_body.decode("utf-8"))
             except Exception as exc:
-                raise JiraResponseError("failed to parse Jira response JSON") from exc
+                raise JiraResponseError("failed to parse Jira response JSON", http_status=resp.status) from exc
 
             if not isinstance(data, dict):
-                raise JiraResponseError("Jira response JSON must be an object")
+                raise JiraResponseError("Jira response JSON must be an object", http_status=resp.status)
 
             ticket_key = data.get("key")
             if type(ticket_key) is not str or not SAFE_TICKET_KEY_PATTERN.match(ticket_key):
-                raise JiraResponseError("jira_ticket_key_invalid")
+                raise JiraResponseError("jira_ticket_key_invalid", http_status=resp.status)
 
             expected_prefix = f"{request.project_key}-"
             if not ticket_key.startswith(expected_prefix):
-                raise JiraResponseError("jira_ticket_key_project_mismatch")
+                raise JiraResponseError("jira_ticket_key_project_mismatch", http_status=resp.status)
 
             now_utc = datetime.now(timezone.utc).isoformat()
             return TicketResult(

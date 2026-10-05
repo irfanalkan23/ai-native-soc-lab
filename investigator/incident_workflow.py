@@ -52,6 +52,13 @@ from investigator.ticketing import (
 )
 
 
+# ---------------------------------------------------------------------------
+# Bounded Ticket Routing Configuration
+# ---------------------------------------------------------------------------
+ALLOWED_WEB01_PROJECT_KEYS = frozenset({"KAN"})
+ALLOWED_WEB01_ISSUE_TYPES = frozenset({"Incident"})
+
+
 @dataclass(frozen=True)
 class Web01WorkflowResult:
     """Immutable, validated output artifact of the complete WEB01 incident workflow."""
@@ -92,6 +99,16 @@ def run_web01_incident_workflow(
     if not isinstance(ticket_config, TicketConfig):
         raise OrchestratorError(
             f"ticket_config must be TicketConfig, got {type(ticket_config).__name__}"
+        )
+    if ticket_config.project_key not in ALLOWED_WEB01_PROJECT_KEYS:
+        raise OrchestratorError(
+            f"Unauthorized project_key '{ticket_config.project_key}' for WEB01 incident workflow. "
+            f"Allowed project keys: {sorted(ALLOWED_WEB01_PROJECT_KEYS)}"
+        )
+    if ticket_config.issue_type not in ALLOWED_WEB01_ISSUE_TYPES:
+        raise OrchestratorError(
+            f"Unauthorized issue_type '{ticket_config.issue_type}' for WEB01 incident workflow. "
+            f"Allowed issue types: {sorted(ALLOWED_WEB01_ISSUE_TYPES)}"
         )
 
     # 1. Execute bounded investigation (orchestrator handles guard, budget, audit, model loop)
