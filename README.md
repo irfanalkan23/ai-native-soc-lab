@@ -11,25 +11,28 @@ A hands-on, defensible engineering lab demonstrating AI-assisted security operat
 
 ### Executive Status Summary
 
-* **Live benign SOC pipeline (Endpoint / DC01)**: **LIVE TESTED** (DC01 Sysmon $\rightarrow$ Splunk $\rightarrow$ Bounded Investigation $\rightarrow$ Decoded Command $\rightarrow$ MITRE $\rightarrow$ Deterministic Policy $\rightarrow$ JSONL Audit $\rightarrow$ IncidentRecord $\rightarrow$ Jira Cloud `KAN-5`)
+* **Live benign SOC pipeline (Endpoint / DC01)**: **LIVE TESTED** (DC01 Sysmon $\rightarrow$ Splunk $\rightarrow$ Bounded Investigation $\rightarrow$ Decoded Command $\rightarrow$ MITRE $\rightarrow$ Deterministic Policy $\rightarrow$ JSONL Audit $\rightarrow$ IncidentRecord $\rightarrow$ Jira Cloud `KAN-7`)
 * **Live WEB01 web telemetry ingestion**: **LIVE VERIFIED** (Kali controlled SQLi $\rightarrow$ WEB01 Apache ModSecurity CRS $\rightarrow$ HTTP 403 $\rightarrow$ Splunk index `main`, sourcetype `modsecurity`)
-* **WEB01 ModSecurity SQLi pipeline**: **IMPLEMENTED + TESTED** (Bounded retrieval $\rightarrow$ Deterministic parser $\rightarrow$ `ModSecuritySqliEvidence` $\rightarrow$ Scope gate $\rightarrow$ TI eligibility gate $\rightarrow$ `IncidentRecord` $\rightarrow$ Bounded `TicketRequest`)
-* **Real Jira Cloud create-issue (DC01)**: **LIVE TESTED with KAN-5**
-* **Jira Cloud create-issue (WEB01)**: **IMPLEMENTED + MOCK TESTED** (Live ticket creation for WEB01 NOT YET TESTED)
+* **WEB01 ModSecurity SQLi pipeline**: **IMPLEMENTED + TESTED + LIVE TESTED** (Bounded retrieval $\rightarrow$ Deterministic parser $\rightarrow$ `ModSecuritySqliEvidence` $\rightarrow$ Scope gate $\rightarrow$ TI eligibility gate $\rightarrow$ `IncidentRecord` $\rightarrow$ Bounded `TicketRequest`)
+* **WEB01 AI investigation (OpenAI path)**: **LIVE TESTED** (OpenAI model decision loop $\rightarrow$ bounded Splunk search $\rightarrow$ structured `Web01InvestigationAssessment`)
+* **Real Jira Cloud create-issue (DC01)**: **LIVE TESTED with KAN-7**
+* **Real Jira Cloud create-issue (WEB01)**: **LIVE TESTED with KAN-8** (Project `KAN`, issue type `Incident`) and **LIVE VERIFIED with KAN-9** (hardened structured Atlassian Document Format (ADF) description rendering)
+* **Hardened Jira ADF rendering**: **LIVE VERIFIED** (Successful `KAN-9` creation and visual inspection: H2 headings, bullet lists, plain text, inert `codeBlock`, zero marks/HTML/Markdown injection)
+* **WEB01 Threat-Intelligence Policy Integration**: **IMPLEMENTED + TESTED + LIVE TESTED** (Controlled public-source VirusTotal enrichment via full deterministic WEB01 control path; sanitized `8.8.8.8` fixture; private IPs remain ineligible; RuntimeGuard engaged; exactly 1 live VT lookup)
 * **Canonical Security Evaluations**: **17 / 17 PASS (100.0%)** (7 baseline + 10 WEB01 adversarial scenarios; 0 security violations)
 * **Human approval DENY**: **INTERACTIVELY DEMONSTRATED**
 * **Human approval APPROVE**: **INTERACTIVELY DEMONSTRATED**
 * **Endpoint isolation**: **SIMULATED ONLY**
-* **OpenAI + real Splunk + real Jira**: **NOT YET TESTED** (components tested individually; single integrated trio run pending)
 * **Real endpoint containment**: **NOT IMPLEMENTED**
+* **Suricata / pfSense IDS telemetry**: **PLANNED / DEFERRED**
 
 > **Core Architectural & Safety Disclosures**:
-> 1. **Live E2E Validation Used FakeModel**: The full live Splunk-to-Jira validation was conducted with `FakeModel` (deterministic test fixture). OpenAI Responses API integration has been tested offline and via standalone live smoke test, but has **NOT** yet been executed in a single integrated live run alongside real Splunk and real Jira.
-> 2. **Downstream-Only Ticketing Authority**: Jira issue creation (`KAN-5`) acts strictly as a downstream external tracking and reporting sink. Jira possesses **zero response authority** over risk scoring, policy evaluation, approval gates, or endpoint actions.
+> 1. **Live E2E Investigation Models**: The full live Splunk-to-Jira DC01 pipeline was exercised with `FakeModel` (deterministic test fixture) during Milestone 5 and with real OpenAI GPT-4o in Milestone 7A. The WEB01 investigation path using the real OpenAI model was **LIVE TESTED** in Milestone 13F-1.
+> 2. **Downstream-Only Ticketing Authority**: Jira issue creation (`KAN-7` for DC01, `KAN-8` / `KAN-9` for WEB01) acts strictly as a downstream external tracking and reporting sink. Jira possesses **zero response authority** over risk scoring, policy evaluation, approval gates, or endpoint actions.
 > 3. **Human Approval Scope**: There is exactly one human approval gate: `deterministic policy -> approval required -> human approve/deny -> bounded simulated action`. Downstream Jira ticket creation does **not** require human approval because ticketing is reporting/tracking, not a consequential response action.
-> 4. **Ephemeral Credential Lifecycle**: Temporary Jira API tokens used during live validation were injected strictly via process environment variables, Jira credential environment variables were unset from the active shell/process environment after testing, temporary tokens were revoked through the Atlassian account API-token management page, and credentials were never committed to version control.
+> 4. **Ephemeral Credential Lifecycle**: Temporary API credentials used during live validation (OpenAI API keys, Jira API tokens, VirusTotal API keys) were injected strictly via process environment variables, unset after testing, and never committed to version control.
 > 5. **Truthful Engineering Boundaries**: This project is an ongoing engineering lab, not a production-ready enterprise SOC deployment. Response containment is strictly simulated (`SIMULATED` vs `NOT_EXECUTED`); zero live endpoint containment or host state modification is implemented.
-> 6. **WEB01 Private Scope & Threat Intel Isolation**: In the running lab, the controlled WEB01 attacker originates from a private LabNet address (`192.168.1.100`). The deterministic scope classification system identifies private/non-global IPs and strictly blocks external threat intelligence lookup attempts (`external_ti_eligible=False`, `threat_intel_status="SKIPPED_INELIGIBLE"`). No genuine public WEB01 attacker IP has yet traversed the complete enrichment path live.
+> 6. **WEB01 Scope Classification & Threat Intel Controls**: Real lab attacks against WEB01 originate from private LabNet address `192.168.1.100`. The deterministic scope classification system identifies private/non-global IPs and strictly blocks external threat intelligence lookup attempts (`external_ti_eligible=False`, `threat_intel_status="SKIPPED_INELIGIBLE"`). In Milestone 13F-3, the public-source enrichment branch was **LIVE TESTED** using a sanitized synthetic public-IP fixture (`8.8.8.8`); this test used mocked Splunk telemetry and did **not** claim or fabricate that attack traffic actually originated from that public IP.
 >
 > *For detailed walkthrough and evidence, see the [Encoded PowerShell Case Study](docs/case-studies/encoded-powershell-end-to-end.md).*
 
@@ -72,9 +75,9 @@ The lab demonstrates defense-in-depth across multiple enterprise telemetry layer
 * **Endpoint Telemetry**: Windows Server 2022 (`DC01`) / Microsoft Sysmon Process Create (Event ID 1) / Encoded PowerShell execution.
 * **Web Application Telemetry**: Linux (`WEB01` Ubuntu 24.04.3) / Apache 2.4 reverse proxy / OWASP ModSecurity Core Rule Set (OWASP CRS 3.3.5) / OWASP Juice Shop running as a Node.js application on port 3000.
 * **SIEM & Ingestion**: Splunk Enterprise indexer / Splunk Universal Forwarder / Bounded retrieval interfaces (static SPL; caller cannot execute arbitrary SPL).
-* **Threat Intelligence**: Bounded VirusTotal REST API v3 IP adapter (live smoke tested; public IPv4 eligible only; private/non-global IPs gated).
+* **Threat Intelligence**: Bounded VirusTotal REST API v3 IP adapter (live tested; public IPv4 eligible only; private/non-global IPs gated; controlled public-source enrichment live tested in Milestone 13F-3).
 * **Agent Security & Policy**: Deterministic policy engine, least-privilege tool allowlisting, prompt-injection isolation, runtime kill switch, human approval gates for consequential actions, immutable incident records.
-* **Ticketing & SOAR**: Bounded Jira Cloud adapter (downstream reporting only, zero response authority; live tested for DC01 via `KAN-5`, mock tested for WEB01).
+* **Ticketing & SOAR**: Bounded Jira Cloud adapter (downstream reporting only, zero response authority; live tested for DC01 via `KAN-7`, live tested for WEB01 via `KAN-8`, and live verified with hardened ADF formatting via `KAN-9`).
 
 ---
 
@@ -133,10 +136,10 @@ Eligibility-Gated Threat Intelligence (`enrich_modsecurity_source_ip`: private I
 Deterministic IncidentRecord (`build_modsecurity_incident_record`: immutable record; rejects contradictory states; zero raw audit logs)
     │
     ▼
-Bounded TicketRequest (`build_ticket_request`: allowlisted project SEC & issue type Incident; derives web-attack label; plain text ADF; zero raw HTML)
+Bounded TicketRequest (`build_ticket_request`: allowlisted project KAN & issue type Incident; derives web-attack label; hardened ADF; zero raw HTML)
     │
     ▼
-Jira Provider Adapter (MOCK TESTED: downstream tracking only; zero response authority; real live WEB01 ticket creation NOT YET TESTED)
+Jira Provider Adapter (LIVE TESTED: downstream tracking only; zero response authority; verified live with ticket KAN-8 and hardened ADF verification KAN-9)
     │
     ▼
 Automated Security Evaluation Harness (17 canonical scenarios: 7 baseline + 10 WEB01; 100% PASS; zero security violations)
@@ -153,8 +156,9 @@ Automated Security Evaluation Harness (17 canonical scenarios: 7 baseline + 10 W
 6. **Deterministic Scope Classification**: `classify_ipv4_scope(evidence.src_ip)` inspects the IP. Only public/global IPv4 addresses are eligible for threat intelligence lookup. Private LabNet addresses (`192.168.1.100`) evaluate to `scope="private"` with `external_ti_eligible=False`.
 7. **Eligibility-Gated Threat Intelligence**: `enrich_modsecurity_source_ip` evaluates eligibility. Because `192.168.1.100` is private, external lookups are blocked: exactly **0** external network or VirusTotal calls occur (`status="SKIPPED_INELIGIBLE"`).
 8. **Incident Record Construction**: `build_modsecurity_incident_record` generates an immutable `IncidentRecord` capturing validated evidence, scope classification, and threat intelligence status. Contradictory states (e.g. failure marked as ineligible) reject fail-closed.
-9. **Bounded Jira Ticketing (Mock Tested)**: `build_ticket_request` formats an allowlisted `TicketRequest` (`project="SEC"`, `issue_type="Incident"`). Formats bounded Atlassian Document Format (ADF) description, deterministically derives the `web-attack` label from validated evidence, strips hostile markup/HTML, and prevents raw audit or secret leakage.
+9. **Bounded Jira Ticketing (Live Tested)**: `build_ticket_request` formats an allowlisted `TicketRequest` (`project="KAN"`, `issue_type="Incident"`). Formats hardened Atlassian Document Format (ADF) description (H2 headings, bullet lists, plain text, inert `codeBlock`, zero marks/HTML), deterministically derives the `web-attack` label from validated evidence, strips hostile markup, and prevents raw audit or secret leakage. Live ticket creation verified in Jira Cloud with `KAN-8` (incident creation) and `KAN-9` (hardened ADF live verification).
 10. **Automated Security Evaluations**: 10 deterministic WEB01 evaluation scenarios run within the canonical 17-scenario evaluation harness (`evaluation/harness.py`), ensuring 100% control pass rate across prompt injection, parser bypass, scope bypass, argument smuggling, and semantic confusion.
+11. **Controlled Live Threat Intelligence Validation**: Validated the complete deterministic public-source enrichment control path live against VirusTotal using a sanitized `8.8.8.8` fixture (`tests/live/test_web01_threat_intel_live.py`). Proves scope gating, RuntimeGuard permit accounting (2 tool executions), ToolRouter dispatch, normalized `ThreatIntelObservation`, and `IncidentRecord` integration hold under real provider execution without exposing WEB01 or fabricating attack origin.
 
 ---
 
@@ -180,7 +184,7 @@ To maintain strict truthfulness across technical interviews and documentation, s
 
 | Milestone / Component | Type | Status | Details |
 | :--- | :--- | :--- | :--- |
-| **Lab Infrastructure** | Virtual Network & Hosts | **LIVE VERIFIED** | VirtualBox LabNet (`192.168.1.0/24`), pfSense, DC01, WEB01, Kali, Splunk Server. |
+| **Lab Infrastructure** | Virtual Network & Hosts | **VERIFIED** | VirtualBox LabNet (`192.168.1.0/24`), pfSense, DC01, WEB01, Kali, and Splunk-Server are established lab components; individual telemetry and workflow live-test claims are documented separately. |
 | **Sysmon Telemetry Ingestion** | Data Pipeline | **LIVE VERIFIED** | DC01 Sysmon Event ID 1 forwarded to Splunk index `main`. |
 | **WEB01 Telemetry Ingestion (12A)** | Data Pipeline | **LIVE VERIFIED** | Kali controlled SQLi against WEB01 Apache ModSecurity; CRS rule 942100 blocked with HTTP 403; anomaly score 8 and source IP `192.168.1.100` verified in Splunk (index `main`, sourcetype `modsecurity`). |
 | **Splunk Detection (`.spl`)** | Detection Engineering | **IMPLEMENTED + TESTED** | Verified against benign encoded PowerShell test on DC01. |
@@ -188,11 +192,11 @@ To maintain strict truthfulness across technical interviews and documentation, s
 | **Bounded Splunk Search Client** | Local Integration & Python Gateway | **IMPLEMENTED + LIVE TESTED** | Hardened local client; 40 unit tests pass; verified live against Splunk Free localhost export endpoint with raw XML extraction. |
 | **ModSecurity SQLi Evidence & Bounded Retrieval (12B)** | Evidence & SIEM Gateway | **IMPLEMENTED + TESTED** | Immutable `ModSecuritySqliEvidence` (7 fields); deterministic parser (`parse_modsecurity_sqli_event`) fails closed on malformed input; bounded query type `modsecurity_sqli_matches` enforces static SPL without caller-controlled queries; excludes `_raw`. |
 | **Source-IP Scope Classification (12C)** | Security Controls / Scope | **IMPLEMENTED + TESTED** | Deterministic `classify_ipv4_scope` across 8 IPv4 scopes (public, private, loopback, link_local, multicast, reserved, unspecified, non_global); only public is TI-eligible; private `192.168.1.100` evaluates to `external_ti_eligible=False`. |
-| **Eligibility-Gated Threat Intelligence (12D)** | Threat Intelligence / Gating | **IMPLEMENTED + TESTED** | `enrich_modsecurity_source_ip` enforces eligibility; private IPs yield `SKIPPED_INELIGIBLE` with 0 external lookups; public fixture routes through bounded lookup; failure preserved as `LOOKUP_FAILED` without conflation. (Adapter was live tested in M11; live public WEB01 IP enrichment NOT CLAIMED). |
+| **Eligibility-Gated Threat Intelligence (12D, 13D, 13F-3)** | Threat Intelligence / Gating | **IMPLEMENTED + TESTED + LIVE TESTED** | `enrich_modsecurity_source_ip` enforces eligibility; private IPs yield `SKIPPED_INELIGIBLE` with 0 external lookups; public-source enrichment through the full deterministic WEB01 control path (RuntimeGuard, ToolRouter, VirusTotal) is **LIVE TESTED** using sanitized synthetic fixture `8.8.8.8` in Milestone 13F-3; failure preserved as `LOOKUP_FAILED` without conflation. |
 | **WEB01 IncidentRecord Integration (12E)** | Reporting Artifact | **IMPLEMENTED + TESTED** | `build_modsecurity_incident_record` binds validated ModSecurity evidence and TI state; rejects contradictory failure-vs-skip states; zero raw audit logs or secrets; backward-compatible with DC01 path. |
-| **WEB01 Jira Ticket Construction (12F)** | SOAR / Case Management | **IMPLEMENTED + MOCK TESTED** | Deterministic `build_ticket_request` formats plain text ADF description; allowlisted project `SEC` and issue type `Incident`; derives `web-attack` label exclusively from validated evidence; mock tested against Jira provider; real live WEB01 ticket creation NOT YET TESTED. |
+| **WEB01 Jira Ticket Construction & Dispatch (12F, 13F-2)** | SOAR / Case Management | **IMPLEMENTED + LIVE TESTED + LIVE VERIFIED** | Deterministic `build_ticket_request` formats hardened structured Atlassian Document Format (ADF) description; bounded routing to project `KAN` and issue type `Incident`; derives `web-attack` label exclusively from validated evidence; renders allowlisted H2 headings, bullet lists, plain text, inert `codeBlock`, and zero marks/HTML; verified live in Jira Cloud with tickets `KAN-8` (incident creation) and `KAN-9` (hardened ADF live verification). |
 | **Investigator Scaffolding & Tool Router** | Triage Scaffolding & Routing | **IMPLEMENTED + UNIT TESTED** | Deterministic schemas, UTF-16LE Base64 decoder, static MITRE mapper, allowlisted tool router. |
-| **AI Investigator Agent & Orchestrator** | Automation & LLM | **IMPLEMENTED + TESTED** | Bounded orchestrator, FakeModel, OpenAI Responses API adapter; offline + live model tested. |
+| **AI Investigator Agent & Orchestrator** | Automation & LLM | **IMPLEMENTED + TESTED + LIVE TESTED** | Bounded orchestrator, FakeModel, OpenAI Responses API adapter; offline + live model tested across DC01 and WEB01 investigation paths. |
 | **Audit Logging (JSONL)** | Audit & Observability | **IMPLEMENTED + LIVE TESTED** | Local append-only JSONL audit trail with strict field allowlist and exact-type checks. |
 | **Policy Engine & Gate** | Security Controls | **IMPLEMENTED + LIVE TESTED** | Deterministic risk and action-policy evaluation; bounded scoring and action mapping. |
 | **Human Approval Gate** | Security Controls / HITL | **INTERACTIVELY DEMONSTRATED** | CLI approval gate for consequential actions; bounded retries, exact-type checks, fail-closed denial; APPROVE and DENY demonstrated. |
@@ -206,8 +210,8 @@ To maintain strict truthfulness across technical interviews and documentation, s
 | **Live Threat-Intelligence Enrichment (VirusTotal)** | Threat Intelligence | **LIVE TESTED** | Bounded public IP lookup verified live against VirusTotal REST API v3 via standalone smoke script and bounded ToolRouter live test (`tests/live/test_virustotal_smoke.py`); 2/2 PASS; advisory evidence only; zero response authority. |
 | **TI ToolRouter Integration** | Architecture / Routing | **IMPLEMENTED + TESTED** | Bounded `threat_intel_lookup` tool integrated into `ToolRouter` with strict public-IP validation; 4-tool allowlist when configured. |
 | **TI Risk-Score Integration** | Security Controls | **IMPLEMENTED + TESTED** | Bounded additive corroboration (+5/+10/+15, capped at 15 points) in `RiskPolicyEngine`; evidence cannot reduce score or bypass policy. |
-| **Full Agent + VirusTotal Pipeline** | Integration Pipeline | **NOT TESTED** | Standalone adapter smoke tested only; agent orchestrator + VirusTotal pipeline not implemented or tested. |
-| **Jira Cloud Create-Issue Adapter** | SOAR / Case Management | **LIVE TESTED with KAN-5** | Downstream tracking adapter (`investigator/providers/jira_provider.py`); 39 offline tests pass; verified live via smoke script (`KAN-4`) and live E2E demo (`KAN-5`); zero response authority. |
+| **Controlled Public-Source TI Validation (13F-3)** | Integration Pipeline | **LIVE TESTED** | Full deterministic WEB01 public-IP enrichment control path verified live against VirusTotal REST API v3 using sanitized synthetic fixture `8.8.8.8` (mocked Splunk, ScriptedModel, 1 real VT lookup, 0 OpenAI calls, 0 Jira calls, 0 containment actions); private IPs remain gated (`SKIPPED_INELIGIBLE`). |
+| **Jira Cloud Create-Issue Adapter** | SOAR / Case Management | **LIVE TESTED** | Downstream tracking adapter (`investigator/providers/jira_provider.py`); 39 offline tests pass; verified live for DC01 (`KAN-7`), live tested for WEB01 (`KAN-8`), and live verified with hardened ADF rendering (`KAN-9`); zero response authority. |
 | **OpenAI + Real Splunk + Real Jira** | Full Integrated Pipeline | **NOT YET TESTED** | Components tested individually; integrated trio run pending. |
 | **Real OpenAI + Real Splunk + Real Jira + Real VirusTotal** | Full Integrated Pipeline | **NOT TESTED** | Quad integration not implemented or tested; components tested individually or in subsets. |
 | **Prompt-Injection Guardrails & Fixtures** | Adversarial Testing / Governance | **IMPLEMENTED + TESTED OFFLINE** | 16 synthetic scenarios across CAT-1 to CAT-8; proves evidence is data, not authority; zero control bypass. |
@@ -339,26 +343,57 @@ To ensure defense-in-depth and prevent model regressions, all deterministic secu
 
 ## 8. Current Limitations & Boundary Disclosures
 
-* **Private Attacker IP in LabNet**: The controlled WEB01 attacker currently originates from private LabNet address `192.168.1.100`. The real WEB01 incident is intentionally not sent to external threat intelligence (`SKIPPED_INELIGIBLE`). No genuine public WEB01 attacker IP has yet traversed the complete enrichment path live.
-* **WEB01 Jira Ticketing Not Yet Live Tested**: WEB01 Jira ticket construction and formatting are verified through deterministic unit and mock tests. Live Jira Cloud ticket creation has **not** yet been executed for a WEB01 incident (prior live validation `KAN-5` was for DC01).
+* **Private Attacker IP in LabNet**: The controlled WEB01 attacker in the lab environment originates from private LabNet address `192.168.1.100`. Real lab incidents are intentionally not sent to external threat intelligence (`SKIPPED_INELIGIBLE`), preventing private network data leakage. In Milestone 13F-3, the public-source enrichment control path was validated live against VirusTotal using a sanitized synthetic fixture (`8.8.8.8`); this fixture was used purely for testing the deterministic pipeline and does not represent actual attacker traffic.
+* **WEB01 Jira Ticketing Live Verified**: Live Jira Cloud incident creation for WEB01 is **LIVE TESTED** (ticket `KAN-8`) and **LIVE VERIFIED** (ticket `KAN-9`) using bounded routing (project `KAN`, issue type `Incident`) and hardened structured Atlassian Document Format (ADF) description rendering. Downstream ticketing remains purely an external tracking sink with zero response authority.
 * **IPv4 Only**: The current WEB01 source-IP contract is IPv4-only. IPv6 input is rejected fail-closed before scope classification and is not eligible for external threat-intelligence enrichment.
-* **Deferred Network Telemetry**: Suricata remains deferred after earlier pfSense package-manager/integration problems. It is not currently installed/operational in the lab and is not required for the current WEB01 ModSecurity path.
-* **Not Production Infrastructure**: This project is a portfolio engineering lab demonstrating defensive agent architectures, not a production enterprise SOC deployment. External service quotas, network resilience, and high-throughput concurrency are not production-tested.
-* **No Autonomous Remediation**: Destructive containment (host isolation, account disablement, firewall rule changes) is not implemented. All response containment remains simulated.
+* **Deferred Network Telemetry**: Suricata network IDS telemetry remains **PLANNED / DEFERRED** after earlier pfSense package-manager/integration problems. It is not currently installed or operational in the lab and is not required for the current WEB01 ModSecurity path.
+* **Portfolio Lab Scope**: This project is an ongoing portfolio engineering lab demonstrating defensive agent architectures, not a production enterprise SOC deployment. External service quotas, network resilience, and high-throughput concurrency are not production-tested.
+* **No Autonomous Remediation**: Real endpoint containment is **NOT IMPLEMENTED**. Destructive containment actions (host isolation, account disablement, firewall rule changes, credential modifications) do not exist. All response containment remains strictly simulated.
 
 ---
 
-## 9. Planned Next Steps
+## 9. Post-Milestone-13 Project Roadmap (Milestones 14–23)
 
-1. **Controlled Live Jira Validation for WEB01**: Execute a single controlled live Jira Cloud ticket creation for a sanitized WEB01 incident (`WEB01-1`).
-2. **Controlled Public-Source-IP Live Validation**: Add a controlled external source that produces a genuine public source IP without exposing OWASP Juice Shop directly to the public Internet, then validate the WEB01 → scope classification → bounded VirusTotal enrichment path live.
-3. **Suricata Network IDS Re-evaluation**: Revisit Suricata deployment on a dedicated monitoring interface to enrich host and web telemetry with network flow logs.
-4. **Cross-Tier Telemetry Correlation**: Correlate WEB01 web application attacks with downstream DC01 endpoint activity in multi-stage attack scenarios.
-5. **Continuous Evaluation Expansion**: Expand adversarial scenarios to cover additional web application attack classes and API boundary vectors.
+### Core Roadmap Principle
+> **Keep the single-agent architecture unless a clear security-engineering benefit justifies more agents.**
+>
+> **Core Pipeline Invariant**:
+> `AI proposes → deterministic policy evaluates → human approves consequential actions → system executes only permitted/simulated actions → everything is logged and evaluated.`
+
+* **Milestone 14 — Agent Security Guardrails & Adversarial Validation**:
+  Expand tool-allowlist abuse testing, prompt-injection cases, malformed tool arguments, RuntimeGuard kill-switch/tool-budget enforcement, escalation-boundary tests, and denied-action audit coverage.
+* **Milestone 15 — Human Approval & Consequential Action Boundary**:
+  Harden approval binding, denial behavior, stale/forged approval rejection, incident/action matching, and auditability. Consequential response remains simulated or explicitly human-approved.
+* **Milestone 16 — Security Evaluation Framework Expansion**:
+  Broaden automated evaluations for investigation correctness, insufficient evidence, unauthorized tool requests, prompt injection, TI/Jira/provider failures, kill-switch halts, approval outcomes, conflicting evidence, and hallucinated security claims.
+* **Milestone 17 — Additional Detection Coverage**:
+  Add a small number of high-value detections with full telemetry, SPL/Sigma, MITRE mapping, incident workflow, and evaluation coverage. Prioritize credential-access/LSASS behavior, scheduled task or service creation, and authentication abuse.
+* **Milestone 18 — Suricata / Network Detection Integration**:
+  Revisit pfSense Suricata, forward firewall/IDS telemetry to Splunk, and add a bounded network-alert investigation path. Suricata stays deferred until this milestone begins.
+* **Milestone 19 — SOC Analyst UI / Investigation Console**:
+  Build a thin analyst-facing UI over the existing backend showing:
+  - incidents;
+  - evidence;
+  - AI assessment;
+  - deterministic risk/policy state;
+  - threat-intelligence results;
+  - approval state;
+  - Jira linkage;
+  - RuntimeGuard/tool activity;
+  - audit timeline.
+  *The UI must not bypass policy or directly control privileged tools.*
+* **Milestone 20 — Runtime Monitoring & Operational Safety**:
+  Expose per-run tool counts, blocked-tool counts, provider failures, kill-switch state, approval state, audit correlation, and bounded runtime-health/security metrics.
+* **Milestone 21 — Threat Model & Security Architecture Documentation**:
+  Formalize trust boundaries, untrusted inputs, model authority, deterministic control plane, secrets handling, external-provider boundaries, approval boundary, abuse cases, residual risks, and production limitations.
+* **Milestone 22 — Recruiter / Interview Demo**:
+  Create one polished end-to-end SOC incident demonstration and one adversarial-control demonstration proving that malicious/untrusted content cannot bypass ToolRouter, RuntimeGuard, deterministic policy, or human approval.
+* **Milestone 23 — Portfolio & GitHub Finalization**:
+  Finalize architecture diagrams, README/setup, implementation-status matrix, incident case studies, screenshots, evaluation results, live-tested vs simulated matrix, limitations, future improvements, and public roadmap.
 
 ---
 
-## 10. High-Level Project Roadmap
+## 10. Completed & Historical Milestone Progress
 
 - [x] **Milestone 1**: Lab environment deployment, Sysmon telemetry verification, controlled adversary-tradecraft simulation (benign test), and SPL detection engineering.
 - [x] **Milestone 2**: Bounded read-only Splunk search client (Python) operating under least-privilege principles and verified end-to-end against live telemetry.
@@ -385,4 +420,12 @@ To ensure defense-in-depth and prevent model regressions, all deterministic secu
   - [x] **12F**: Bounded Jira ticket request formatting (**IMPLEMENTED + MOCK TESTED**).
   - [x] **12G**: 10 WEB01 adversarial security evaluations; 17 canonical scenarios (**IMPLEMENTED + TESTED**; 100% PASS).
   - [x] **12H**: Documentation and status closure (**DOCUMENTATION COMPLETE**).
-- [ ] **Milestone 13**: Controlled live Jira validation for WEB01 incident (`WEB01-1`).
+- [x] **Milestone 13**: WEB01 Live Pipeline Validation & Hardening:
+  - [x] **13A**: WEB01 Agent Investigation Contract (typed request & advisory assessment, no action authority) (**IMPLEMENTED + TESTED**).
+  - [x] **13B**: Bounded Investigator Tool Integration (`bounded_splunk_search` only, ToolRouter boundary) (**IMPLEMENTED + TESTED**).
+  - [x] **13C**: Model/Output Hardening (strict request serialization, strict result allowlists, structural rejection of execution/raw telemetry fields) (**IMPLEMENTED + TESTED**).
+  - [x] **13D**: Deterministic TI/Policy Integration (scope classification, private-IP skip, public-IP bounded lookup, RuntimeGuard, `ENRICHED` / `SKIPPED_INELIGIBLE` / `LOOKUP_FAILED` states) (**IMPLEMENTED + TESTED**).
+  - [x] **13E**: Offline End-to-End WEB01 Incident Workflow (`IncidentRecord`, deterministic risk/policy, ticket request generation, no AI authority over incident facts/routing) (**IMPLEMENTED + TESTED**).
+  - [x] **13F-1**: Controlled Live OpenAI Validation (live model investigation executed, duplicate backend suppression implemented and tested offline) (**LIVE TESTED**).
+  - [x] **13F-2**: Controlled Live Jira Validation (bounded routing `KAN` / `Incident`, successful live ticket creation with `KAN-8`, hardened structured ADF description formatting, live ADF verification with `KAN-9`) (**LIVE TESTED + LIVE VERIFIED**).
+  - [x] **13F-3**: Controlled Live Public-Source Threat Intelligence Validation (one controlled real VirusTotal lookup, sanitized `8.8.8.8` fixture, deterministic ScriptedModel, mocked Splunk, no Jira, no OpenAI, no containment; private IP lookup prevention enforced) (**LIVE TESTED**).

@@ -1,8 +1,8 @@
-# AI-Native SOC Lab — Implementation Notes (Milestones 1–12)
+# AI-Native SOC Lab — Implementation Notes (Milestones 1–13)
 
 ## Overview
 
-This document records the verification of the initial lab infrastructure, telemetry ingestion pipelines, baseline observations, controlled security tests, SPL detection engineering, bounded Splunk integration, deterministic investigator tools and router, provider-neutral orchestration, OpenAI provider adapter, persistent JSONL audit logging, deterministic risk/action policy engine, human-in-the-loop approval gate, simulated response execution, deterministic structured incident-record reporting artifact generation, VirusTotal threat intelligence integration, and the WEB01 ModSecurity SQL injection pipeline with adversarial security evaluations (Milestones 1 through 12). All response containment remains strictly simulated.
+This document records the verification of the initial lab infrastructure, telemetry ingestion pipelines, baseline observations, controlled security tests, SPL detection engineering, bounded Splunk integration, deterministic investigator tools and router, provider-neutral orchestration, OpenAI provider adapter, persistent JSONL audit logging, deterministic risk/action policy engine, human-in-the-loop approval gate, simulated response execution, deterministic structured incident-record reporting artifact generation, VirusTotal threat intelligence integration, the WEB01 ModSecurity SQL injection pipeline with adversarial security evaluations, and Milestone 13 live pipeline validation and hardening (Milestones 1 through 13). All response containment remains strictly simulated.
 
 ---
 
@@ -2144,18 +2144,217 @@ The fixture used in Scenario J (`eval-12g-web01-live-derived-private`) is formal
 
 ---
 
-## 23. Jira Cloud Description Rendering
+## 9. Milestone 13 — WEB01 Live Pipeline Validation & Hardening
 
-Jira Cloud REST API v3 descriptions are emitted as structured Atlassian Document Format (ADF), rather than as a single plaintext paragraph.
+### 1. Architectural Scope & Sub-Milestones
 
-The Jira provider deterministically maps the application's bounded ticket description format to:
-- level-2 headings for allowlisted application-generated sections;
-- bullet lists for deterministic ticket fields;
-- plain text paragraphs for non-structural content; and
-- an inert `codeBlock` for explicitly delimited untrusted decoded evidence.
+Milestone 13 closes the remaining live execution paths for the WEB01 Linux/Apache/ModSecurity web-attack pipeline while establishing hardened data contracts, structural injection boundaries, and safe external provider validations.
 
-Interpolated ticket field values are normalized to a single structural line before rendering so AI-derived or other free-form multiline values cannot introduce additional headings or list items.
+```
+ModSecurity Alert (WEB01)
+    │
+    ▼
+13A / 13B: Bounded Investigator Agent
+    - Typed WebInvestigationRequest -> Typed Advisory WebInvestigationAssessment
+    - ToolRouter enforces bounded_splunk_search only (zero arbitrary SPL, zero raw telemetry)
+    - Zero action authority; model output is advisory only
+    │
+    ▼
+13C: Model / Output Hardening
+    - Strict request serialization & result allowlists
+    - Structural rejection of execution directives or raw telemetry fields
+    │
+    ▼
+13D: Deterministic Threat Intelligence Policy
+    - classify_ipv4_scope enforces 8 IPv4 scopes
+    - Private IP (192.168.1.100) -> SKIPPED_INELIGIBLE (0 external calls)
+    - Public IP fixture -> bounded lookup via RuntimeGuard & ToolRouter
+    - States: ENRICHED / SKIPPED_INELIGIBLE / LOOKUP_FAILED
+    │
+    ▼
+13E: Offline End-to-End WEB01 Incident Workflow
+    - Deterministic IncidentRecord construction (immutable, rejects contradictory states)
+    - Deterministic risk & action policy evaluation
+    - Bounded ticket request generation (no model authority over incident facts or routing)
+    │
+    ├── 13F-1: Controlled Live OpenAI Validation (LIVE TESTED)
+    │     - Live OpenAI Responses API model investigation executed
+    │     - Duplicate backend suppression IMPLEMENTED + TESTED OFFLINE
+    │
+    ├── 13F-2: Controlled Live Jira Validation (LIVE TESTED + LIVE VERIFIED)
+    │     - Bounded routing: project KAN / issue type Incident
+    │     - Hardened structured Atlassian Document Format (ADF) description rendering
+    │     - Live ticket creation verified via KAN-8; hardened ADF rendering live verified via KAN-9
+    │
+    └── 13F-3: Controlled Live Public-Source Threat Intelligence Validation (LIVE TESTED)
+          - One controlled real VirusTotal lookup via tests/live/test_web01_threat_intel_live.py
+          - Sanitized synthetic public fixture 8.8.8.8 (does not represent actual attacker traffic)
+          - Deterministic ScriptedModel, mocked Splunk, 0 OpenAI calls, 0 Jira calls, 0 containment actions
+```
 
-The formatter does not interpret Markdown, HTML, links, mentions, or arbitrary Jira wiki markup. Text nodes carry no ADF marks.
+---
 
-This change affects presentation and structural-injection resistance only. WEB01 Jira routing remains bounded to KAN / Incident, and risk, approval, threat-intelligence, RuntimeGuard, response-action, and IncidentRecord semantics are unchanged.
+### 2. Detailed Breakdown of Sub-Milestones
+
+#### 13A — WEB01 Agent Investigation Contract
+- **Status**: **IMPLEMENTED + TESTED**
+- **Specification**:
+  - Implemented typed `WebInvestigationRequest` and typed `WebInvestigationAssessment`.
+  - The model serves exclusively as an advisory analyst.
+  - The model has **zero action authority**: it cannot propose, authorize, or execute containment actions, modify firewall rules, or create tickets.
+  - Assessments provide structured analysis (summary, suspected technique, confidence score) without raw payload reflection.
+
+#### 13B — Bounded Investigator Tool Integration
+- **Status**: **IMPLEMENTED + TESTED**
+- **Specification**:
+  - Operates through the existing bounded orchestrator.
+  - Bounded to `bounded_splunk_search` with static query types only (`modsecurity_sqli_matches`).
+  - Governed by `ToolRouter` boundary: callers cannot supply arbitrary SPL, pipes, or alternate indexes.
+  - Raw `_raw` text and transaction bodies remain strictly excluded from model tool returns.
+
+#### 13C — Model/Output Hardening
+- **Status**: **IMPLEMENTED + TESTED**
+- **Specification**:
+  - Strict serialization of investigation requests to prevent prompt and schema poisoning.
+  - Strict output result allowlists; unrecognized fields or injected execution commands are structurally rejected.
+  - Structural rejection of execution directives, shell invocations, or raw telemetry reflection.
+
+#### 13D — Deterministic Threat Intelligence Policy Integration
+- **Status**: **IMPLEMENTED + TESTED + LIVE TESTED**
+- **Specification**:
+  - Deterministic source IP scope classification via `classify_ipv4_scope`.
+  - Private source IPs (such as `192.168.1.100`) evaluate to `external_ti_eligible=False` and produce `SKIPPED_INELIGIBLE` with exactly 0 external lookups.
+  - Bounded lookup restricted to exact globally routable public IPv4 addresses.
+  - Governed under `RuntimeGuard` tool permit budgets.
+  - Produces clean tri-state outputs: `ENRICHED`, `SKIPPED_INELIGIBLE`, or `LOOKUP_FAILED` without conflation.
+
+#### 13E — Offline End-to-End WEB01 Incident Workflow
+- **Status**: **IMPLEMENTED + TESTED**
+- **Specification**:
+  - Binds validated ModSecurity evidence, scope classification, and threat intelligence observation into an immutable `IncidentRecord`.
+  - Evaluated under deterministic `RiskPolicyEngine`: derives deterministic risk score and action policy.
+  - Generates bounded ticket requests without granting model authority over incident facts, severity, or routing destination.
+
+#### 13F-1 — Controlled Live OpenAI Validation
+- **Status**: **LIVE TESTED**
+- **Specification**:
+  - Live model investigation executed against the OpenAI Responses API using real API credentials under controlled opt-in.
+  - Model received validated ModSecurity evidence fields and produced a compliant `WebInvestigationAssessment`.
+  - Duplicate backend suppression logic is **IMPLEMENTED + TESTED OFFLINE**; duplicate reuse was not claimed as a live exercise during this run.
+
+#### 13F-2 — Controlled Live Jira Validation
+- **Status**: **LIVE TESTED + LIVE VERIFIED**
+- **Specification & Verified Outcomes**:
+  - Aligned bounded routing to live Jira tenant configuration: project `KAN` and issue type `Incident`.
+  - Live ticket creation executed successfully for WEB01, creating ticket **`KAN-8`** under bounded routing.
+  - **Hardened Structured Atlassian Document Format (ADF) Rendering**:
+    - Jira Cloud REST API v3 descriptions are rendered as structured ADF instead of plaintext or raw markdown.
+    - Application-generated sections map deterministically to level-2 headings (`heading` with `level: 2`).
+    - Deterministic field lines are grouped into bullet lists (`bulletList` with `listItem`).
+    - Non-structural text renders as ordinary plain text paragraphs (`paragraph`).
+    - Explicitly delimited untrusted decoded evidence is isolated inside an inert code block (`codeBlock`).
+    - The formatter emits zero links, mentions, HTML tags, Markdown interpretation, arbitrary Jira wiki parsing, or ADF marks.
+    - Interpolated ticket field values are normalized to a single structural line before rendering, preventing multiline structural injection.
+  - **Live Verification**: Hardened structured ADF rendering was visually inspected and verified in Jira Cloud under ticket **`KAN-9`**.
+  - **Security Invariant**: ADF formatting changes affect presentation and injection resistance only; WEB01 Jira routing remains strictly bounded, and risk, approval, threat-intelligence, RuntimeGuard, response-action, and IncidentRecord semantics remain unchanged.
+
+#### 13F-3 — Controlled Live Public-Source Threat Intelligence Validation
+- **Status**: **LIVE TESTED**
+- **Specification & Verified Outcomes**:
+  - Added dedicated opt-in live test: [`tests/live/test_web01_threat_intel_live.py`](file:///c:/Users/irfan/ai-native-soc-lab/tests/live/test_web01_threat_intel_live.py).
+  - Executed exactly one controlled live VirusTotal lookup through the full deterministic WEB01 control path.
+  - **Controlled Synthetic Fixture**: Used public IP `8.8.8.8` strictly as a sanitized synthetic test fixture. This test does **not** claim or imply that attack traffic originated from this address; real lab attacks originate from private IP `192.168.1.100`.
+  - **Execution Constraints**:
+    - Mocked Splunk telemetry (no live Splunk call).
+    - Deterministic `ScriptedModel` (no live OpenAI call).
+    - Exactly one real VirusTotal lookup.
+    - Zero Jira calls.
+    - Zero containment actions.
+  - **Verified Control Path**:
+    - Telemetry parsed into `ModSecuritySqliEvidence` (`src_ip=8.8.8.8`).
+    - Scope classified as `public` (`external_ti_eligible=True`).
+    - `RuntimeGuard` permitted tool execution (budget: 2 allowed).
+    - `ToolRouter` dispatched `threat_intel_lookup(indicator="8.8.8.8")`.
+    - Live VirusTotal API v3 returned HTTP 200 with valid attributes.
+    - Response normalized into `ThreatIntelObservation`.
+    - Incident record created with `threat_intel_status="ENRICHED"`.
+    - Audit log recorded full ordered lifecycle: `bounded_splunk_search_requested` → `bounded_splunk_search_allowed` → `threat_intel_lookup_requested` → `threat_intel_lookup_allowed` → `threat_intel_lookup_ok` → `bounded_splunk_search_ok`.
+  - Private source IPs (`192.168.1.100`) remain strictly ineligible for external lookup.
+
+---
+
+### 3. Relevant Milestone 13 Commits
+
+- `6db667d` `fix: align WEB01 Jira routing with live tenant`
+- `8ab9544` `fix: render Jira descriptions as hardened ADF`
+- `c4aa223` `test: add live WEB01 public TI validation`
+
+---
+
+### 4. Explicit Architecture Boundaries & Safety Principles
+
+1. **No Unrestricted Shell**: No tool or model invocation can spawn arbitrary shell commands, subprocesses, or OS-level scripts.
+2. **No Arbitrary SPL**: Splunk search interfaces accept only pre-approved static query identifiers. Arbitrary SPL strings, eval expressions, and pipeline manipulation are rejected fail-closed.
+3. **No Unrestricted Provider Calls**: Outbound network requests are bounded to pre-configured external endpoints (VirusTotal, Jira, OpenAI). Smuggled URLs, custom headers, or alternate destinations are blocked.
+4. **No Model Authority Over Jira Routing**: Ticket project keys, issue types, and fields are strictly bounded by deterministic configuration. The model cannot alter ticket destination or severity.
+5. **No Autonomous Consequential Remediation**: Real endpoint containment is **NOT IMPLEMENTED**. Destructive actions (host isolation, account disablement, firewall modification, credential rotation) cannot be initiated by the AI or executed autonomously.
+6. **Mandatory Human-in-the-Loop Approval**: Consequential actions require deterministic policy authorization and explicit, non-bypassable human approval.
+7. **Complete Auditability & Evaluation**: Every security-relevant event, tool request, policy evaluation, approval decision, and external call is persisted to structured JSONL audit logs and evaluated in deterministic test harnesses.
+8. **Single-Agent Architecture Principle**: Maintain a single-agent architecture unless a clear, measurable security-engineering benefit justifies multi-agent complexity.
+9. **Core Pipeline Invariant**:
+   > `AI proposes → deterministic policy evaluates → human approves consequential actions → system executes only permitted/simulated actions → everything is logged and evaluated.`
+
+---
+
+## 10. Post-Milestone-13 Project Roadmap (Milestones 14–23)
+
+### Milestone 14 — Agent Security Guardrails & Adversarial Validation
+Expand tool-allowlist abuse testing, prompt-injection cases, malformed tool arguments, RuntimeGuard kill-switch/tool-budget enforcement, escalation-boundary tests, and denied-action audit coverage.
+
+### Milestone 15 — Human Approval & Consequential Action Boundary
+Harden approval binding, denial behavior, stale/forged approval rejection, incident/action matching, and auditability. Consequential response remains simulated or explicitly human-approved.
+
+### Milestone 16 — Security Evaluation Framework Expansion
+Broaden automated evaluations for investigation correctness, insufficient evidence, unauthorized tool requests, prompt injection, TI/Jira/provider failures, kill-switch halts, approval outcomes, conflicting evidence, and hallucinated security claims.
+
+### Milestone 17 — Additional Detection Coverage
+Add a small number of high-value detections with full telemetry, SPL/Sigma, MITRE mapping, incident workflow, and evaluation coverage. Prioritize credential-access/LSASS behavior, scheduled task or service creation, and authentication abuse.
+
+### Milestone 18 — Suricata / Network Detection Integration
+Revisit pfSense Suricata, forward firewall/IDS telemetry to Splunk, and add a bounded network-alert investigation path. Suricata remains **DEFERRED** until this milestone begins.
+
+### Milestone 19 — SOC Analyst UI / Investigation Console
+Build a thin analyst-facing UI over the existing backend showing:
+- incidents;
+- evidence;
+- AI assessment;
+- deterministic risk/policy state;
+- threat-intelligence results;
+- approval state;
+- Jira linkage;
+- RuntimeGuard/tool activity;
+- audit timeline.
+
+*The UI must not bypass policy or directly control privileged tools.*
+
+### Milestone 20 — Runtime Monitoring & Operational Safety
+Expose per-run tool counts, blocked-tool counts, provider failures, kill-switch state, approval state, audit correlation, and bounded runtime-health/security metrics.
+
+### Milestone 21 — Threat Model & Security Architecture Documentation
+Formalize trust boundaries, untrusted inputs, model authority, deterministic control plane, secrets handling, external-provider boundaries, approval boundary, abuse cases, residual risks, and production limitations.
+
+### Milestone 22 — Recruiter / Interview Demo
+Create one polished end-to-end SOC incident demonstration and one adversarial-control demonstration proving that malicious/untrusted content cannot bypass ToolRouter, RuntimeGuard, deterministic policy, or human approval.
+
+### Milestone 23 — Portfolio & GitHub Finalization
+Finalize:
+- architecture diagrams;
+- README/setup;
+- implementation-status matrix;
+- incident case studies;
+- screenshots;
+- evaluation results;
+- live-tested vs simulated matrix;
+- limitations;
+- future improvements;
+- public roadmap.
