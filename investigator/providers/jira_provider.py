@@ -14,9 +14,12 @@ Architecture Guarantees:
   - Single-Attempt Dispatch: One POST attempt only; zero automatic retry on failure
     to guarantee duplicate tickets are never generated downstream.
   - Redirect Rejection: HTTP 3xx redirects are rejected immediately without following.
-  - Plaintext ADF Mapping: Descriptions are structured as Atlassian Document Format (ADF)
-    v1 plain text nodes, preserving ticket description as plain text content and
-    avoiding HTML/Markdown interpretation by our mapper.
+  - Deterministic ADF Mapping: Descriptions are rendered as Atlassian Document Format
+    (ADF) v1 by a fixed line formatter: only allowlisted section headings become H2
+    heading nodes, deterministic '* ' lines become bullet lists, and the explicit
+    BEGIN/END untrusted-evidence region becomes a single inert codeBlock. All text
+    nodes are plain text with zero marks, links, mentions, or HTML. No general
+    Markdown/wiki parsing is performed.
   - Response Privacy: Raw response bodies and headers are not logged or persisted;
     only minimum validated fields (ticket_key, detail_code, created_at_utc) are
     retained in TicketResult.
@@ -34,11 +37,13 @@ import json
 import os
 import re
 import ssl
-from typing import Any, Dict, Mapping, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 import urllib.parse
 
 from investigator.ticketing import (
     SAFE_TICKET_KEY_PATTERN,
+    UNTRUSTED_EVIDENCE_BEGIN,
+    UNTRUSTED_EVIDENCE_END,
     TicketClient,
     TicketClientError,
     TicketConfigError,
@@ -251,6 +256,123 @@ class JiraApiConfig:
 
 
 # ---------------------------------------------------------------------------
+# Deterministic ADF Description Formatter
+# ---------------------------------------------------------------------------
+
+# Section headings emitted by investigator.ticketing.build_ticket_request().
+# Only these exact titles may become ADF heading nodes; any other "h2. " line is
+# rendered as an inert paragraph containing the literal text.
+_KNOWN_SECTION_HEADINGS = frozenset({
+    "Incident Overview",
+    "Advisory AI Investigation",
+    "Deterministic Policy Evaluation",
+    "Governance & Simulation Outcome",
+    "ModSecurity Evidence",
+    "Threat Intelligence",
+    "Decoded Command Evidence",
+})
+# The overview heading carries the validated incident id as a suffix.
+_INCIDENT_OVERVIEW_HEADING_PATTERN = re.compile(r"^Incident Overview: [A-Za-z0-9_-]{1,64}$")
+_HEADING_PREFIX = "h2. "
+_BULLET_PREFIX = "* "
+
+
+def _adf_text_content(text: str) -> List[Dict[str, Any]]:
+    """Return a plain text node list (no marks). ADF forbids empty text nodes."""
+    return [{"type": "text", "text": text}] if text else []
+
+
+def _adf_paragraph(text: str) -> Dict[str, Any]:
+    return {"type": "paragraph", "content": _adf_text_content(text)}
+
+
+def _known_heading_key(title: str) -> Optional[str]:
+    """Return the canonical section key for an allowlisted heading title, else None."""
+    if title in _KNOWN_SECTION_HEADINGS:
+        return title
+    if _INCIDENT_OVERVIEW_HEADING_PATTERN.match(title):
+        return "Incident Overview"
+    return None
+
+
+def _description_to_adf_blocks(description: str) -> List[Dict[str, Any]]:
+    """Convert the deterministic ticket description line format into ADF block nodes.
+
+    Fixed line-level mapping (not a general Markdown/wiki parser):
+      - "h2. <known section>"  -> heading (level 2), each section at most once.
+      - "* <text>"             -> listItem/paragraph/text, consecutive items grouped
+                                  into one bulletList.
+      - blank line             -> ends the current list; emits nothing.
+      - any other line         -> paragraph/text (literal, including unknown "h2. ").
+      - first BEGIN UNTRUSTED EVIDENCE marker line through the last END marker
+        line -> marker paragraphs around one inert codeBlock holding the raw
+        evidence. No prefix interpretation occurs inside. A missing END marker
+        keeps everything after BEGIN inside the codeBlock (fail-inert).
+    """
+    lines = description.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+
+    begin_idx: Optional[int] = None
+    end_idx: Optional[int] = None
+    for idx, line in enumerate(lines):
+        if line == UNTRUSTED_EVIDENCE_BEGIN:
+            begin_idx = idx
+            break
+    if begin_idx is not None:
+        # Use the LAST END marker so a forged END inside evidence cannot escape.
+        for idx in range(len(lines) - 1, begin_idx, -1):
+            if lines[idx] == UNTRUSTED_EVIDENCE_END:
+                end_idx = idx
+                break
+
+    blocks: List[Dict[str, Any]] = []
+    current_list: Optional[Dict[str, Any]] = None
+    seen_headings: set = set()
+
+    idx = 0
+    while idx < len(lines):
+        line = lines[idx]
+
+        if begin_idx is not None and idx == begin_idx:
+            current_list = None
+            stop = end_idx if end_idx is not None else len(lines)
+            evidence_body = "\n".join(lines[begin_idx + 1:stop])
+            blocks.append(_adf_paragraph(UNTRUSTED_EVIDENCE_BEGIN))
+            blocks.append({"type": "codeBlock", "content": _adf_text_content(evidence_body)})
+            if end_idx is not None:
+                blocks.append(_adf_paragraph(UNTRUSTED_EVIDENCE_END))
+            idx = stop + 1
+            continue
+
+        if not line.strip():
+            current_list = None
+        elif line.startswith(_BULLET_PREFIX):
+            if current_list is None:
+                current_list = {"type": "bulletList", "content": []}
+                blocks.append(current_list)
+            current_list["content"].append({
+                "type": "listItem",
+                "content": [_adf_paragraph(line[len(_BULLET_PREFIX):])],
+            })
+        else:
+            current_list = None
+            heading_key: Optional[str] = None
+            if line.startswith(_HEADING_PREFIX):
+                heading_key = _known_heading_key(line[len(_HEADING_PREFIX):])
+            if heading_key is not None and heading_key not in seen_headings:
+                seen_headings.add(heading_key)
+                blocks.append({
+                    "type": "heading",
+                    "attrs": {"level": 2},
+                    "content": _adf_text_content(line[len(_HEADING_PREFIX):]),
+                })
+            else:
+                blocks.append(_adf_paragraph(line))
+        idx += 1
+
+    return blocks
+
+
+# ---------------------------------------------------------------------------
 # Payload Mapper
 # ---------------------------------------------------------------------------
 
@@ -258,10 +380,11 @@ class JiraPayloadMapper:
     """Transforms a validated TicketRequest into a Jira Cloud REST API v3 payload.
 
     Design Details:
-      - Plaintext ADF Mapping: Formats description as an Atlassian Document Format (ADF)
-        doc v1 containing a single paragraph with a plain text node. This preserves the
-        ticket description as plain text content and avoids HTML/Markdown interpretation
-        by our mapper.
+      - Deterministic ADF Mapping: Renders the description as an Atlassian Document
+        Format (ADF) doc v1 via _description_to_adf_blocks(): allowlisted H2 section
+        headings, deterministic bullet lists, plain paragraphs, and one inert codeBlock
+        for the untrusted-evidence region. Text nodes never carry marks, links,
+        mentions, or HTML.
       - Priority Omission: Top-level Jira priority is omitted in V1 to avoid site-specific
         schema rejections; provider-neutral priority is captured in the summary and
         description text.
@@ -275,17 +398,7 @@ class JiraPayloadMapper:
         description_adf = {
             "type": "doc",
             "version": 1,
-            "content": [
-                {
-                    "type": "paragraph",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": request.description,
-                        }
-                    ],
-                }
-            ],
+            "content": _description_to_adf_blocks(request.description),
         }
 
         return {

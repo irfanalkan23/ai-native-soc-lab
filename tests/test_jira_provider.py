@@ -224,17 +224,18 @@ class TestJiraPayloadMapper(unittest.TestCase):
         # Jira priority is intentionally omitted in V1
         self.assertNotIn("priority", fields)
 
-        # ADF formatting checks
+        # ADF formatting checks: ordinary (non-structural) lines become one
+        # plain-text paragraph each; no headings, lists, or marks are invented.
         desc = fields["description"]
         self.assertEqual(desc["type"], "doc")
         self.assertEqual(desc["version"], 1)
-        self.assertEqual(len(desc["content"]), 1)
-        paragraph = desc["content"][0]
-        self.assertEqual(paragraph["type"], "paragraph")
-        self.assertEqual(len(paragraph["content"]), 1)
-        text_node = paragraph["content"][0]
-        self.assertEqual(text_node["type"], "text")
-        self.assertEqual(text_node["text"], "Detailed evidence text line 1\nLine 2")
+        self.assertEqual(
+            desc["content"],
+            [
+                {"type": "paragraph", "content": [{"type": "text", "text": "Detailed evidence text line 1"}]},
+                {"type": "paragraph", "content": [{"type": "text", "text": "Line 2"}]},
+            ],
+        )
 
     def test_mapper_rejects_non_ticket_request(self) -> None:
         with self.assertRaises(TicketClientError):

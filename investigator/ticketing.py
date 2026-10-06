@@ -340,6 +340,23 @@ UNTRUSTED_EVIDENCE_BEGIN = "--- BEGIN UNTRUSTED EVIDENCE (INERT TEXT ONLY) ---"
 UNTRUSTED_EVIDENCE_END = "--- END UNTRUSTED EVIDENCE ---"
 EVIDENCE_TRUNCATION_MARKER = "\n[EVIDENCE TRUNCATED]"
 
+# Every character str.splitlines() treats as a line boundary. A run of them is
+# collapsed to one space so a single field value always stays on one line.
+_FIELD_LINE_BREAK_PATTERN = re.compile(r"[\r\n\v\f\x1c\x1d\x1e\x85\u2028\u2029]+")
+
+
+def _single_line(value: object) -> str:
+    """Render a field value as one description line.
+
+    Ordinary description fields (including AI-derived summaries and free-form
+    alert/provider strings) must never be able to start a new structural line
+    such as ``h2. <section>`` or ``* <Label>: <value>``. Text content is
+    preserved; only embedded line breaks are collapsed to a single space.
+    Not applied to the explicit decoded-command evidence block, which has its
+    own BEGIN/END inert demarcation.
+    """
+    return _FIELD_LINE_BREAK_PATTERN.sub(" ", str(value))
+
 
 def build_ticket_request(
     incident_record: IncidentRecord,
@@ -417,34 +434,37 @@ def build_ticket_request(
     summary = raw_summary[:MAX_SUMMARY_LENGTH]
 
     # 4. Description Construction (bounded to 4096 chars)
+    # Every interpolated field value passes through _single_line() so that
+    # multiline AI-derived or free-form text cannot create structural lines.
+    _s = _single_line
     desc_lines = [
-        f"h2. Incident Overview: {incident_record.incident_id}",
-        f"* Detection Name: {incident_record.detection_name}",
-        f"* Detection ID: {incident_record.detection_id}",
-        f"* Target Host: {incident_record.target_host}",
-        f"* Target User: {incident_record.target_user}",
-        f"* Evidence Source: {incident_record.evidence_source}",
-        f"* MITRE Technique: {incident_record.mitre_technique_id or '<none>'}",
+        f"h2. Incident Overview: {_s(incident_record.incident_id)}",
+        f"* Detection Name: {_s(incident_record.detection_name)}",
+        f"* Detection ID: {_s(incident_record.detection_id)}",
+        f"* Target Host: {_s(incident_record.target_host)}",
+        f"* Target User: {_s(incident_record.target_user)}",
+        f"* Evidence Source: {_s(incident_record.evidence_source)}",
+        f"* MITRE Technique: {_s(incident_record.mitre_technique_id or '<none>')}",
         "",
         "h2. Advisory AI Investigation",
-        f"* Summary: {incident_record.investigation_summary}",
-        f"* Confidence: {incident_record.confidence_level}",
-        f"* Suspicious Indicators: {incident_record.suspicious_indicator_count}",
-        f"* Recommended Next Step: {incident_record.recommended_next_step}",
+        f"* Summary: {_s(incident_record.investigation_summary)}",
+        f"* Confidence: {_s(incident_record.confidence_level)}",
+        f"* Suspicious Indicators: {_s(incident_record.suspicious_indicator_count)}",
+        f"* Recommended Next Step: {_s(incident_record.recommended_next_step)}",
         "",
         "h2. Deterministic Policy Evaluation",
-        f"* Risk Score: {incident_record.risk_score} / 100",
-        f"* Risk Level: {incident_record.risk_level}",
-        f"* Disposition: {incident_record.disposition}",
-        f"* Proposed Action: {incident_record.proposed_action}",
+        f"* Risk Score: {_s(incident_record.risk_score)} / 100",
+        f"* Risk Level: {_s(incident_record.risk_level)}",
+        f"* Disposition: {_s(incident_record.disposition)}",
+        f"* Proposed Action: {_s(incident_record.proposed_action)}",
         f"* Approval Required: {'Yes' if incident_record.requires_human_approval else 'No'}",
-        f"* Policy Reasons: {', '.join(incident_record.policy_reason_codes)}",
+        f"* Policy Reasons: {_s(', '.join(incident_record.policy_reason_codes))}",
         "",
         "h2. Governance & Simulation Outcome",
-        f"* Approval Status: {incident_record.approval_status}",
-        f"* Approval Reason: {incident_record.approval_reason_code or '<none>'}",
-        f"* Simulation Status: {incident_record.simulation_status}",
-        f"* Simulation Detail: {incident_record.simulation_detail_code}",
+        f"* Approval Status: {_s(incident_record.approval_status)}",
+        f"* Approval Reason: {_s(incident_record.approval_reason_code or '<none>')}",
+        f"* Simulation Status: {_s(incident_record.simulation_status)}",
+        f"* Simulation Detail: {_s(incident_record.simulation_detail_code)}",
     ]
 
     # 5. ModSecurity Evidence (if present)
@@ -453,12 +473,12 @@ def build_ticket_request(
         desc_lines.extend([
             "",
             "h2. ModSecurity Evidence",
-            f"* Source IP: {ev.src_ip}",
-            f"* Rule ID: {ev.rule_id}",
-            f"* Rule Message: {ev.rule_msg}",
-            f"* Severity: {ev.severity}",
-            f"* Anomaly Score: {ev.anomaly_score}",
-            f"* Unique ID: {ev.unique_id}",
+            f"* Source IP: {_s(ev.src_ip)}",
+            f"* Rule ID: {_s(ev.rule_id)}",
+            f"* Rule Message: {_s(ev.rule_msg)}",
+            f"* Severity: {_s(ev.severity)}",
+            f"* Anomaly Score: {_s(ev.anomaly_score)}",
+            f"* Unique ID: {_s(ev.unique_id)}",
         ])
 
     # 6. Threat Intelligence State (if present)
@@ -466,24 +486,24 @@ def build_ticket_request(
         desc_lines.extend([
             "",
             "h2. Threat Intelligence",
-            f"* Status: {incident_record.threat_intel_status}",
+            f"* Status: {_s(incident_record.threat_intel_status)}",
         ])
         if incident_record.threat_intel_status == "SKIPPED_INELIGIBLE":
-            desc_lines.append(f"* Reason: {incident_record.threat_intel_skip_reason}")
+            desc_lines.append(f"* Reason: {_s(incident_record.threat_intel_skip_reason)}")
         elif incident_record.threat_intel_status == "ENRICHED":
             obs = incident_record.threat_intel_observation
             if obs is not None:
                 desc_lines.extend([
-                    f"* Indicator: {obs.indicator}",
-                    f"* Provider: {obs.provider}",
-                    f"* Verdict: {obs.verdict}",
-                    f"* Malicious Count: {obs.malicious_count}",
-                    f"* Suspicious Count: {obs.suspicious_count}",
-                    f"* Harmless Count: {obs.harmless_count}",
-                    f"* Undetected Count: {obs.undetected_count}",
+                    f"* Indicator: {_s(obs.indicator)}",
+                    f"* Provider: {_s(obs.provider)}",
+                    f"* Verdict: {_s(obs.verdict)}",
+                    f"* Malicious Count: {_s(obs.malicious_count)}",
+                    f"* Suspicious Count: {_s(obs.suspicious_count)}",
+                    f"* Harmless Count: {_s(obs.harmless_count)}",
+                    f"* Undetected Count: {_s(obs.undetected_count)}",
                 ])
         elif incident_record.threat_intel_status == "LOOKUP_FAILED":
-            desc_lines.append(f"* Error Detail: {incident_record.threat_intel_skip_reason}")
+            desc_lines.append(f"* Error Detail: {_s(incident_record.threat_intel_skip_reason)}")
 
     base_desc_text = "\n".join(desc_lines)
     if len(base_desc_text) > MAX_DESCRIPTION_LENGTH:

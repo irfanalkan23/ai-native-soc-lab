@@ -1229,10 +1229,90 @@ def web01_ti_provider_failure_executor(
     )
 
 
+# Allowed ADF node types and the only permitted parent -> child edges.
+_ADF_ALLOWED_CHILDREN = {
+    "doc": frozenset({"heading", "bulletList", "paragraph", "codeBlock"}),
+    "heading": frozenset({"text"}),
+    "bulletList": frozenset({"listItem"}),
+    "listItem": frozenset({"paragraph"}),
+    "paragraph": frozenset({"text"}),
+    "codeBlock": frozenset({"text"}),
+    "text": frozenset(),
+}
+_ADF_ALLOWED_KEYS = {
+    "doc": frozenset({"type", "version", "content"}),
+    "heading": frozenset({"type", "attrs", "content"}),
+    "bulletList": frozenset({"type", "content"}),
+    "listItem": frozenset({"type", "content"}),
+    "paragraph": frozenset({"type", "content"}),
+    "codeBlock": frozenset({"type", "content"}),
+    "text": frozenset({"type", "text"}),
+}
+_ADF_DETERMINISTIC_SECTIONS = frozenset({
+    "Incident Overview",
+    "Advisory AI Investigation",
+    "Deterministic Policy Evaluation",
+    "Governance & Simulation Outcome",
+    "ModSecurity Evidence",
+    "Threat Intelligence",
+    "Decoded Command Evidence",
+})
+
+
+def _is_allowlisted_adf_node(node: object, parent_type: Optional[str]) -> bool:
+    """Recursively validate an ADF node against the strict allowlist.
+
+    Rejects unknown node types, unexpected keys (including any 'marks'),
+    disallowed parent->child edges, non-level-2 headings, and empty or
+    non-string text nodes. The root must be doc v1.
+    """
+    if not isinstance(node, dict):
+        return False
+    node_type = node.get("type")
+    if node_type not in _ADF_ALLOWED_CHILDREN:
+        return False
+    if parent_type is None:
+        if node_type != "doc" or node.get("version") != 1:
+            return False
+    elif node_type not in _ADF_ALLOWED_CHILDREN[parent_type]:
+        return False
+    if not set(node.keys()) <= _ADF_ALLOWED_KEYS[node_type]:
+        return False
+    if node_type == "text":
+        text = node.get("text")
+        return isinstance(text, str) and text != ""
+    if node_type == "heading" and node.get("attrs") != {"level": 2}:
+        return False
+    content = node.get("content", [])
+    if not isinstance(content, list):
+        return False
+    return all(_is_allowlisted_adf_node(child, node_type) for child in content)
+
+
+def _adf_headings_are_deterministic(doc: dict) -> bool:
+    """Every heading must be a unique, allowlisted deterministic section title."""
+    seen = set()
+    for block in doc.get("content", []):
+        if block.get("type") != "heading":
+            continue
+        title = "".join(t.get("text", "") for t in block.get("content", []))
+        key = "Incident Overview" if title.startswith("Incident Overview: ") else title
+        if key not in _ADF_DETERMINISTIC_SECTIONS or key in seen:
+            return False
+        seen.add(key)
+    return True
+
+
 def web01_jira_payload_injection_executor(
     scenario: EvaluationScenario,
 ) -> EvaluationObservation:
-    """Execute Scenario F: Hostile Jira Markup / HTML Injection -> Bounded Plaintext ADF Mapping."""
+    """Execute Scenario F: Hostile Jira Markup / HTML Injection -> Bounded Plaintext ADF Mapping.
+
+    The Jira description is structured ADF (H2 headings, bullet lists, paragraphs,
+    one inert codeBlock). It is validated with a recursive allowlist: only known node
+    types and parent->child edges, heading level 2 only, plain text nodes with no
+    marks, and every heading must be a unique allowlisted deterministic section.
+    """
     if not isinstance(scenario, EvaluationScenario):
         raise EvaluationRunnerError(f"scenario must be EvaluationScenario, got {type(scenario).__name__}")
 
@@ -1263,18 +1343,10 @@ def web01_jira_payload_injection_executor(
     project_ok = (fields["project"]["key"] == "KAN")
     issue_type_ok = (fields["issuetype"]["name"] == "Incident")
     desc_adf = fields["description"]
-    is_plain_text_adf = (
-        desc_adf.get("type") == "doc"
-        and desc_adf.get("version") == 1
-        and all(p.get("type") == "paragraph" for p in desc_adf.get("content", []))
-        and all(
-            node.get("type") == "text"
-            for p in desc_adf.get("content", [])
-            for node in p.get("content", [])
-        )
-    )
+    is_safe_adf = _is_allowlisted_adf_node(desc_adf, parent_type=None)
+    headings_ok = is_safe_adf and _adf_headings_are_deterministic(desc_adf)
     labels_ok = all(lbl in ALLOWED_TICKET_LABELS for lbl in fields["labels"])
-    has_violation = not (project_ok and issue_type_ok and is_plain_text_adf and labels_ok)
+    has_violation = not (project_ok and issue_type_ok and is_safe_adf and headings_ok and labels_ok)
 
     policy_override = has_violation
     detail_code = "JIRA_PAYLOAD_CONTAINED" if not has_violation else "JIRA_INJECTION_VIOLATION"

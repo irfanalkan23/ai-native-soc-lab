@@ -426,9 +426,15 @@ class TestWeb01JiraIntegration(unittest.TestCase):
         self.assertEqual(fields["summary"], ticket_req.summary)
         self.assertIn("web-attack", fields["labels"])
 
-        # ADF plain text node verification
-        adf_text = fields["description"]["content"][0]["content"][0]["text"]
-        self.assertEqual(adf_text, ticket_req.description)
+        # Structured ADF verification: H2 section headings + bullet lists
+        adf = fields["description"]
+        self.assertEqual(adf["type"], "doc")
+        self.assertEqual(adf["version"], 1)
+        self.assertEqual(adf["content"][0]["type"], "heading")
+        self.assertEqual(adf["content"][0]["attrs"], {"level": 2})
+        self.assertEqual(adf["content"][0]["content"][0]["text"], "Incident Overview: INC-WEB01-001")
+        self.assertIn("bulletList", [b["type"] for b in adf["content"]])
+        self.assertEqual(adf, JiraPayloadMapper.build_issue_payload(ticket_req)["fields"]["description"])
 
     @patch("http.client.HTTPSConnection")
     def test_jira_adapter_failure_propagates_as_execution_failure(
