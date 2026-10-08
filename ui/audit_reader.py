@@ -62,9 +62,9 @@ def _resolve_audit_outcome(event_type: str, detail_code: str) -> str:
         return "DENIED"
     if "FAILED" in et or "HALT" in et:
         return "FAILED"
-    if "ALLOWED" in et or "GRANTED" in et or "COMPLETED" in et or "ACCEPTED" in et or "CREATED" in et:
+    if "ALLOWED" in et or "GRANTED" in et or "COMPLETED" in et or "ACCEPTED" in et or "CREATED" in et or "EVALUATED" in et:
         return "SUCCESS"
-    if "REQUEST" in et or "EVALUATE" in et:
+    if "REQUEST" in et:
         return "REQUESTED"
     if dt in ("ok", "success", "granted", "allowed"):
         return "SUCCESS"

@@ -1,6 +1,6 @@
 """AI-Native SOC Lab — Analyst UI Presentation Layer.
 
-Milestone 15A: Read-Only Incident List Console.
+Milestone 15: Read-Only SOC Analyst UI.
 Zero privileged tool authority. Pure presentation layer.
 """
 

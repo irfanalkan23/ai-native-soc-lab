@@ -307,6 +307,15 @@ def _render_incident_rows(incidents: List[IncidentSummaryView]) -> str:
         # Jira cell
         jira_html = f'<span class="jira-pill">{_esc(inc.jira_ticket_key)}</span>' if inc.jira_ticket_key else '<span class="sub-text">None</span>'
 
+        # Simulation cell: clearly distinguish simulation completion from real action non-execution
+        sim_stat_upper = (inc.simulation_status or "").upper()
+        if sim_stat_upper == "SIMULATED":
+            sim_status_label = "SIMULATION: COMPLETED"
+        elif sim_stat_upper in ("NOT_EXECUTED", "NOT EXECUTED", ""):
+            sim_status_label = "SIMULATION: NOT EXECUTED"
+        else:
+            sim_status_label = f"SIMULATION: {_esc(inc.simulation_status)}"
+
         row = f"""<tr>
   <td>
     <a href="/incidents/{_esc(inc.incident_id)}" class="mono incident-id" style="color: var(--accent-cyan); text-decoration: none; font-weight: 600;">{_esc(inc.incident_id)}</a>
@@ -339,8 +348,8 @@ def _render_incident_rows(incidents: List[IncidentSummaryView]) -> str:
     <div class="sub-text">{app_req_label}</div>
   </td>
   <td>
-    <span class="badge-category cat-sim">SIMULATED / NOT EXECUTED</span><br>
-    <strong>{_esc(inc.simulation_status)}</strong>
+    <span class="badge-category cat-sim">REAL ACTION: NOT EXECUTED</span><br>
+    <strong>{sim_status_label}</strong>
     <div class="sub-text mono">{_esc(inc.proposed_action)}</div>
   </td>
   <td>
