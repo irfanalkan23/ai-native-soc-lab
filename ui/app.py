@@ -37,6 +37,161 @@ def _esc(val: Any) -> str:
     return html.escape(str(val), quote=True)
 
 
+def _clamp_risk_score(score: Any) -> int:
+    """Defensively clamp risk score for visual bar presentation (0..100)."""
+    try:
+        if isinstance(score, (int, float)):
+            return max(0, min(100, int(score)))
+        if isinstance(score, str) and score.strip().lstrip("-").isdigit():
+            return max(0, min(100, int(score.strip())))
+    except (ValueError, TypeError):
+        pass
+    return 0
+
+
+def _resolve_approval_display_state(detail: IncidentDetailView) -> tuple[str, str]:
+    """Deterministically map approval state to presentation label and CSS class.
+
+    Fails visually conservative (UNKNOWN) on malformed or unexpected values.
+    """
+    app_stat = (detail.approval_status or "").strip().upper()
+
+    if not detail.requires_human_approval:
+        if app_stat in ("NOT_REQUIRED", ""):
+            return ("NOT REQUIRED", "app-not-req")
+        if app_stat == "APPROVED":
+            return ("APPROVED", "app-approved")
+        if app_stat == "DENIED":
+            return ("DENIED", "app-denied")
+        return ("UNKNOWN", "app-unknown")
+
+    # Policy explicitly requires human approval
+    if app_stat == "APPROVED":
+        return ("APPROVED", "app-approved")
+    if app_stat == "DENIED":
+        return ("DENIED", "app-denied")
+    if app_stat in ("PENDING", "REQUIRED / PENDING", "REQUIRED", "NOT_REQUIRED"):
+        # When approval is mandated but not yet decided, status is pending
+        return ("REQUIRED / PENDING", "app-pending")
+
+    return ("UNKNOWN", "app-unknown")
+
+
+def _resolve_simulation_display_state(detail: IncidentDetailView) -> tuple[str, str]:
+    """Deterministically map simulation execution status to label and CSS class.
+
+    Fails visually conservative (UNKNOWN) on malformed or unexpected values.
+    """
+    sim_stat = (detail.simulation_status or "").strip().upper()
+    if sim_stat == "NOT_EXECUTED":
+        return ("NOT EXECUTED", "sim-not-executed")
+    if sim_stat == "SIMULATED":
+        return ("SIMULATED", "sim-simulated")
+    if sim_stat in ("BLOCKED", "DENIED", "BLOCKED / DENIED"):
+        return ("BLOCKED / DENIED", "sim-denied")
+    return ("UNKNOWN", "sim-unknown")
+
+
+def _render_policy_reason_chips(reasons: List[str]) -> str:
+    """Render allowlisted policy reason codes as bounded, escaped chips."""
+    if not reasons:
+        return '<span class="sub-text">None</span>'
+    chips = [f'<span class="policy-chip">{_esc(r)}</span>' for r in reasons if str(r).strip()]
+    if not chips:
+        return '<span class="sub-text">None</span>'
+    return f'<div class="policy-chips">{"".join(chips)}</div>'
+
+
+def _render_governance_pipeline(detail: IncidentDetailView) -> str:
+    """Render the 5-step control-flow / decision-state visualization pipeline:
+
+    Evidence -> AI Advisory -> Deterministic Policy -> Human Approval -> Permitted / Simulated Action
+    """
+    # 1. Evidence state
+    has_evidence = bool(
+        detail.modsecurity_evidence is not None
+        or (detail.sysmon_evidence is not None and (
+            detail.sysmon_evidence.decoded_command
+            or detail.sysmon_evidence.image
+            or detail.sysmon_evidence.command_line
+            or detail.sysmon_evidence.evidence_source != "Unknown"
+        ))
+    )
+    ev_label = "AVAILABLE" if has_evidence else "NOT AVAILABLE"
+    ev_class = "pipe-success" if has_evidence else "pipe-muted"
+    ev_type = detail.evidence_type.upper().replace("_", " ")
+
+    # 2. AI Advisory state
+    has_ai = bool(
+        detail.investigation_summary
+        or detail.confidence_level
+        or detail.recommended_next_step
+    )
+    ai_label = "AVAILABLE" if has_ai else "NOT AVAILABLE"
+    ai_class = "pipe-ai" if has_ai else "pipe-muted"
+    ai_conf = f"Conf: {_esc(detail.confidence_level.upper())}" if detail.confidence_level else "Advisory"
+
+    # 3. Deterministic Policy state
+    r_level = (detail.risk_level or "UNKNOWN").upper()
+    pol_label = f"{r_level} ({detail.risk_score})"
+    pol_class = f"pipe-{r_level.lower()}" if r_level in ("LOW", "MEDIUM", "HIGH", "CRITICAL") else "pipe-muted"
+    pol_action = _esc(detail.proposed_action)
+
+    # 4. Human Approval state
+    app_label, _ = _resolve_approval_display_state(detail)
+    app_pipe_class = (
+        "pipe-success" if app_label == "APPROVED"
+        else ("pipe-danger" if app_label == "DENIED"
+        else ("pipe-warn" if "PENDING" in app_label
+        else "pipe-muted"))
+    )
+
+    # 5. Permitted / Simulated Action state
+    sim_label, _ = _resolve_simulation_display_state(detail)
+    sim_pipe_class = (
+        "pipe-sim" if sim_label == "SIMULATED"
+        else ("pipe-muted" if sim_label == "NOT EXECUTED"
+        else "pipe-danger")
+    )
+
+    return f"""<div class="governance-pipeline">
+  <div class="pipeline-stage">
+    <div class="stage-step">Stage 1 &bull; Evidence</div>
+    <div class="stage-name">{_esc(ev_type)}</div>
+    <span class="badge {ev_class}">{ev_label}</span>
+    <div class="stage-sub">Telemetry Intake</div>
+  </div>
+  <div class="pipeline-arrow">&rarr;</div>
+  <div class="pipeline-stage">
+    <div class="stage-step">Stage 2 &bull; AI Advisory</div>
+    <div class="stage-name">Hypothesis / Context</div>
+    <span class="badge {ai_class}">{ai_label}</span>
+    <div class="stage-sub">{ai_conf}</div>
+  </div>
+  <div class="pipeline-arrow">&rarr;</div>
+  <div class="pipeline-stage stage-highlight">
+    <div class="stage-step">Stage 3 &bull; Deterministic Policy</div>
+    <div class="stage-name">Authoritative Gate</div>
+    <span class="badge {pol_class}">{pol_label}</span>
+    <div class="stage-sub mono" style="font-size: 0.6875rem;">{pol_action}</div>
+  </div>
+  <div class="pipeline-arrow">&rarr;</div>
+  <div class="pipeline-stage">
+    <div class="stage-step">Stage 4 &bull; Human Approval</div>
+    <div class="stage-name">Consequential Guard</div>
+    <span class="badge {app_pipe_class}">{app_label}</span>
+    <div class="stage-sub">{"Strict Gate" if detail.requires_human_approval else "Auto Disposition"}</div>
+  </div>
+  <div class="pipeline-arrow">&rarr;</div>
+  <div class="pipeline-stage">
+    <div class="stage-step">Stage 5 &bull; Permitted / Simulated Action</div>
+    <div class="stage-name">Action State</div>
+    <span class="badge {sim_pipe_class}">{sim_label}</span>
+    <div class="stage-sub" style="color: var(--status-critical); font-weight: 600;">Containment: NOT IMPLEMENTED</div>
+  </div>
+</div>"""
+
+
 def _render_incident_rows(incidents: List[IncidentSummaryView]) -> str:
     """Render HTML table rows from allowlisted incident view models."""
     if not incidents:
@@ -275,7 +430,8 @@ def create_app(incidents_dir: Optional[Union[Path, str]] = None) -> FastAPI:
         except OSError:
             template_html = "<html><body><h1>Incident Detail</h1><p>{{INCIDENT_ID}}</p></body></html>"
 
-        # Risk badge class
+        # Risk calculation & badge class
+        clamped_score = _clamp_risk_score(detail.risk_score)
         r_level = (detail.risk_level or "").upper()
         if r_level == "CRITICAL":
             risk_class = "risk-critical"
@@ -286,14 +442,11 @@ def create_app(incidents_dir: Optional[Union[Path, str]] = None) -> FastAPI:
         else:
             risk_class = "risk-low"
 
-        # Approval class
-        app_stat = (detail.approval_status or "").upper()
-        if app_stat == "APPROVED":
-            app_class = "app-approved"
-        elif app_stat == "DENIED":
-            app_class = "app-denied"
-        else:
-            app_class = "app-not-req"
+        # Approval state resolution
+        app_label, app_class = _resolve_approval_display_state(detail)
+
+        # Simulation state resolution
+        sim_label, sim_class = _resolve_simulation_display_state(detail)
 
         # TI badge class
         ti_stat = (detail.threat_intel.status or "").upper()
@@ -342,6 +495,8 @@ def create_app(incidents_dir: Optional[Union[Path, str]] = None) -> FastAPI:
             source_ip_meta = f'<div class="meta-item"><span class="prop-label">Source IP:</span> <span class="mono">{_esc(detail.source_ip)}</span></div>'
 
         policy_reasons_str = ", ".join(_esc(r) for r in detail.policy_reason_codes) if detail.policy_reason_codes else "None"
+        policy_chips_html = _render_policy_reason_chips(detail.policy_reason_codes)
+        governance_pipeline_html = _render_governance_pipeline(detail)
         evidence_content = _render_evidence_section(detail)
 
         rendered = template_html.replace("{{INCIDENT_ID}}", _esc(detail.incident_id))
@@ -350,18 +505,26 @@ def create_app(incidents_dir: Optional[Union[Path, str]] = None) -> FastAPI:
         rendered = rendered.replace("{{TARGET_HOST}}", _esc(detail.target_host))
         rendered = rendered.replace("{{SOURCE_IP_META}}", source_ip_meta)
         rendered = rendered.replace("{{CREATED_AT_UTC}}", _esc(detail.created_at_utc))
+        rendered = rendered.replace("{{GOVERNANCE_PIPELINE}}", governance_pipeline_html)
         rendered = rendered.replace("{{RISK_SCORE}}", str(detail.risk_score))
+        rendered = rendered.replace("{{CLAMPED_RISK_SCORE}}", str(clamped_score))
+        rendered = rendered.replace("{{RISK_BAR_STYLE}}", f'style="width: {clamped_score}%;"')
         rendered = rendered.replace("{{RISK_LEVEL}}", _esc(detail.risk_level))
+        rendered = rendered.replace("{{RISK_LEVEL_LOWER}}", _esc((detail.risk_level or "low").lower()))
         rendered = rendered.replace("{{RISK_BADGE_CLASS}}", risk_class)
         rendered = rendered.replace("{{DISPOSITION}}", _esc(detail.disposition))
         rendered = rendered.replace("{{PROPOSED_ACTION}}", _esc(detail.proposed_action))
         rendered = rendered.replace("{{REQUIRES_APPROVAL}}", "Yes (Strict Gate)" if detail.requires_human_approval else "No (Auto Disposition)")
         rendered = rendered.replace("{{APPROVAL_STATUS}}", _esc(detail.approval_status))
         rendered = rendered.replace("{{APPROVAL_STATUS_CLASS}}", app_class)
+        rendered = rendered.replace("{{APPROVAL_DISPLAY_LABEL}}", _esc(app_label))
         rendered = rendered.replace("{{APPROVAL_REASON}}", _esc(detail.approval_reason_code or "None"))
         rendered = rendered.replace("{{SIMULATION_STATUS}}", _esc(detail.simulation_status))
+        rendered = rendered.replace("{{SIMULATION_STATUS_CLASS}}", sim_class)
+        rendered = rendered.replace("{{SIMULATION_DISPLAY_LABEL}}", _esc(sim_label))
         rendered = rendered.replace("{{SIMULATION_DETAIL_CODE}}", _esc(detail.simulation_detail_code))
         rendered = rendered.replace("{{POLICY_REASONS}}", policy_reasons_str)
+        rendered = rendered.replace("{{POLICY_REASONS_CHIPS}}", policy_chips_html)
         rendered = rendered.replace("{{CONFIDENCE_LEVEL}}", _esc(detail.confidence_level))
         rendered = rendered.replace("{{SUSPICIOUS_COUNT}}", str(detail.suspicious_indicator_count))
         rendered = rendered.replace("{{INVESTIGATION_SUMMARY}}", _esc(detail.investigation_summary or "No summary available."))

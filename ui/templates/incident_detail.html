@@ -72,7 +72,7 @@
       border: 1px solid var(--border-color);
       border-radius: 8px;
       padding: 20px 24px;
-      margin-bottom: 24px;
+      margin-bottom: 20px;
     }
 
     .header-top {
@@ -138,9 +138,146 @@
     .ti-skipped { background: rgba(107, 114, 128, 0.2); color: #9ca3af; border: 1px solid rgba(107, 114, 128, 0.3); }
     .ti-failed { background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); }
 
-    .app-approved { color: #34d399; font-weight: 600; }
-    .app-denied { color: #f87171; font-weight: 600; }
-    .app-not-req { color: var(--text-muted); }
+    /* Approval & Simulation badges */
+    .app-approved { background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.4); font-weight: 600; }
+    .app-denied { background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.4); font-weight: 600; }
+    .app-pending { background: rgba(245, 158, 11, 0.2); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.4); font-weight: 600; }
+    .app-not-req { background: rgba(107, 114, 128, 0.2); color: #9ca3af; border: 1px solid rgba(107, 114, 128, 0.3); }
+    .app-unknown { background: rgba(107, 114, 128, 0.2); color: #e5e7eb; border: 1px solid rgba(107, 114, 128, 0.4); }
+
+    .sim-simulated { background: rgba(59, 130, 246, 0.2); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.4); font-weight: 600; }
+    .sim-not-executed { background: rgba(107, 114, 128, 0.2); color: #9ca3af; border: 1px solid rgba(107, 114, 128, 0.3); font-weight: 600; }
+    .sim-denied { background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.4); font-weight: 600; }
+    .sim-unknown { background: rgba(107, 114, 128, 0.2); color: #e5e7eb; border: 1px solid rgba(107, 114, 128, 0.4); }
+
+    /* Control-flow / Decision-state visualization pipeline */
+    .governance-pipeline {
+      display: flex;
+      align-items: stretch;
+      justify-content: space-between;
+      gap: 12px;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 16px 20px;
+      margin-bottom: 24px;
+      overflow-x: auto;
+    }
+
+    .pipeline-stage {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      min-width: 150px;
+      flex: 1;
+      padding: 8px;
+      background: rgba(31, 41, 55, 0.5);
+      border: 1px solid rgba(55, 65, 81, 0.7);
+      border-radius: 6px;
+    }
+
+    .stage-highlight {
+      border: 1px solid rgba(16, 185, 129, 0.4);
+      background: rgba(6, 78, 59, 0.15);
+    }
+
+    .stage-step {
+      font-size: 0.6875rem;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 4px;
+      font-weight: 600;
+    }
+
+    .stage-name {
+      font-size: 0.8125rem;
+      font-weight: 600;
+      color: var(--text-primary);
+      margin-bottom: 6px;
+    }
+
+    .stage-sub {
+      font-size: 0.6875rem;
+      color: var(--text-secondary);
+      margin-top: 6px;
+    }
+
+    .pipeline-arrow {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--text-muted);
+      font-size: 1.25rem;
+      font-weight: bold;
+      user-select: none;
+      padding: 0 2px;
+    }
+
+    .pipe-success { background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.4); }
+    .pipe-muted { background: rgba(107, 114, 128, 0.2); color: #9ca3af; border: 1px solid rgba(107, 114, 128, 0.3); }
+    .pipe-ai { background: rgba(99, 102, 241, 0.2); color: #a5b4fc; border: 1px solid rgba(99, 102, 241, 0.4); }
+    .pipe-low { background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.4); }
+    .pipe-medium { background: rgba(245, 158, 11, 0.2); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.4); }
+    .pipe-high { background: rgba(249, 115, 22, 0.2); color: #fb923c; border: 1px solid rgba(249, 115, 22, 0.4); }
+    .pipe-critical { background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.4); }
+    .pipe-warn { background: rgba(245, 158, 11, 0.2); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.4); }
+    .pipe-danger { background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.4); }
+    .pipe-sim { background: rgba(59, 130, 246, 0.2); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.4); }
+
+    /* Risk visualization bar */
+    .risk-bar-track {
+      width: 100%;
+      height: 8px;
+      background: #111827;
+      border-radius: 4px;
+      overflow: hidden;
+      margin-top: 6px;
+      border: 1px solid var(--border-color);
+    }
+
+    .risk-bar-fill {
+      height: 100%;
+    }
+
+    .risk-bar-low { background: #10b981; }
+    .risk-bar-medium { background: #f59e0b; }
+    .risk-bar-high { background: #f97316; }
+    .risk-bar-critical { background: #ef4444; }
+
+    /* Policy chips */
+    .policy-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 4px;
+    }
+
+    .policy-chip {
+      background: rgba(6, 78, 59, 0.3);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+      color: #a7f3d0;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.75rem;
+      padding: 2px 8px;
+      border-radius: 4px;
+    }
+
+    /* Truthfulness block */
+    .truthfulness-block {
+      grid-column: span 2;
+      background: rgba(17, 24, 39, 0.8);
+      border: 1px solid var(--border-color);
+      border-left: 4px solid var(--status-critical);
+      border-radius: 6px;
+      padding: 12px 16px;
+      margin-top: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
 
     .security-notice {
       background: rgba(30, 41, 59, 0.7);
@@ -156,10 +293,6 @@
       color: var(--text-secondary);
     }
 
-    .notice-containment {
-      border-left-color: var(--status-critical);
-    }
-
     .grid-2 {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -169,6 +302,8 @@
 
     @media (max-width: 900px) {
       .grid-2 { grid-template-columns: 1fr; }
+      .governance-pipeline { flex-direction: column; }
+      .pipeline-arrow { transform: rotate(90deg); margin: 4px 0; }
     }
 
     .card {
@@ -179,12 +314,21 @@
       margin-bottom: 24px;
     }
 
+    .card-policy-elevated {
+      border: 1px solid rgba(16, 185, 129, 0.4);
+      box-shadow: 0 0 12px rgba(6, 78, 59, 0.2);
+    }
+
+    .card-ai-advisory {
+      border: 1px solid rgba(99, 102, 241, 0.3);
+    }
+
     .card-header {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-bottom: 16px;
-      padding-bottom: 10px;
+      margin-bottom: 8px;
+      padding-bottom: 8px;
       border-bottom: 1px solid var(--border-color);
     }
 
@@ -194,6 +338,12 @@
       display: flex;
       align-items: center;
       gap: 8px;
+    }
+
+    .section-sublabel {
+      font-size: 0.75rem;
+      color: var(--text-secondary);
+      margin-bottom: 14px;
     }
 
     .prop-list {
@@ -292,7 +442,7 @@
           <span class="mono" style="color: var(--accent-cyan); font-weight: 600; font-size: 0.875rem;">{{INCIDENT_ID}}</span>
           <h1 style="margin-top: 4px;">{{DETECTION_NAME}}</h1>
         </div>
-        <div style="display: flex; gap: 8px;">
+        <div style="display: flex; gap: 8px; align-items: center;">
           <span class="badge {{RISK_BADGE_CLASS}}">Risk Score: {{RISK_SCORE}} &bull; {{RISK_LEVEL}}</span>
           <span class="badge cat-sim">CONTAINMENT: NOT IMPLEMENTED</span>
         </div>
@@ -305,8 +455,12 @@
       </div>
     </header>
 
+    <!-- Milestone 15C: Compact Control-Flow / Decision-State Visualization Pipeline -->
+    {{GOVERNANCE_PIPELINE}}
+
+    <!-- Governance Principle Banner -->
     <div class="security-notice">
-      <div><strong>Governance Principle:</strong> AI assessments are advisory and cannot authorize actions. Security actions are governed by deterministic policy and explicit human approval. Real containment is NOT IMPLEMENTED.</div>
+      <div><strong>Governance Principle:</strong> AI proposes. Deterministic policy evaluates. Human approval governs consequential actions. Only permitted/simulated actions may execute. Real containment is NOT IMPLEMENTED.</div>
       <div style="display: flex; gap: 6px; flex-wrap: wrap;">
         <span class="badge-category cat-policy">DETERMINISTIC POLICY</span>
         <span class="badge-category cat-ai">AI ADVISORY</span>
@@ -316,19 +470,28 @@
     </div>
 
     <div class="grid-2">
-      <!-- 1. Deterministic Security Decision -->
-      <div class="card">
+      <!-- 1. Deterministic Security Decision (Authoritative) -->
+      <div class="card card-policy-elevated">
         <div class="card-header">
           <div class="card-title">
             <span>Deterministic Security Policy</span>
           </div>
-          <span class="badge-category cat-policy">DETERMINISTIC POLICY</span>
+          <span class="badge-category cat-policy">DETERMINISTIC POLICY &bull; AUTHORITATIVE</span>
         </div>
+        <div class="section-sublabel">Authoritative security-control decision.</div>
+
         <div class="prop-list">
-          <div class="prop-item">
-            <span class="prop-label">Risk Level & Score</span>
-            <span class="prop-value"><span class="badge {{RISK_BADGE_CLASS}}">{{RISK_LEVEL}} ({{RISK_SCORE}})</span></span>
+          <!-- Bounded Deterministic Risk Evaluation -->
+          <div class="prop-item prop-full">
+            <div style="display: flex; justify-content: space-between; align-items: baseline;">
+              <span class="prop-label">Deterministic Risk Evaluation</span>
+              <span class="mono" style="font-size: 0.8125rem; font-weight: 600;">Score: {{RISK_SCORE}} / 100 &bull; {{RISK_LEVEL}}</span>
+            </div>
+            <div class="risk-bar-track">
+              <div class="risk-bar-fill risk-bar-{{RISK_LEVEL_LOWER}}" {{RISK_BAR_STYLE}}></div>
+            </div>
           </div>
+
           <div class="prop-item">
             <span class="prop-label">Policy Disposition</span>
             <span class="prop-value mono">{{DISPOSITION}}</span>
@@ -337,49 +500,66 @@
             <span class="prop-label">Proposed Action</span>
             <span class="prop-value mono">{{PROPOSED_ACTION}}</span>
           </div>
+
+          <!-- Human Approval Guard -->
           <div class="prop-item">
-            <span class="prop-label">Human Approval Required</span>
+            <span class="prop-label">Human Approval Requirement</span>
             <span class="prop-value">{{REQUIRES_APPROVAL}}</span>
+            <div class="sub-text">Required for consequential actions when policy mandates approval.</div>
           </div>
           <div class="prop-item">
-            <span class="prop-label">Approval Status</span>
-            <span class="prop-value"><span class="{{APPROVAL_STATUS_CLASS}}">{{APPROVAL_STATUS}}</span></span>
+            <span class="prop-label">Approval State</span>
+            <span class="prop-value"><span class="badge {{APPROVAL_STATUS_CLASS}}">{{APPROVAL_DISPLAY_LABEL}}</span></span>
+            <div class="sub-text mono" style="font-size: 0.75rem;">Reason: {{APPROVAL_REASON}}</div>
           </div>
+
+          <!-- Action State -->
           <div class="prop-item">
-            <span class="prop-label">Approval Reason</span>
-            <span class="prop-value mono">{{APPROVAL_REASON}}</span>
-          </div>
-          <div class="prop-item">
-            <span class="prop-label">Simulation Status</span>
-            <span class="prop-value mono" style="font-weight: 600;">{{SIMULATION_STATUS}}</span>
+            <span class="prop-label">Action State</span>
+            <span class="prop-value"><span class="badge {{SIMULATION_STATUS_CLASS}}">{{SIMULATION_DISPLAY_LABEL}}</span></span>
+            <div class="sub-text">Execution state derived from deterministic workflow results.</div>
           </div>
           <div class="prop-item">
             <span class="prop-label">Simulation Detail Code</span>
             <span class="prop-value mono">{{SIMULATION_DETAIL_CODE}}</span>
           </div>
-          <div class="prop-item prop-full">
-            <span class="prop-label">Real Containment State</span>
-            <span class="prop-value" style="color: var(--status-critical); font-weight: 600;">NOT IMPLEMENTED (SIMULATED ONLY)</span>
+
+          <!-- Truthfulness Block -->
+          <div class="truthfulness-block">
+            <div class="prop-item">
+              <span class="prop-label">Real Containment State</span>
+              <span class="prop-value" style="color: var(--status-critical); font-weight: 700;">NOT IMPLEMENTED (SIMULATED ONLY)</span>
+            </div>
+            <div class="prop-item">
+              <span class="prop-label">Deterministic Action Status</span>
+              <span class="prop-value mono" style="font-weight: 700;">{{SIMULATION_STATUS}}</span>
+            </div>
           </div>
+
+          <!-- Policy Reason Codes (Chips) -->
           <div class="prop-item prop-full">
             <span class="prop-label">Policy Reason Codes</span>
-            <span class="prop-value mono">{{POLICY_REASONS}}</span>
+            {{POLICY_REASONS_CHIPS}}
+            <span style="display:none;">{{POLICY_REASONS}}</span>
           </div>
         </div>
       </div>
 
-      <!-- 2. AI Advisory Assessment -->
-      <div class="card">
+      <!-- 2. AI Advisory Assessment (Zero Authority) -->
+      <div class="card card-ai-advisory">
         <div class="card-header">
           <div class="card-title">
             <span>AI Advisory Assessment</span>
           </div>
           <span class="badge-category cat-ai">AI ADVISORY &bull; ZERO AUTHORITY</span>
         </div>
+        <div class="section-sublabel">Model-generated assessment. Advisory only. Cannot authorize actions.</div>
+
         <div class="prop-list">
           <div class="prop-item">
             <span class="prop-label">Model Confidence</span>
             <span class="prop-value"><span class="badge cat-ai">{{CONFIDENCE_LEVEL}}</span></span>
+            <div class="sub-text">Categorical AI assessment; distinct from deterministic risk.</div>
           </div>
           <div class="prop-item">
             <span class="prop-label">Suspicious Indicators</span>
@@ -413,8 +593,9 @@
             <span class="prop-value mono" style="color: var(--accent-cyan); font-weight: 600;">{{MITRE_TECHNIQUE}}</span>
           </div>
           <div class="prop-item">
-            <span class="prop-label">Downstream Jira Key</span>
+            <span class="prop-label">Tracking Ticket</span>
             <span class="prop-value">{{JIRA_TICKET}}</span>
+            <div class="sub-text">Downstream external tracking sink only. Zero response authority.</div>
           </div>
           <div class="prop-item prop-full" style="margin-top: 4px;">
             <span class="prop-label">Scope & Downstream Authority Note</span>
@@ -468,7 +649,7 @@
     </div>
 
     <footer>
-      <div>AI-Native SOC Lab &bull; Milestone 15B &bull; Read-Only Incident Detail View</div>
+      <div>AI-Native SOC Lab &bull; Milestone 15C &bull; Read-Only Incident Visualization</div>
       <div>Deterministic Policy &bull; Bounded Evidence &bull; Human-in-the-Loop</div>
     </footer>
   </div>
