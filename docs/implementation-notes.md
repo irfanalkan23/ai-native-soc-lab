@@ -1,8 +1,8 @@
-# AI-Native SOC Lab — Implementation Notes (Milestones 1–13)
+# AI-Native SOC Lab — Implementation Notes (Milestones 1–14)
 
 ## Overview
 
-This document records the verification of the initial lab infrastructure, telemetry ingestion pipelines, baseline observations, controlled security tests, SPL detection engineering, bounded Splunk integration, deterministic investigator tools and router, provider-neutral orchestration, OpenAI provider adapter, persistent JSONL audit logging, deterministic risk/action policy engine, human-in-the-loop approval gate, simulated response execution, deterministic structured incident-record reporting artifact generation, VirusTotal threat intelligence integration, the WEB01 ModSecurity SQL injection pipeline with adversarial security evaluations, and Milestone 13 live pipeline validation and hardening (Milestones 1 through 13). All response containment remains strictly simulated.
+This document records the verification of the initial lab infrastructure, telemetry ingestion pipelines, baseline observations, controlled security tests, SPL detection engineering, bounded Splunk integration, deterministic investigator tools and router, provider-neutral orchestration, OpenAI provider adapter, persistent JSONL audit logging, deterministic risk/action policy engine, human-in-the-loop approval gate, simulated response execution, deterministic structured incident-record reporting artifact generation, VirusTotal threat intelligence integration, the WEB01 ModSecurity SQL injection pipeline with adversarial security evaluations, Milestone 13 live pipeline validation and hardening, and Milestone 14 agent security guardrails and adversarial validation (Milestones 1 through 14). All response containment remains strictly simulated.
 
 ---
 
@@ -2306,55 +2306,212 @@ ModSecurity Alert (WEB01)
 
 ---
 
-## 10. Post-Milestone-13 Project Roadmap (Milestones 14–23)
+## 10. Milestone 14 — Agent Security Guardrails & Adversarial Validation
+
+### 1. Scope & Execution Overview
+
+Milestone 14 expands adversarial validation and security boundaries across the agent control plane, proving that untrusted input, malicious evidence, prompt injection, and runtime budget exhaustion cannot bypass deterministic security controls.
+
+All three sub-milestones (14A, 14B, 14C) were implemented exclusively as **test-only** adversarial validations. Zero production code changes were required, demonstrating that the existing architecture, schemas, ToolRouter, RuntimeGuard, policy engine, and approval gates already enforce defense-in-depth fail-closed boundaries without security gaps.
+
+- **Overall Status**: **COMPLETE (IMPLEMENTED + TESTED OFFLINE)**
+- **Canonical Offline Test Suite**: Canonical offline suite at Milestone 14 closure: 1,509 / 1,509 PASS across 53 test suites with 0 failures, 0 errors, and 0 skips (52 new adversarial tests added across 3 suites).
+
+---
+
+### 2. Detailed Breakdown of Sub-Milestones
+
+#### 14A — Tool-Authorization Abuse Tests
+- **Status**: **IMPLEMENTED + TESTED OFFLINE**
+- **Evidence**:
+  - 23/23 focused tests passed (`tests/test_tool_authorization_abuse.py`)
+  - Canonical full offline suite at checkpoint: 1,480 / 1,480 PASS
+  - Commit: `d913f84` `test: add tool authorization abuse coverage`
+- **Key Controls Validated**:
+  - Unknown/unallowlisted tools blocked fail-closed before backend execution.
+  - Forbidden tool arguments blocked by schema validation.
+  - Arbitrary SPL injection blocked by static query allowlist.
+  - Provider override attempts blocked.
+  - Malformed tool requests fail closed.
+  - RuntimeGuard denial blocks downstream execution.
+  - Kill switch blocks execution across guarded checkpoints.
+  - Denied tool calls remain auditable with structured JSONL records.
+  - Zero production code changes were required.
+
+#### 14B — Untrusted Content & Prompt-Injection Boundary Validation
+- **Status**: **IMPLEMENTED + TESTED OFFLINE**
+- **Evidence**:
+  - 15/15 focused tests passed (`tests/test_untrusted_content_guardrails.py`)
+  - Relevant regression suite: 469 / 469 PASS
+  - Canonical full offline suite at checkpoint: 1,495 / 1,495 PASS
+  - Commit: `807ad85` `test: add untrusted content guardrail coverage`
+- **Key Controls Validated**:
+  - Malicious text in logs/telemetry remains evidence only and cannot become trusted instructions.
+  - ModSecurity evidence cannot inject control structures or override policy.
+  - Threat intelligence response content cannot grant authority or alter decisions.
+  - Jira-style content cannot forge headings, links, or approval states.
+  - Encoded/obfuscated prompt injection remains inert evidence.
+  - Fake human approval text cannot satisfy the approval gate.
+  - Unsupported execution/containment claims cannot become deterministic state.
+  - Canary secrets do not leak into prompts, audit logs, ticket descriptions, or `IncidentRecord`.
+  - Jira comments are **NOT CURRENTLY INGESTED** (**NOT APPLICABLE**).
+  - Document/RAG retrieval is **NOT CURRENTLY IMPLEMENTED** (**NOT APPLICABLE**).
+  - Zero production code changes were required.
+
+#### 14C — RuntimeGuard / Kill-Switch / Execution-Budget Abuse Validation
+- **Status**: **IMPLEMENTED + TESTED OFFLINE**
+- **Evidence**:
+  - 14/14 focused tests passed (`tests/test_runtime_guard_abuse.py`)
+  - Relevant regression suite: 370 / 370 PASS
+  - Canonical offline suite at Milestone 14 closure: 1,509 / 1,509 PASS
+  - Commit: `5b3b0f4` `test: add runtime guard abuse coverage`
+- **Key Controls Validated**:
+  - Cumulative tool-budget exhaustion deterministically halts execution.
+  - Repeated calls remain blocked after halt.
+  - Kill switch blocks the guarded RuntimeGuard lifecycle checkpoints (PREFLIGHT, THREAT_INTEL, SIMULATION, and TICKETING) and prevents protected downstream execution.
+  - Kill switch remains permanently latched for the run.
+  - Original halt reason is preserved across subsequent blocked calls.
+  - Separate runs use separate RuntimeGuard instances with complete state isolation.
+  - Nested/multi-step execution cannot bypass the tool budget.
+  - RuntimeGuard denial propagates fail closed through ToolRouter and orchestrator.
+  - Human approval cannot override a halted RuntimeGuard.
+  - Halted runtime blocks response simulation.
+  - Halted runtime blocks Jira dispatch.
+  - Halted runtime blocks threat-intelligence lookup.
+  - Exactly one bounded `RUNTIME_HALTED` event is emitted per halt.
+  - Untrusted input cannot mutate RuntimeGuard internal state.
+  - No reset/unhalt API exists.
+  - Zero production code changes were required.
+
+---
+
+### 3. Milestone 14 Security & Architectural Conclusion
+
+The project does not attempt to make the model inherently trustworthy.
+
+Instead, safety and authority are enforced through a deterministic unidirectional control plane:
+
+```
+Untrusted evidence
+    ↓
+Advisory model (hypotheses, confidence, triage summaries)
+    ↓
+Strict tool schemas / ToolRouter (least privilege, static allowlists)
+    ↓
+RuntimeGuard (execution budgets, permanent kill switch, halt latching)
+    ↓
+Deterministic policy (risk scoring, allowlisted action mapping)
+    ↓
+Explicit human approval for consequential actions
+    ↓
+Permitted / simulated execution (zero live destructive actions)
+    ↓
+Audit + evaluation (append-only JSONL trail, canonical evaluation harness)
+```
+
+**Core Principle**: Malicious content may influence an investigation hypothesis as evidence, but it cannot create authority. Authority is enforced deterministically by backend controls rather than through prompt phrasing or model alignment.
+
+---
+
+## 11. Project Roadmap (Milestones 15–23)
+
+### Core Roadmap Invariants
+- **Single-Agent Architecture Principle**: Maintain a single-agent architecture unless a clear, measurable security-engineering benefit justifies multi-agent complexity.
+- **Core Pipeline Invariant**:
+  > `AI proposes → deterministic policy evaluates → human approves consequential actions → system executes only permitted/simulated actions → everything is logged and evaluated.`
+
+### Historical Note on Roadmap Sequencing
+In the initial post-Milestone-13 planning, the SOC Analyst UI was projected as Milestone 19, following detection coverage expansion and Suricata integration. Following the completion of Milestone 14, where backend security boundaries (schema validation, ToolRouter, RuntimeGuard, deterministic policy engine, and tamper-resistant audit logging) were exhaustively validated against adversarial abuse, the UI was moved forward to Milestone 15. Exposing these mature boundaries through a read-only console provides immediate demonstration capability, accelerates triage debugging, and establishes a safe inspection layer before interactive approval controls (Milestone 16) or network telemetry (Milestone 19) are introduced.
+
+---
 
 ### Milestone 14 — Agent Security Guardrails & Adversarial Validation
-Expand tool-allowlist abuse testing, prompt-injection cases, malformed tool arguments, RuntimeGuard kill-switch/tool-budget enforcement, escalation-boundary tests, and denied-action audit coverage.
+- **Status**: **COMPLETE (IMPLEMENTED + TESTED OFFLINE)**
+- Comprehensive adversarial validation across tool-authorization abuse (14A), untrusted content & prompt injection (14B), and RuntimeGuard / kill-switch / execution budgets (14C). 52 new tests across 3 suites; canonical offline suite at Milestone 14 closure: 1,509/1,509 PASS; zero production security gaps found.
 
-### Milestone 15 — Human Approval & Consequential Action Boundary
-Harden approval binding, denial behavior, stale/forged approval rejection, incident/action matching, and auditability. Consequential response remains simulated or explicitly human-approved.
+### Milestone 15 — SOC Analyst UI / Investigation Console
+- **Status**: **PLANNED**
+- **Purpose**: Create an analyst-facing interface over the existing deterministic backend.
+- **Boundary Constraint**: *Initial UI scope must remain strictly read-only and observational.*
 
-### Milestone 16 — Security Evaluation Framework Expansion
-Broaden automated evaluations for investigation correctness, insufficient evidence, unauthorized tool requests, prompt injection, TI/Jira/provider failures, kill-switch halts, approval outcomes, conflicting evidence, and hallucinated security claims.
+**Suggested Sub-phases**:
+- **15A — UI Architecture + Read-Only Incident List**: Thin presentation layer / bounded read-only API displaying list of ingested incidents and status without direct privileged tool authority.
+- **15B — Incident Detail / Evidence View**: Deep inspection view displaying bounded telemetry attributes (Sysmon Event ID 1, 7-field ModSecurity evidence, decoded commands) as inert evidence.
+- **15C — AI Assessment vs. Deterministic Policy Visualization**: Clear visual distinction between advisory AI hypotheses/confidence and authoritative deterministic policy risk score/disposition.
+- **15D — Threat Intelligence / Jira / Audit Timeline**: Chronological event timeline showing scope classification, TI enrichment results, downstream Jira ticket linkage, and append-only audit trail.
+- **15E — UI Security & Boundary Tests**: Verification that the UI layer cannot invoke arbitrary tools, execute arbitrary SPL, call providers directly, bypass ToolRouter or RuntimeGuard, perform endpoint isolation, disable accounts, modify firewall rules, change credentials, or create an autonomous action path.
 
-### Milestone 17 — Additional Detection Coverage
-Add a small number of high-value detections with full telemetry, SPL/Sigma, MITRE mapping, incident workflow, and evaluation coverage. Prioritize credential-access/LSASS behavior, scheduled task or service creation, and authentication abuse.
+**Important Boundary Rules**:
+The UI must NOT:
+- invoke arbitrary tools
+- submit arbitrary SPL
+- call providers directly
+- bypass ToolRouter
+- bypass RuntimeGuard
+- bypass deterministic policy
+- perform endpoint isolation
+- disable accounts
+- modify firewall rules
+- change credentials
+- create a new autonomous action path
 
-### Milestone 18 — Suricata / Network Detection Integration
-Revisit pfSense Suricata, forward firewall/IDS telemetry to Splunk, and add a bounded network-alert investigation path. Suricata remains **DEFERRED** until this milestone begins.
+**Desired Architecture**:
+```
+Browser UI
+    ↓
+Bounded read-only API / presentation layer
+    ↓
+Existing incident / audit data and application services
+    ↓
+No direct privileged-tool authority
+```
 
-### Milestone 19 — SOC Analyst UI / Investigation Console
-Build a thin analyst-facing UI over the existing backend showing:
-- incidents;
-- evidence;
-- AI assessment;
-- deterministic risk/policy state;
-- threat-intelligence results;
-- approval state;
-- Jira linkage;
-- RuntimeGuard/tool activity;
-- audit timeline.
+**Architectural Rationale for Moving UI Forward**:
+The backend security boundaries are now mature enough to expose safely through a read-only analyst console. Building the UI earlier improves:
+- recruiter/interviewer demonstration
+- debugging and triage visibility
+- visibility into AI vs. deterministic decisions
+- visibility into audit and control state
+- later integration of approvals, new detections, Suricata, and runtime monitoring.
+*Approval and response action controls remain strictly deferred until Milestone 16.*
 
-*The UI must not bypass policy or directly control privileged tools.*
+### Milestone 16 — Human Approval & Consequential Action Boundary
+- **Status**: **PLANNED**
+- **Scope**:
+  - Bind approval to specific incident and action.
+  - Reject stale approval tokens/decisions.
+  - Reject forged approval attempts.
+  - Reject approval reuse across incidents.
+  - Explicit DENY behavior.
+  - Explicit APPROVE behavior.
+  - Only pre-authorized simulated action executes.
+  - Everything audited.
+- *Integration Note*: After Milestone 16 is complete, a bounded analyst Approve/Deny UI control may be integrated into the console without creating a bypass around the existing approval service.
+
+### Milestone 17 — Security Evaluation Framework Expansion
+- **Status**: **PLANNED**
+- Broaden automated evaluations for investigation correctness, insufficient evidence, unauthorized tool requests, prompt injection, TI/Jira/provider failures, kill-switch halts, approval outcomes, conflicting evidence, and hallucinated security claims.
+
+### Milestone 18 — Additional Detection Coverage
+- **Status**: **PLANNED**
+- Add a small number of high-value detections with full telemetry, SPL/Sigma, MITRE mapping, incident workflow, and evaluation coverage. Prioritize credential-access/LSASS behavior, scheduled task or service creation, and authentication abuse.
+
+### Milestone 19 — Suricata / Network Detection Integration
+- **Status**: **DEFERRED**
+- Revisit pfSense Suricata, forward firewall/IDS telemetry to Splunk, and add a bounded network-alert investigation path. Suricata remains **DEFERRED** until this milestone begins.
 
 ### Milestone 20 — Runtime Monitoring & Operational Safety
-Expose per-run tool counts, blocked-tool counts, provider failures, kill-switch state, approval state, audit correlation, and bounded runtime-health/security metrics.
+- **Status**: **PLANNED**
+- Expose per-run tool counts, blocked-tool counts, provider failures, kill-switch state, approval state, audit correlation, and bounded runtime-health/security metrics.
 
 ### Milestone 21 — Threat Model & Security Architecture Documentation
-Formalize trust boundaries, untrusted inputs, model authority, deterministic control plane, secrets handling, external-provider boundaries, approval boundary, abuse cases, residual risks, and production limitations.
+- **Status**: **PLANNED**
+- Formalize trust boundaries, untrusted inputs, model authority, deterministic control plane, secrets handling, external-provider boundaries, approval boundary, abuse cases, residual risks, and production limitations.
 
 ### Milestone 22 — Recruiter / Interview Demo
-Create one polished end-to-end SOC incident demonstration and one adversarial-control demonstration proving that malicious/untrusted content cannot bypass ToolRouter, RuntimeGuard, deterministic policy, or human approval.
+- **Status**: **PLANNED**
+- Create one polished end-to-end SOC incident demonstration and one adversarial-control demonstration proving that malicious/untrusted content cannot bypass ToolRouter, RuntimeGuard, deterministic policy, or human approval.
 
 ### Milestone 23 — Portfolio & GitHub Finalization
-Finalize:
-- architecture diagrams;
-- README/setup;
-- implementation-status matrix;
-- incident case studies;
-- screenshots;
-- evaluation results;
-- live-tested vs simulated matrix;
-- limitations;
-- future improvements;
-- public roadmap.
+- **Status**: **PLANNED**
+- Finalize architecture diagrams, README/setup, implementation-status matrix, incident case studies, screenshots, evaluation results, live-tested vs simulated matrix, limitations, future improvements, and public roadmap.
