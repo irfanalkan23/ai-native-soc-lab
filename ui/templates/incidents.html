@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SOC Analyst Console — Incident Investigation</title>
+  <style>
+    :root {
+      --bg-primary: #0a0f1d;
+      --bg-secondary: #111827;
+      --bg-card: #1f2937;
+      --bg-elevated: #374151;
+      --border-color: #374151;
+      --text-primary: #f9fafb;
+      --text-secondary: #9ca3af;
+      --text-muted: #6b7280;
+      
+      --accent-blue: #3b82f6;
+      --accent-cyan: #06b6d4;
+      --accent-purple: #8b5cf6;
+      
+      --status-low: #10b981;
+      --status-medium: #f59e0b;
+      --status-high: #f97316;
+      --status-critical: #ef4444;
+      
+      --badge-ai-bg: #312e81;
+      --badge-ai-text: #c7d2fe;
+      --badge-policy-bg: #064e3b;
+      --badge-policy-text: #a7f3d0;
+      --badge-approval-bg: #78350f;
+      --badge-approval-text: #fde68a;
+      --badge-sim-bg: #1e293b;
+      --badge-sim-text: #94a3b8;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: var(--bg-primary);
+      color: var(--text-primary);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      line-height: 1.5;
+      padding: 24px;
+    }
+
+    .container {
+      max-width: 1440px;
+      margin: 0 auto;
+    }
+
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-bottom: 20px;
+      border-bottom: 1px solid var(--border-color);
+      margin-bottom: 20px;
+    }
+
+    .header-title {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    h1 {
+      font-size: 1.5rem;
+      font-weight: 700;
+      letter-spacing: -0.025em;
+    }
+
+    .header-badge {
+      font-size: 0.75rem;
+      font-weight: 600;
+      padding: 4px 10px;
+      border-radius: 9999px;
+      background: var(--bg-elevated);
+      color: var(--accent-cyan);
+      border: 1px solid rgba(6, 182, 212, 0.3);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .security-notice {
+      background: rgba(30, 41, 59, 0.7);
+      border: 1px solid var(--border-color);
+      border-left: 4px solid var(--accent-cyan);
+      border-radius: 6px;
+      padding: 12px 16px;
+      margin-bottom: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .notice-text {
+      font-size: 0.875rem;
+      color: var(--text-secondary);
+    }
+
+    .notice-text strong {
+      color: var(--text-primary);
+    }
+
+    .boundary-tag {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+
+    .metrics-bar {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+
+    .metric-card {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 16px;
+    }
+
+    .metric-label {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      margin-bottom: 4px;
+    }
+
+    .metric-value {
+      font-size: 1.5rem;
+      font-weight: 700;
+    }
+
+    .table-container {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      overflow-x: auto;
+      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      text-align: left;
+      font-size: 0.875rem;
+    }
+
+    th {
+      background: var(--bg-card);
+      color: var(--text-secondary);
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border-color);
+      white-space: nowrap;
+    }
+
+    td {
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--border-color);
+      vertical-align: top;
+    }
+
+    tr:last-child td {
+      border-bottom: none;
+    }
+
+    tr:hover td {
+      background-color: rgba(255, 255, 255, 0.02);
+    }
+
+    .mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.8125rem;
+    }
+
+    .incident-id {
+      color: var(--accent-cyan);
+      font-weight: 600;
+    }
+
+    .sub-text {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+
+    .badge-category {
+      font-size: 0.6875rem;
+      font-weight: 700;
+      padding: 2px 6px;
+      border-radius: 3px;
+      display: inline-block;
+      margin-bottom: 4px;
+      letter-spacing: 0.03em;
+    }
+
+    .cat-ai {
+      background: var(--badge-ai-bg);
+      color: var(--badge-ai-text);
+    }
+
+    .cat-policy {
+      background: var(--badge-policy-bg);
+      color: var(--badge-policy-text);
+    }
+
+    .cat-approval {
+      background: var(--badge-approval-bg);
+      color: var(--badge-approval-text);
+    }
+
+    .cat-sim {
+      background: var(--badge-sim-bg);
+      color: var(--badge-sim-text);
+      border: 1px solid var(--border-color);
+    }
+
+    .risk-low {
+      background: rgba(16, 185, 129, 0.2);
+      color: #34d399;
+      border: 1px solid rgba(16, 185, 129, 0.3);
+    }
+
+    .risk-medium {
+      background: rgba(245, 158, 11, 0.2);
+      color: #fbbf24;
+      border: 1px solid rgba(245, 158, 11, 0.3);
+    }
+
+    .risk-high {
+      background: rgba(249, 115, 22, 0.2);
+      color: #fb923c;
+      border: 1px solid rgba(249, 115, 22, 0.3);
+    }
+
+    .risk-critical {
+      background: rgba(239, 68, 68, 0.2);
+      color: #f87171;
+      border: 1px solid rgba(239, 68, 68, 0.3);
+    }
+
+    .ti-enriched {
+      background: rgba(59, 130, 246, 0.2);
+      color: #60a5fa;
+      border: 1px solid rgba(59, 130, 246, 0.3);
+    }
+
+    .ti-skipped {
+      background: rgba(107, 114, 128, 0.2);
+      color: #9ca3af;
+      border: 1px solid rgba(107, 114, 128, 0.3);
+    }
+
+    .ti-failed {
+      background: rgba(239, 68, 68, 0.2);
+      color: #f87171;
+      border: 1px solid rgba(239, 68, 68, 0.3);
+    }
+
+    .app-approved {
+      color: #34d399;
+      font-weight: 600;
+    }
+
+    .app-denied {
+      color: #f87171;
+      font-weight: 600;
+    }
+
+    .app-not-req {
+      color: var(--text-muted);
+    }
+
+    .jira-pill {
+      background: rgba(59, 130, 246, 0.15);
+      color: #93c5fd;
+      border: 1px solid rgba(59, 130, 246, 0.3);
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.75rem;
+    }
+
+    .empty-state {
+      padding: 64px 24px;
+      text-align: center;
+      color: var(--text-muted);
+    }
+
+    .empty-state h3 {
+      font-size: 1.125rem;
+      color: var(--text-secondary);
+      margin-bottom: 8px;
+    }
+
+    footer {
+      margin-top: 32px;
+      padding-top: 16px;
+      border-top: 1px solid var(--border-color);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="header-title">
+        <h1>AI-Native SOC Lab — Investigation Console</h1>
+        <span class="header-badge">Read-Only Analyst View (M15A)</span>
+      </div>
+      <div class="boundary-tag">Zero Privileged Tool Authority</div>
+    </header>
+
+    <div class="security-notice">
+      <div class="notice-text">
+        <strong>Governance Notice:</strong> AI assessments are advisory. Security actions are governed by deterministic policy and explicit human approval.
+      </div>
+      <div class="boundary-tag">Deterministic Control Plane</div>
+    </div>
+
+    <div class="metrics-bar">
+      <div class="metric-card">
+        <div class="metric-label">Total Incidents</div>
+        <div class="metric-value">{{TOTAL_INCIDENTS}}</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">High / Critical Risk</div>
+        <div class="metric-value">{{HIGH_CRITICAL_COUNT}}</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Containment Execution</div>
+        <div class="metric-value" style="color: var(--text-secondary); font-size: 1.125rem;">SIMULATED ONLY</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Backend Authority</div>
+        <div class="metric-value" style="color: var(--status-low); font-size: 1.125rem;">FAIL CLOSED</div>
+      </div>
+    </div>
+
+    <div class="table-container">
+      <table>
+        <thead>
+          <tr>
+            <th>Incident</th>
+            <th>Detection</th>
+            <th>Asset / Source</th>
+            <th>Risk</th>
+            <th>AI Assessment</th>
+            <th>MITRE</th>
+            <th>Threat Intel</th>
+            <th>Approval</th>
+            <th>Action Status</th>
+            <th>Jira</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{TABLE_ROWS}}
+        </tbody>
+      </table>
+    </div>
+
+    <footer>
+      <div>AI-Native SOC Lab &bull; Milestone 15A &bull; Read-Only Presentation Slice</div>
+      <div>Telemetry &bull; Policy &bull; Human-in-the-Loop &bull; Simulated Actions</div>
+    </footer>
+  </div>
+</body>
+</html>
