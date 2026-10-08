@@ -1,0 +1,476 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Incident Detail — {{INCIDENT_ID}}</title>
+  <style>
+    :root {
+      --bg-primary: #0a0f1d;
+      --bg-secondary: #111827;
+      --bg-card: #1f2937;
+      --bg-elevated: #374151;
+      --border-color: #374151;
+      --text-primary: #f9fafb;
+      --text-secondary: #9ca3af;
+      --text-muted: #6b7280;
+      
+      --accent-blue: #3b82f6;
+      --accent-cyan: #06b6d4;
+      --accent-purple: #8b5cf6;
+      
+      --status-low: #10b981;
+      --status-medium: #f59e0b;
+      --status-high: #f97316;
+      --status-critical: #ef4444;
+      
+      --badge-ai-bg: #312e81;
+      --badge-ai-text: #c7d2fe;
+      --badge-policy-bg: #064e3b;
+      --badge-policy-text: #a7f3d0;
+      --badge-approval-bg: #78350f;
+      --badge-approval-text: #fde68a;
+      --badge-sim-bg: #1e293b;
+      --badge-sim-text: #94a3b8;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background-color: var(--bg-primary);
+      color: var(--text-primary);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      line-height: 1.5;
+      padding: 24px;
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    .nav-bar {
+      margin-bottom: 20px;
+    }
+
+    .back-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--accent-cyan);
+      text-decoration: none;
+      font-size: 0.875rem;
+      font-weight: 500;
+    }
+
+    .back-link:hover {
+      text-decoration: underline;
+    }
+
+    header {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 20px 24px;
+      margin-bottom: 24px;
+    }
+
+    .header-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 12px;
+    }
+
+    h1 {
+      font-size: 1.5rem;
+      font-weight: 700;
+      letter-spacing: -0.025em;
+    }
+
+    .header-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px;
+      font-size: 0.8125rem;
+      color: var(--text-secondary);
+    }
+
+    .meta-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+
+    .badge-category {
+      font-size: 0.6875rem;
+      font-weight: 700;
+      padding: 2px 6px;
+      border-radius: 3px;
+      display: inline-block;
+      letter-spacing: 0.04em;
+    }
+
+    .cat-ai { background: var(--badge-ai-bg); color: var(--badge-ai-text); }
+    .cat-policy { background: var(--badge-policy-bg); color: var(--badge-policy-text); }
+    .cat-approval { background: var(--badge-approval-bg); color: var(--badge-approval-text); }
+    .cat-sim { background: var(--badge-sim-bg); color: var(--badge-sim-text); border: 1px solid var(--border-color); }
+
+    .risk-low { background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); }
+    .risk-medium { background: rgba(245, 158, 11, 0.2); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.3); }
+    .risk-high { background: rgba(249, 115, 22, 0.2); color: #fb923c; border: 1px solid rgba(249, 115, 22, 0.3); }
+    .risk-critical { background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); }
+
+    .ti-enriched { background: rgba(59, 130, 246, 0.2); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.3); }
+    .ti-skipped { background: rgba(107, 114, 128, 0.2); color: #9ca3af; border: 1px solid rgba(107, 114, 128, 0.3); }
+    .ti-failed { background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); }
+
+    .app-approved { color: #34d399; font-weight: 600; }
+    .app-denied { color: #f87171; font-weight: 600; }
+    .app-not-req { color: var(--text-muted); }
+
+    .security-notice {
+      background: rgba(30, 41, 59, 0.7);
+      border: 1px solid var(--border-color);
+      border-left: 4px solid var(--accent-cyan);
+      border-radius: 6px;
+      padding: 12px 16px;
+      margin-bottom: 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.8125rem;
+      color: var(--text-secondary);
+    }
+
+    .notice-containment {
+      border-left-color: var(--status-critical);
+    }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 24px;
+      margin-bottom: 24px;
+    }
+
+    @media (max-width: 900px) {
+      .grid-2 { grid-template-columns: 1fr; }
+    }
+
+    .card {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 20px;
+      margin-bottom: 24px;
+    }
+
+    .card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .card-title {
+      font-size: 1rem;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .prop-list {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px 16px;
+      font-size: 0.8125rem;
+    }
+
+    .prop-full {
+      grid-column: span 2;
+    }
+
+    .prop-item {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .prop-label {
+      color: var(--text-muted);
+      font-size: 0.6875rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .prop-value {
+      color: var(--text-primary);
+      font-size: 0.875rem;
+    }
+
+    .code-box {
+      background: #000;
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      padding: 12px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.8125rem;
+      color: #38bdf8;
+      overflow-x: auto;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+
+    .table-container {
+      overflow-x: auto;
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.8125rem;
+    }
+
+    th {
+      background: var(--bg-card);
+      color: var(--text-secondary);
+      text-align: left;
+      padding: 8px 12px;
+      font-size: 0.6875rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    td {
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--border-color);
+      vertical-align: top;
+    }
+
+    tr:last-child td { border-bottom: none; }
+
+    footer {
+      margin-top: 32px;
+      padding-top: 16px;
+      border-top: 1px solid var(--border-color);
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="nav-bar">
+      <a href="/" class="back-link">&larr; Back to Incident List</a>
+    </div>
+
+    <header>
+      <div class="header-top">
+        <div>
+          <span class="mono" style="color: var(--accent-cyan); font-weight: 600; font-size: 0.875rem;">{{INCIDENT_ID}}</span>
+          <h1 style="margin-top: 4px;">{{DETECTION_NAME}}</h1>
+        </div>
+        <div style="display: flex; gap: 8px;">
+          <span class="badge {{RISK_BADGE_CLASS}}">Risk Score: {{RISK_SCORE}} &bull; {{RISK_LEVEL}}</span>
+          <span class="badge cat-sim">CONTAINMENT: NOT IMPLEMENTED</span>
+        </div>
+      </div>
+      <div class="header-meta">
+        <div class="meta-item"><span class="prop-label">Detection ID:</span> <span class="mono">{{DETECTION_ID}}</span></div>
+        <div class="meta-item"><span class="prop-label">Host:</span> <span class="mono">{{TARGET_HOST}}</span></div>
+        {{SOURCE_IP_META}}
+        <div class="meta-item"><span class="prop-label">Timestamp UTC:</span> <span class="mono">{{CREATED_AT_UTC}}</span></div>
+      </div>
+    </header>
+
+    <div class="security-notice">
+      <div><strong>Governance Principle:</strong> AI assessments are advisory and cannot authorize actions. Security actions are governed by deterministic policy and explicit human approval. Real containment is NOT IMPLEMENTED.</div>
+      <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+        <span class="badge-category cat-policy">DETERMINISTIC POLICY</span>
+        <span class="badge-category cat-ai">AI ADVISORY</span>
+        <span class="badge-category cat-approval">HUMAN APPROVAL</span>
+        <span class="badge-category cat-sim">SIMULATED / NOT EXECUTED</span>
+      </div>
+    </div>
+
+    <div class="grid-2">
+      <!-- 1. Deterministic Security Decision -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">
+            <span>Deterministic Security Policy</span>
+          </div>
+          <span class="badge-category cat-policy">DETERMINISTIC POLICY</span>
+        </div>
+        <div class="prop-list">
+          <div class="prop-item">
+            <span class="prop-label">Risk Level & Score</span>
+            <span class="prop-value"><span class="badge {{RISK_BADGE_CLASS}}">{{RISK_LEVEL}} ({{RISK_SCORE}})</span></span>
+          </div>
+          <div class="prop-item">
+            <span class="prop-label">Policy Disposition</span>
+            <span class="prop-value mono">{{DISPOSITION}}</span>
+          </div>
+          <div class="prop-item">
+            <span class="prop-label">Proposed Action</span>
+            <span class="prop-value mono">{{PROPOSED_ACTION}}</span>
+          </div>
+          <div class="prop-item">
+            <span class="prop-label">Human Approval Required</span>
+            <span class="prop-value">{{REQUIRES_APPROVAL}}</span>
+          </div>
+          <div class="prop-item">
+            <span class="prop-label">Approval Status</span>
+            <span class="prop-value"><span class="{{APPROVAL_STATUS_CLASS}}">{{APPROVAL_STATUS}}</span></span>
+          </div>
+          <div class="prop-item">
+            <span class="prop-label">Approval Reason</span>
+            <span class="prop-value mono">{{APPROVAL_REASON}}</span>
+          </div>
+          <div class="prop-item">
+            <span class="prop-label">Simulation Status</span>
+            <span class="prop-value mono" style="font-weight: 600;">{{SIMULATION_STATUS}}</span>
+          </div>
+          <div class="prop-item">
+            <span class="prop-label">Simulation Detail Code</span>
+            <span class="prop-value mono">{{SIMULATION_DETAIL_CODE}}</span>
+          </div>
+          <div class="prop-item prop-full">
+            <span class="prop-label">Real Containment State</span>
+            <span class="prop-value" style="color: var(--status-critical); font-weight: 600;">NOT IMPLEMENTED (SIMULATED ONLY)</span>
+          </div>
+          <div class="prop-item prop-full">
+            <span class="prop-label">Policy Reason Codes</span>
+            <span class="prop-value mono">{{POLICY_REASONS}}</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 2. AI Advisory Assessment -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">
+            <span>AI Advisory Assessment</span>
+          </div>
+          <span class="badge-category cat-ai">AI ADVISORY &bull; ZERO AUTHORITY</span>
+        </div>
+        <div class="prop-list">
+          <div class="prop-item">
+            <span class="prop-label">Model Confidence</span>
+            <span class="prop-value"><span class="badge cat-ai">{{CONFIDENCE_LEVEL}}</span></span>
+          </div>
+          <div class="prop-item">
+            <span class="prop-label">Suspicious Indicators</span>
+            <span class="prop-value">{{SUSPICIOUS_COUNT}}</span>
+          </div>
+          <div class="prop-item prop-full">
+            <span class="prop-label">Investigation Summary (Hypothesis)</span>
+            <span class="prop-value" style="margin-top: 4px; line-height: 1.4;">{{INVESTIGATION_SUMMARY}}</span>
+          </div>
+          <div class="prop-item prop-full" style="margin-top: 8px;">
+            <span class="prop-label">Recommended Next Step</span>
+            <span class="prop-value" style="margin-top: 4px; color: var(--text-secondary); line-height: 1.4;">{{RECOMMENDED_NEXT_STEP}}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 3. MITRE ATT&CK & Threat Intelligence & Jira Grid -->
+    <div class="grid-2">
+      <!-- MITRE ATT&CK & Jira -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">
+            <span>ATT&CK & Tracking</span>
+          </div>
+          <span class="badge-category cat-policy">DETERMINISTIC MAPPING</span>
+        </div>
+        <div class="prop-list">
+          <div class="prop-item">
+            <span class="prop-label">MITRE Technique</span>
+            <span class="prop-value mono" style="color: var(--accent-cyan); font-weight: 600;">{{MITRE_TECHNIQUE}}</span>
+          </div>
+          <div class="prop-item">
+            <span class="prop-label">Downstream Jira Key</span>
+            <span class="prop-value">{{JIRA_TICKET}}</span>
+          </div>
+          <div class="prop-item prop-full" style="margin-top: 4px;">
+            <span class="prop-label">Scope & Downstream Authority Note</span>
+            <span class="prop-value" style="font-size: 0.75rem; color: var(--text-muted);">
+              Jira ticketing is a downstream external tracking sink with zero response authority. MITRE mappings are deterministic local mappings.
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Threat Intelligence -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">
+            <span>Threat Intelligence</span>
+          </div>
+          <span class="badge-category cat-ai">ADVISORY EVIDENCE</span>
+        </div>
+        <div class="prop-list">
+          <div class="prop-item">
+            <span class="prop-label">TI Status</span>
+            <span class="prop-value"><span class="badge {{TI_BADGE_CLASS}}">{{TI_STATUS}}</span></span>
+          </div>
+          <div class="prop-item">
+            <span class="prop-label">TI Indicator</span>
+            <span class="prop-value mono">{{TI_INDICATOR}}</span>
+          </div>
+          {{TI_DETAIL_ROWS}}
+          <div class="prop-item prop-full" style="margin-top: 4px;">
+            <span class="prop-label">Eligibility Policy</span>
+            <span class="prop-value" style="font-size: 0.75rem; color: var(--text-muted);">
+              Only public IPv4 addresses are eligible for threat intelligence lookup. Private LabNet IPs strictly skip lookup (0 external calls).
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 4. Telemetry Evidence (Bounded) -->
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">
+          <span>Telemetry Evidence</span>
+        </div>
+        <span class="badge-category cat-sim">STRICT EVIDENCE SCHEMA</span>
+      </div>
+      {{EVIDENCE_CONTENT}}
+      <div style="margin-top: 12px; font-size: 0.75rem; color: var(--text-muted);">
+        Notice: Raw <code>_raw</code> telemetry, raw Sysmon XML, and unparsed ModSecurity audit dumps are excluded by design to prevent prompt injection and data leakage.
+      </div>
+    </div>
+
+    <footer>
+      <div>AI-Native SOC Lab &bull; Milestone 15B &bull; Read-Only Incident Detail View</div>
+      <div>Deterministic Policy &bull; Bounded Evidence &bull; Human-in-the-Loop</div>
+    </footer>
+  </div>
+</body>
+</html>
