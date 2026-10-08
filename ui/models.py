@@ -9,6 +9,38 @@ from dataclasses import asdict, dataclass
 from typing import Any, Dict, List, Optional, Set
 
 
+ALLOWLISTED_AUDIT_FIELDS: Set[str] = frozenset({
+    "sequence",
+    "event_type",
+    "incident_id",
+    "detail_code",
+    "timestamp",
+    "category",
+    "outcome",
+})
+
+
+@dataclass(frozen=True)
+class AuditEventView:
+    """Allowlisted, frozen presentation view model for an audit timeline event.
+
+    Holds zero execution authority. Strictly excludes raw prompts, tool arguments,
+    untrusted payloads, provider credentials, and raw telemetry.
+    """
+    sequence: int
+    event_type: str
+    incident_id: str
+    detail_code: str
+    category: str = "OTHER"
+    outcome: str = "INFO"
+    timestamp: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Return a structured dictionary with allowlisted audit fields only."""
+        data = asdict(self)
+        return {k: v for k, v in data.items() if k in ALLOWLISTED_AUDIT_FIELDS}
+
+
 ALLOWLISTED_SUMMARY_FIELDS: Set[str] = frozenset({
     "incident_id",
     "detection_id",

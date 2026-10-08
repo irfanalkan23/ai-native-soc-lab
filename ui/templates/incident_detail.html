@@ -419,6 +419,63 @@
 
     tr:last-child td { border-bottom: none; }
 
+    /* Audit Timeline styles */
+    .audit-timeline-container {
+      margin-top: 20px;
+    }
+    .audit-timeline-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .audit-timeline-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      background: var(--bg-elevated);
+      padding: 10px 14px;
+      border-radius: 6px;
+      border: 1px solid var(--border-color);
+    }
+    .audit-row-left {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-shrink: 0;
+    }
+    .audit-seq-badge {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      min-width: 32px;
+    }
+    .audit-event-type {
+      font-size: 0.8125rem;
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+    .audit-row-mid {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .audit-detail-code {
+      font-size: 0.75rem;
+      color: var(--text-secondary);
+    }
+    .audit-row-right {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-shrink: 0;
+    }
+    .audit-outcome-success { background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.4); }
+    .audit-outcome-failed { background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.4); }
+    .audit-outcome-req { background: rgba(245, 158, 11, 0.2); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.4); }
+    .audit-outcome-info { background: rgba(59, 130, 246, 0.2); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.4); }
+
     footer {
       margin-top: 32px;
       padding-top: 16px;
@@ -579,14 +636,15 @@
 
     <!-- 3. MITRE ATT&CK & Threat Intelligence & Jira Grid -->
     <div class="grid-2">
-      <!-- MITRE ATT&CK & Jira -->
+      <!-- MITRE ATT&CK & Jira Tracking -->
       <div class="card">
         <div class="card-header">
           <div class="card-title">
-            <span>ATT&CK & Tracking</span>
+            <span>Incident Tracking</span>
           </div>
-          <span class="badge-category cat-policy">DETERMINISTIC MAPPING</span>
+          <span class="badge-category cat-policy">DOWNSTREAM SINK</span>
         </div>
+        <div class="section-sublabel">Jira is a downstream reporting/tracking sink and has no response authority.</div>
         <div class="prop-list">
           <div class="prop-item">
             <span class="prop-label">MITRE Technique</span>
@@ -598,9 +656,9 @@
             <div class="sub-text">Downstream external tracking sink only. Zero response authority.</div>
           </div>
           <div class="prop-item prop-full" style="margin-top: 4px;">
-            <span class="prop-label">Scope & Downstream Authority Note</span>
+            <span class="prop-label">Scope & Authority Note</span>
             <span class="prop-value" style="font-size: 0.75rem; color: var(--text-muted);">
-              Jira ticketing is a downstream external tracking sink with zero response authority. MITRE mappings are deterministic local mappings.
+              Jira ticketing is a downstream reporting/tracking sink with zero response authority. No tickets are created, updated, or queried by this page.
             </span>
           </div>
         </div>
@@ -614,6 +672,7 @@
           </div>
           <span class="badge-category cat-ai">ADVISORY EVIDENCE</span>
         </div>
+        <div class="section-sublabel">Persisted enrichment result. No live lookup is performed by this page.</div>
         <div class="prop-list">
           <div class="prop-item">
             <span class="prop-label">TI Status</span>
@@ -624,6 +683,12 @@
             <span class="prop-value mono">{{TI_INDICATOR}}</span>
           </div>
           {{TI_DETAIL_ROWS}}
+          <div class="prop-item prop-full" style="margin-top: 4px;">
+            <span class="prop-label">Status Context</span>
+            <span class="prop-value" style="font-size: 0.75rem; color: var(--text-secondary);">
+              {{TI_STATUS_NOTE}}
+            </span>
+          </div>
           <div class="prop-item prop-full" style="margin-top: 4px;">
             <span class="prop-label">Eligibility Policy</span>
             <span class="prop-value" style="font-size: 0.75rem; color: var(--text-muted);">
@@ -648,9 +713,24 @@
       </div>
     </div>
 
+    <!-- 5. Audit Timeline (Bounded & Read-Only) -->
+    <div class="card audit-timeline-container">
+      <div class="card-header">
+        <div class="card-title">
+          <span>Audit Timeline</span>
+        </div>
+        <span class="badge-category cat-policy">PERSISTED AUDIT LOG</span>
+      </div>
+      <div class="section-sublabel">Read-only persisted execution history.</div>
+      {{AUDIT_TIMELINE_CONTENT}}
+      <div style="margin-top: 12px; font-size: 0.75rem; color: var(--text-muted);">
+        Notice: Correlated from local JSONL audit records. Shows strictly allowlisted security-relevant events. No prompt text, provider payloads, or credentials are exposed.
+      </div>
+    </div>
+
     <footer>
-      <div>AI-Native SOC Lab &bull; Milestone 15C &bull; Read-Only Incident Visualization</div>
-      <div>Deterministic Policy &bull; Bounded Evidence &bull; Human-in-the-Loop</div>
+      <div>AI-Native SOC Lab &bull; Milestone 15D &bull; Read-Only Incident Visualization</div>
+      <div>Deterministic Policy &bull; Bounded Evidence &bull; Human-in-the-Loop &bull; Correlated Audit History</div>
     </footer>
   </div>
 </body>

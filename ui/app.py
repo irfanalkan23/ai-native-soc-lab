@@ -18,6 +18,13 @@ from typing import Any, Dict, List, Optional, Union
 from fastapi import FastAPI, HTTPException, Query, status
 from fastapi.responses import HTMLResponse, JSONResponse
 
+from ui.audit_reader import (
+    DEFAULT_AUDIT_LIMIT,
+    DEFAULT_AUDIT_LOG_PATH,
+    MAX_AUDIT_LIMIT,
+    MIN_AUDIT_LIMIT,
+    AuditReader,
+)
 from ui.incident_reader import (
     DEFAULT_INCIDENTS_DIR,
     DEFAULT_LIMIT,
@@ -25,7 +32,11 @@ from ui.incident_reader import (
     MIN_LIMIT,
     IncidentReader,
 )
-from ui.models import IncidentDetailView, IncidentSummaryView
+from ui.models import (
+    AuditEventView,
+    IncidentDetailView,
+    IncidentSummaryView,
+)
 
 _TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 
@@ -70,7 +81,7 @@ def _resolve_approval_display_state(detail: IncidentDetailView) -> tuple[str, st
         return ("APPROVED", "app-approved")
     if app_stat == "DENIED":
         return ("DENIED", "app-denied")
-    if app_stat in ("PENDING", "REQUIRED / PENDING", "REQUIRED", "NOT_REQUIRED"):
+    if app_stat in ("PENDING", "PENDING_APPROVAL", "REQUIRED / PENDING", "REQUIRED", "NOT_REQUIRED"):
         # When approval is mandated but not yet decided, status is pending
         return ("REQUIRED / PENDING", "app-pending")
 
@@ -190,6 +201,51 @@ def _render_governance_pipeline(detail: IncidentDetailView) -> str:
     <div class="stage-sub" style="color: var(--status-critical); font-weight: 600;">Containment: NOT IMPLEMENTED</div>
   </div>
 </div>"""
+
+
+def _render_audit_timeline(events: List[AuditEventView]) -> str:
+    """Render bounded chronological audit events as a structured timeline."""
+    if not events:
+        return (
+            '<div class="empty-state" style="padding: 24px; text-align: center;">'
+            '<p style="color: var(--text-muted); margin: 0;">No persisted audit events are available for this incident.</p>'
+            '</div>'
+        )
+
+    rows = []
+    for ev in events:
+        out_upper = (ev.outcome or "").upper()
+        if out_upper == "SUCCESS":
+            out_class = "audit-outcome-success"
+        elif out_upper in ("DENIED", "FAILED"):
+            out_class = "audit-outcome-failed"
+        elif out_upper == "REQUESTED":
+            out_class = "audit-outcome-req"
+        else:
+            out_class = "audit-outcome-info"
+
+        ts_str = (
+            f'<span class="mono" style="font-size: 0.75rem; color: var(--text-muted);">{_esc(ev.timestamp)}</span>'
+            if ev.timestamp
+            else f'<span class="mono" style="font-size: 0.75rem; color: var(--text-muted);">Step #{ev.sequence}</span>'
+        )
+
+        rows.append(f"""<div class="audit-timeline-row">
+  <div class="audit-row-left">
+    <span class="mono audit-seq-badge">#{ev.sequence}</span>
+    <span class="badge cat-policy" style="font-size: 0.6875rem;">{_esc(ev.category)}</span>
+    <span class="mono audit-event-type">{_esc(ev.event_type)}</span>
+  </div>
+  <div class="audit-row-mid">
+    <span class="mono audit-detail-code">{_esc(ev.detail_code)}</span>
+  </div>
+  <div class="audit-row-right">
+    <span class="badge {out_class}">{_esc(ev.outcome)}</span>
+    {ts_str}
+  </div>
+</div>""")
+
+    return f'<div class="audit-timeline-list">{"".join(rows)}</div>'
 
 
 def _render_incident_rows(incidents: List[IncidentSummaryView]) -> str:
@@ -358,7 +414,10 @@ def _render_evidence_section(detail: IncidentDetailView) -> str:
     return f'<div class="prop-value">Standard endpoint telemetry recorded for host: {_esc(detail.target_host)}</div>'
 
 
-def create_app(incidents_dir: Optional[Union[Path, str]] = None) -> FastAPI:
+def create_app(
+    incidents_dir: Optional[Union[Path, str]] = None,
+    audit_path: Optional[Union[Path, str]] = None,
+) -> FastAPI:
     """Create and configure a read-only FastAPI application instance."""
     app = FastAPI(
         title="AI-Native SOC Lab — Investigation Console",
@@ -369,6 +428,7 @@ def create_app(incidents_dir: Optional[Union[Path, str]] = None) -> FastAPI:
     )
 
     reader = IncidentReader(incidents_dir or DEFAULT_INCIDENTS_DIR)
+    audit_reader = AuditReader(audit_path or DEFAULT_AUDIT_LOG_PATH)
 
     @app.get("/api/incidents", response_class=JSONResponse)
     def get_incidents(
@@ -391,6 +451,21 @@ def create_app(incidents_dir: Optional[Union[Path, str]] = None) -> FastAPI:
         if incident is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Incident not found")
         return incident.to_dict()
+
+    @app.get("/api/incidents/{incident_id}/audit", response_class=JSONResponse)
+    def get_incident_audit_events_api(
+        incident_id: str,
+        limit: int = Query(default=DEFAULT_AUDIT_LIMIT, ge=MIN_AUDIT_LIMIT, le=MAX_AUDIT_LIMIT),
+    ) -> List[Dict[str, Any]]:
+        """Return bounded allowlisted audit events correlated to an incident.
+
+        Read-only endpoint. Rejects unknown identifiers with 404.
+        """
+        incident = reader.get_incident(incident_id)
+        if incident is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Incident not found")
+        events = audit_reader.get_incident_events(incident_id, limit=limit)
+        return [ev.to_dict() for ev in events]
 
     @app.get("/", response_class=HTMLResponse)
     def get_analyst_console() -> HTMLResponse:
@@ -448,47 +523,82 @@ def create_app(incidents_dir: Optional[Union[Path, str]] = None) -> FastAPI:
         # Simulation state resolution
         sim_label, sim_class = _resolve_simulation_display_state(detail)
 
-        # TI badge class
-        ti_stat = (detail.threat_intel.status or "").upper()
-        if ti_stat == "ENRICHED":
-            ti_class = "ti-enriched"
-        elif ti_stat == "SKIPPED_INELIGIBLE":
-            ti_class = "ti-skipped"
-        elif ti_stat == "LOOKUP_FAILED":
-            ti_class = "ti-failed"
-        else:
-            ti_class = "ti-skipped"
-
-        # TI Detail Rows
+        # Threat Intelligence Presentation (Part A)
         ti = detail.threat_intel
-        if ti.status == "ENRICHED":
-            ti_detail_rows = f"""<div class="prop-item">
-  <span class="prop-label">Provider</span>
-  <span class="prop-value mono">{_esc(ti.provider or 'VirusTotal')}</span>
-</div>
-<div class="prop-item">
-  <span class="prop-label">Verdict</span>
-  <span class="prop-value mono">{_esc(ti.verdict or 'Clean')}</span>
-</div>
-<div class="prop-item prop-full">
-  <span class="prop-label">Detection Counts</span>
-  <span class="prop-value">Malicious: {ti.malicious_count if ti.malicious_count is not None else 0} &bull; Suspicious: {ti.suspicious_count if ti.suspicious_count is not None else 0} &bull; Harmless: {ti.harmless_count if ti.harmless_count is not None else 0}</span>
-</div>"""
-        elif ti.status == "SKIPPED_INELIGIBLE":
-            ti_detail_rows = f"""<div class="prop-item prop-full">
-  <span class="prop-label">Skip Reason</span>
-  <span class="prop-value mono">{_esc(ti.skip_reason or 'private_source_ip_ineligible')}</span>
-</div>"""
-        elif ti.status == "LOOKUP_FAILED":
-            ti_detail_rows = f"""<div class="prop-item prop-full">
-  <span class="prop-label">Lookup Error Code</span>
-  <span class="prop-value mono" style="color: var(--status-critical);">{_esc(ti.skip_reason or 'lookup_failed')}</span>
-</div>"""
+        ti_stat_raw = (ti.status or "NOT_PERFORMED").strip().upper()
+
+        if ti_stat_raw == "ENRICHED":
+            ti_status_display = "ENRICHED"
+            ti_class = "ti-enriched"
+            ti_status_note = "Normalized provider result was persisted during the incident workflow."
+        elif ti_stat_raw == "SKIPPED_INELIGIBLE":
+            ti_status_display = "SKIPPED_INELIGIBLE"
+            ti_class = "ti-skipped"
+            ti_status_note = "External enrichment was not performed because the indicator did not meet deterministic eligibility policy."
+        elif ti_stat_raw == "LOOKUP_FAILED":
+            ti_status_display = "LOOKUP_FAILED"
+            ti_class = "ti-failed"
+            ti_status_note = "An eligible lookup was attempted but enrichment did not complete successfully."
+        elif ti_stat_raw == "NOT_PERFORMED":
+            ti_status_display = "NOT_PERFORMED"
+            ti_class = "ti-skipped"
+            ti_status_note = "No threat intelligence lookup was performed for this alert."
         else:
-            ti_detail_rows = """<div class="prop-item prop-full">
-  <span class="prop-label">Enrichment Note</span>
-  <span class="prop-value" style="color: var(--text-muted);">No threat intelligence lookup performed for this alert.</span>
+            ti_status_display = _esc(ti_stat_raw)
+            ti_class = "ti-skipped"
+            ti_status_note = "Threat intelligence status was not recognized or recorded."
+
+        ti_rows_list = []
+        if ti.indicator:
+            ti_rows_list.append(f"""<div class="prop-item">
+  <span class="prop-label">Indicator</span>
+  <span class="prop-value mono">{_esc(ti.indicator)}</span>
+</div>""")
+        if ti.indicator_type:
+            ti_rows_list.append(f"""<div class="prop-item">
+  <span class="prop-label">Indicator Type</span>
+  <span class="prop-value mono">{_esc(ti.indicator_type)}</span>
+</div>""")
+        if ti.provider:
+            ti_rows_list.append(f"""<div class="prop-item">
+  <span class="prop-label">Provider</span>
+  <span class="prop-value mono">{_esc(ti.provider)}</span>
+</div>""")
+        if ti.verdict:
+            ti_rows_list.append(f"""<div class="prop-item">
+  <span class="prop-label">Verdict</span>
+  <span class="prop-value mono">{_esc(ti.verdict)}</span>
+</div>""")
+        if any(c is not None for c in (ti.malicious_count, ti.suspicious_count, ti.harmless_count, ti.undetected_count)):
+            m_cnt = ti.malicious_count if ti.malicious_count is not None else 0
+            s_cnt = ti.suspicious_count if ti.suspicious_count is not None else 0
+            h_cnt = ti.harmless_count if ti.harmless_count is not None else 0
+            u_cnt = ti.undetected_count if ti.undetected_count is not None else 0
+            ti_rows_list.append(f"""<div class="prop-item prop-full">
+  <span class="prop-label">Detection Counts</span>
+  <span class="prop-value">Malicious: {m_cnt} &bull; Suspicious: {s_cnt} &bull; Harmless: {h_cnt} &bull; Undetected: {u_cnt}</span>
+</div>""")
+        if ti.skip_reason:
+            reason_label = "Failure Reason" if ti_stat_raw == "LOOKUP_FAILED" else "Skip Reason"
+            ti_rows_list.append(f"""<div class="prop-item prop-full">
+  <span class="prop-label">{reason_label}</span>
+  <span class="prop-value mono">{_esc(ti.skip_reason)}</span>
+</div>""")
+
+        ti_detail_rows = "".join(ti_rows_list) if ti_rows_list else """<div class="prop-item prop-full">
+  <span class="prop-label">Enrichment State</span>
+  <span class="prop-value" style="color: var(--text-muted);">No enrichment metrics recorded for this alert.</span>
 </div>"""
+
+        # Jira Tracking Presentation (Part B)
+        if detail.jira_ticket_key:
+            jira_display = f'<span class="mono" style="color: var(--accent-cyan); font-weight: 600;">{_esc(detail.jira_ticket_key)}</span>'
+        else:
+            jira_display = '<span style="color: var(--text-muted);">Not created / None</span>'
+
+        # Audit Timeline Presentation (Part C)
+        audit_events = audit_reader.get_incident_events(detail.incident_id, limit=DEFAULT_AUDIT_LIMIT)
+        audit_timeline_html = _render_audit_timeline(audit_events)
 
         source_ip_meta = ""
         if detail.source_ip:
@@ -530,12 +640,14 @@ def create_app(incidents_dir: Optional[Union[Path, str]] = None) -> FastAPI:
         rendered = rendered.replace("{{INVESTIGATION_SUMMARY}}", _esc(detail.investigation_summary or "No summary available."))
         rendered = rendered.replace("{{RECOMMENDED_NEXT_STEP}}", _esc(detail.recommended_next_step or "No recommended next step."))
         rendered = rendered.replace("{{MITRE_TECHNIQUE}}", _esc(detail.mitre_technique_id or "Not available"))
-        rendered = rendered.replace("{{JIRA_TICKET}}", f'<span class="mono" style="color: var(--accent-cyan);">{_esc(detail.jira_ticket_key)}</span>' if detail.jira_ticket_key else '<span style="color: var(--text-muted);">Not created / None</span>')
-        rendered = rendered.replace("{{TI_STATUS}}", _esc(detail.threat_intel.status or "NOT_PERFORMED"))
+        rendered = rendered.replace("{{JIRA_TICKET}}", jira_display)
+        rendered = rendered.replace("{{TI_STATUS}}", ti_status_display)
         rendered = rendered.replace("{{TI_BADGE_CLASS}}", ti_class)
-        rendered = rendered.replace("{{TI_INDICATOR}}", _esc(detail.threat_intel.indicator or detail.source_ip or "None"))
+        rendered = rendered.replace("{{TI_INDICATOR}}", _esc(ti.indicator or detail.source_ip or "None"))
         rendered = rendered.replace("{{TI_DETAIL_ROWS}}", ti_detail_rows)
+        rendered = rendered.replace("{{TI_STATUS_NOTE}}", _esc(ti_status_note))
         rendered = rendered.replace("{{EVIDENCE_CONTENT}}", evidence_content)
+        rendered = rendered.replace("{{AUDIT_TIMELINE_CONTENT}}", audit_timeline_html)
 
         return HTMLResponse(content=rendered, status_code=status.HTTP_200_OK)
 
