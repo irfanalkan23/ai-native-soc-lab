@@ -425,6 +425,7 @@ def create_app(
         version="1.0.0",
         docs_url=None,  # Disable OpenAPI UI to avoid unneeded endpoints
         redoc_url=None,
+        openapi_url=None,
     )
 
     reader = IncidentReader(incidents_dir or DEFAULT_INCIDENTS_DIR)
