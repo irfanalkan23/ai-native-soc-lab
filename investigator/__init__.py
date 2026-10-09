@@ -7,6 +7,8 @@ from investigator.approval import (
     ApprovalGateError,
     ApprovalReasonCode,
     ApprovalRecord,
+    ApprovalRegistry,
+    ApprovalValidationCode,
     request_cli_approval,
 )
 from investigator.policy import (
@@ -47,6 +49,8 @@ __all__ = [
     "ApprovalGateError",
     "ApprovalReasonCode",
     "ApprovalRecord",
+    "ApprovalRegistry",
+    "ApprovalValidationCode",
     "ConfidenceLevel",
     "DEFAULT_APPROVER",
     "InvestigationInput",

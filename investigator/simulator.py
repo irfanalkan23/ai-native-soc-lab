@@ -17,7 +17,7 @@ Trust & Scope Boundaries:
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional
+from typing import Any, Optional
 
 from investigator.approval import (
     ActionAuthorizationContext,
@@ -44,6 +44,7 @@ SIMULATION_DETAIL_CODES = frozenset({
     "simulation_blocked_missing_approval",
     "simulation_blocked_mismatched_approval",
     "simulation_blocked_denied",
+    "simulation_blocked_already_consumed",
     "simulation_not_required",
     "human_review_required",
     "incident_record_deferred",
@@ -77,11 +78,15 @@ class SimulationResult:
 class SimulatedResponseExecutor:
     """Deterministic executor for simulated response actions."""
 
+    def __init__(self, approval_registry: Optional[Any] = None) -> None:
+        self._approval_registry = approval_registry
+
     def execute(
         self,
         authorization_context: ActionAuthorizationContext,
         approval_record: Optional[ApprovalRecord] = None,
         audit_log: Optional[AuditLog] = None,
+        runtime_guard: Optional[Any] = None,
     ) -> SimulationResult:
         """Simulate execution of an authorized policy action.
 
@@ -89,6 +94,7 @@ class SimulatedResponseExecutor:
             authorization_context: Immutable context binding incident ID and evaluated PolicyDecision.
             approval_record: Optional human approval record required for consequential actions.
             audit_log: Optional audit log for recording simulation lifecycle events.
+            runtime_guard: Optional RuntimeGuard enforcing safety halt / kill switch precedence.
 
         Returns:
             SimulationResult indicating SIMULATED or NOT_EXECUTED.
@@ -107,6 +113,16 @@ class SimulatedResponseExecutor:
                 f"approval_record must be exact ApprovalRecord or None, "
                 f"got {type(approval_record).__name__}"
             )
+
+        # RuntimeGuard Precedence Check:
+        # Approval must NEVER override RuntimeGuard. If halted, execution fails closed immediately.
+        if runtime_guard is not None:
+            if hasattr(runtime_guard, "check_execution_permitted"):
+                from investigator.runtime_guard import RuntimeCheckpoint
+                runtime_guard.check_execution_permitted(RuntimeCheckpoint.SIMULATION)
+            elif hasattr(runtime_guard, "state") and getattr(runtime_guard.state, "halted", False):
+                from investigator.runtime_guard import RuntimeHaltError, RuntimeHaltReason
+                raise RuntimeHaltError(RuntimeHaltReason.CONTROL_FAILURE, "RUNTIME_HALTED")
 
         incident_id = authorization_context.incident_id
         target_action = authorization_context.policy_decision.proposed_action
@@ -175,8 +191,28 @@ class SimulatedResponseExecutor:
                     audit_log,
                 )
 
-            # 5. Approved and verified
+            # 5. Replay Resistance Check (One-Time Consumption)
+            if self._approval_registry is not None:
+                if self._approval_registry.is_consumed(approval_record.approval_id) or (
+                    hasattr(self._approval_registry, "is_grant_consumed")
+                    and self._approval_registry.is_grant_consumed(incident_id, target_action)
+                ):
+                    return self._record_and_return(
+                        incident_id,
+                        target_action,
+                        SimulationStatus.NOT_EXECUTED,
+                        "simulation_blocked_already_consumed",
+                        audit_log,
+                    )
+
+            # 6. Approved and verified: Consume before simulating
             if approval_record.decision is ApprovalDecision.APPROVED:
+                # One-time atomic consumption prior to simulation
+                if self._approval_registry is not None:
+                    self._approval_registry._consumed_approval_ids.add(approval_record.approval_id)
+                    if hasattr(self._approval_registry, "_consumed_grant_keys"):
+                        self._approval_registry._consumed_grant_keys.add((incident_id, target_action.value))
+
                 detail_code = "simulated_endpoint_isolation"
                 if audit_log is not None:
                     try:
