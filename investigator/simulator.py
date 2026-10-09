@@ -45,6 +45,8 @@ SIMULATION_DETAIL_CODES = frozenset({
     "simulation_blocked_mismatched_approval",
     "simulation_blocked_denied",
     "simulation_blocked_already_consumed",
+    "simulation_blocked_expired",
+    "simulation_blocked_persistence_failed",
     "simulation_not_required",
     "human_review_required",
     "incident_record_deferred",
@@ -191,8 +193,30 @@ class SimulatedResponseExecutor:
                     audit_log,
                 )
 
-            # 5. Replay Resistance Check (One-Time Consumption)
+            # 5. Freshness & Replay Resistance Check via ApprovalRegistry if present
             if self._approval_registry is not None:
+                # If registry has validate_freshness, check freshness first
+                if hasattr(self._approval_registry, "validate_freshness"):
+                    from investigator.approval import ApprovalValidationCode
+                    fresh_code = self._approval_registry.validate_freshness(approval_record)
+                    if fresh_code is ApprovalValidationCode.APPROVAL_EXPIRED:
+                        return self._record_and_return(
+                            incident_id,
+                            target_action,
+                            SimulationStatus.NOT_EXECUTED,
+                            "simulation_blocked_expired",
+                            audit_log,
+                        )
+                    if fresh_code is not ApprovalValidationCode.APPROVAL_VALID:
+                        return self._record_and_return(
+                            incident_id,
+                            target_action,
+                            SimulationStatus.NOT_EXECUTED,
+                            "simulation_blocked_missing_approval",
+                            audit_log,
+                        )
+
+                # Replay check (in-memory or persistent store)
                 if self._approval_registry.is_consumed(approval_record.approval_id) or (
                     hasattr(self._approval_registry, "is_grant_consumed")
                     and self._approval_registry.is_grant_consumed(incident_id, target_action)
@@ -207,8 +231,33 @@ class SimulatedResponseExecutor:
 
             # 6. Approved and verified: Consume before simulating
             if approval_record.decision is ApprovalDecision.APPROVED:
-                # One-time atomic consumption prior to simulation
+                # One-time consumption prior to simulation (with fail-closed ledger write if configured)
                 if self._approval_registry is not None:
+                    # If registry has ledger, append to ledger first
+                    ledger = getattr(self._approval_registry, "_ledger", None)
+                    if ledger is not None:
+                        try:
+                            ledger.append_consumption(approval_record)
+                        except Exception:
+                            if audit_log is not None:
+                                try:
+                                    seq = len(audit_log.events())
+                                    audit_log.append(AuditEvent(
+                                        event_type=AuditEventType.APPROVAL_VALIDATION_FAILED,
+                                        incident_id=incident_id,
+                                        sequence=seq,
+                                        detail_code="approval_persistence_failed",
+                                    ))
+                                except Exception as exc:
+                                    raise SimulationError("audit_recording_failed") from exc
+                            return self._record_and_return(
+                                incident_id,
+                                target_action,
+                                SimulationStatus.NOT_EXECUTED,
+                                "simulation_blocked_persistence_failed",
+                                audit_log,
+                            )
+
                     self._approval_registry._consumed_approval_ids.add(approval_record.approval_id)
                     if hasattr(self._approval_registry, "_consumed_grant_keys"):
                         self._approval_registry._consumed_grant_keys.add((incident_id, target_action.value))
