@@ -1,8 +1,8 @@
-# AI-Native SOC Lab — Implementation Notes (Milestones 1–14)
+# AI-Native SOC Lab — Implementation Notes (Milestones 1–15 & Post-M15 Live Validation)
 
 ## Overview
 
-This document records the verification of the initial lab infrastructure, telemetry ingestion pipelines, baseline observations, controlled security tests, SPL detection engineering, bounded Splunk integration, deterministic investigator tools and router, provider-neutral orchestration, OpenAI provider adapter, persistent JSONL audit logging, deterministic risk/action policy engine, human-in-the-loop approval gate, simulated response execution, deterministic structured incident-record reporting artifact generation, VirusTotal threat intelligence integration, the WEB01 ModSecurity SQL injection pipeline with adversarial security evaluations, Milestone 13 live pipeline validation and hardening, and Milestone 14 agent security guardrails and adversarial validation (Milestones 1 through 14). All response containment remains strictly simulated.
+This document records the verification of the initial lab infrastructure, telemetry ingestion pipelines, baseline observations, controlled security tests, SPL detection engineering, bounded Splunk integration, deterministic investigator tools and router, provider-neutral orchestration, OpenAI provider adapter, persistent JSONL audit logging, deterministic risk/action policy engine, human-in-the-loop approval gate, simulated response execution, deterministic structured incident-record reporting artifact generation, VirusTotal threat intelligence integration, the WEB01 ModSecurity SQL injection pipeline with adversarial security evaluations, Milestone 13 live pipeline validation and hardening, Milestone 14 agent security guardrails and adversarial validation, Milestone 15 read-only SOC Analyst UI console, and the Post-Milestone-15 controlled live lab validation (Milestones 1 through 15). All response containment remains strictly simulated.
 
 ---
 
@@ -2413,7 +2413,256 @@ Audit + evaluation (append-only JSONL trail, canonical evaluation harness)
 
 ---
 
-## 11. Project Roadmap (Milestones 15–23)
+## 11. Milestone 15 — SOC Analyst UI / Investigation Console
+
+### 1. Scope & Execution Overview
+
+Milestone 15 created an analyst-facing inspection console over the existing deterministic backend, providing an interactive, browser-accessible presentation layer for triage visibility without expanding tool authority, provider connectivity, or autonomous response capabilities.
+
+- **Status**: **IMPLEMENTED + TESTED OFFLINE / MANUALLY BROWSER VALIDATED**
+- **Architecture**:
+  ```
+  Browser (Analyst on Kali / Localhost)
+      ↓ HTTP GET
+  FastAPI Read-Only Presentation Layer (ui/app.py)
+      ↓
+  Allowlisted Read-Only View Models (ui/models.py)
+      ↓
+  IncidentReader / AuditReader (ui/incident_reader.py, ui/audit_reader.py)
+      ↓
+  Persisted Local Artifacts (artifacts/incidents/*.json, artifacts/audit/agent_audit.jsonl)
+  ```
+- **Boundary Invariants Enforced**:
+  - **Strictly Read-Only (GET-Only)**: The application exposes only `GET` endpoints (`GET /`, `GET /api/incidents`, `GET /incidents/{incident_id}`, `GET /api/incidents/{incident_id}`). `POST`, `PUT`, `DELETE`, and `PATCH` are rejected with HTTP 405 Method Not Allowed.
+  - **Zero Tool Authority**: Viewing the UI never invokes `ToolRouter`, `RuntimeGuard`, or any tool execution.
+  - **Zero Provider Connectivity**: Page load makes zero live calls to external providers (OpenAI, Jira, VirusTotal, or Splunk).
+  - **Zero Mutation**: Viewing or refreshing the console never alters incident state, audit records, or underlying telemetry.
+  - **Zero Real Containment**: The UI includes no action buttons, approvals, containment controls, or execution paths. Containment status is explicitly badged as `NOT IMPLEMENTED`.
+
+---
+
+### 2. Detailed Breakdown of Sub-Milestones
+
+#### 15A — UI Architecture + Read-Only Incident List
+- **Status**: **IMPLEMENTED + TESTED OFFLINE**
+- **Specification & Implementation**:
+  - Implemented lightweight FastAPI application (`ui/app.py`) serving HTML via Jinja2 templates (`ui/templates/incidents.html`) and JSON via `/api/incidents`.
+  - Implemented `IncidentReader` (`ui/incident_reader.py`) to safely discover, parse, and sort persisted incident records from `artifacts/incidents/`.
+  - Implemented modern, responsive dark-mode styling with severity badges (`CRITICAL`, `HIGH`, `MEDIUM`, `LOW`), status indicators, and clean empty states.
+  - Verified across comprehensive unit and integration tests (`tests/test_ui_incident_list.py`).
+
+#### 15B — Incident Detail / Evidence View
+- **Status**: **IMPLEMENTED + TESTED OFFLINE**
+- **Specification & Implementation**:
+  - Implemented `GET /incidents/{incident_id}` and `GET /api/incidents/{incident_id}` (`ui/templates/incident_detail.html`).
+  - Implemented strict input validation: incident IDs must strictly match `^[A-Za-z0-9_-]{1,64}$`. Path traversal attempts (`..`, slashes, null bytes) fail closed with HTTP 400.
+  - Non-existent incidents return structured HTTP 404.
+  - Telemetry rendered safely as inert text:
+    - DC01 Sysmon Event ID 1 process telemetry rendered with syntax-highlighted inert XML and decoded command lines.
+    - WEB01 ModSecurity SQLi evidence rendered through typed 7-field cards (client IP, rule ID, anomaly score, severity).
+  - Verified across focused test suite (`tests/test_ui_incident_detail.py`).
+
+#### 15C — AI Assessment vs. Deterministic Policy Visualization
+- **Status**: **IMPLEMENTED + TESTED OFFLINE**
+- **Specification & Implementation**:
+  - Implemented visual separation between advisory AI hypotheses and authoritative deterministic policy:
+    - **AI Advisory Card**: Displays model name, provider, confidence level (`high`, `medium`, `low`), reasoning summary, and suspicious indicator count. Clearly designated as advisory with zero action authority.
+    - **Deterministic Policy Card**: Displays deterministic risk score (`0–100`), severity band (`CRITICAL`, `HIGH`, `MEDIUM`, `LOW`), policy disposition (`ALLOW`, `HUMAN_REVIEW`, `BLOCK`), triggered rules, approval requirements, and recommended action.
+    - **Governance Pipeline Card**: Renders the 5-stage unidirectional governance lifecycle: `Evidence Ingested` → `AI Analysis (Advisory)` → `Policy Evaluated` → `Approval Gate` → `Simulated Response`.
+  - Verified across focused test suite (`tests/test_ui_policy_visualization.py`).
+
+#### 15D — Threat Intelligence / Jira / Audit Timeline
+- **Status**: **IMPLEMENTED + TESTED OFFLINE**
+- **Specification & Implementation**:
+  - **Threat Intelligence Card**: Displays source IP scope classification (`public`, `private`, etc.), eligibility status, enrichment outcome (`ENRICHED`, `SKIPPED_INELIGIBLE`, `LOOKUP_FAILED`), and malicious engine counts from persisted records.
+  - **Jira Tracking Card**: Displays downstream tracking ticket key, summary, issue type, and explicit disclosure noting Jira is a reporting sink with zero response authority.
+  - **Chronological Audit Timeline**: Implemented `AuditReader` (`ui/audit_reader.py`) as a read-only sequential JSONL audit reader with timeline output bounded to 200 events (`artifacts/audit/agent_audit.jsonl`). The portfolio-scale audit reader scans the JSONL file sequentially, accumulates correlated incident events, deterministically sorts them, and bounds rendered/API output to a maximum of 200 events.
+  - Verified across operational visibility suite (`tests/test_ui_ti_jira_audit_timeline.py`).
+
+#### 15E — UI Security & Boundary Verification
+- **Status**: **IMPLEMENTED + TESTED OFFLINE**
+- **Specification & Implementation**:
+  - Implemented comprehensive security hardening and boundary verification suite (`tests/test_ui_security_boundaries.py`).
+  - Validated that the UI surface is purely a read-only presentation layer:
+    - Zero state mutation or tool invocation across all endpoints.
+    - Strict method restrictions: non-GET requests fail closed.
+    - Path traversal resistance across all inputs.
+    - Zero outbound network traffic or external provider connectivity during request processing.
+    - Confidential canary strings and API secrets do not leak into UI responses.
+
+#### Manual UI Validation Polish
+- **Status**: **IMPLEMENTED + TESTED OFFLINE**
+- **Specification & Implementation**:
+  - Applied presentation polish following browser inspection (`tests/test_ui_manual_validation_polish.py`):
+    - Replaced fragmented sub-phase labels with unified milestone-wide branding: `"Milestone 15 • SOC Analyst UI"`, `"Read-Only Analyst View"`.
+    - Clarified unexecuted action descriptions (e.g., displaying `"create_incident_record (unexecuted - deferred)"` rather than ambiguous unexecuted labels).
+    - Normalized uppercase audit outcome badges (`APPROVED`, `DENIED`, `NOT REQUIRED`, `PENDING`).
+
+---
+
+## 12. Post-Milestone-15 Controlled Live Lab Validation
+
+### 1. Scope & Status Designation
+
+Following the completion and offline verification of Milestone 15, a controlled live lab validation was executed on **2026-10-08** to exercise the complete pipeline from real domain controller process creation through SIEM indexing, AI investigation, policy governance, and browser visualization.
+
+- **Status Designation**: **LIVE LAB VALIDATED**
+- **Scope Distinction**: This status applies specifically to the controlled live validation exercise documented below. It does **not** alter Milestone 15's baseline engineering status of `IMPLEMENTED + TESTED OFFLINE / MANUALLY BROWSER VALIDATED`.
+
+```
+[ Controlled DC01 PowerShell Activity ]
+                 │
+                 ▼
+     [ Sysmon Event ID 1 Generated ]
+                 │
+                 ▼
+[ Splunk Universal Forwarder -> Splunk Enterprise ]
+                 │
+                 ▼
+    [ Bounded DET-POWERSHELL-002 Search ]
+                 │
+                 ▼
+     [ Live OpenAI Investigation ]
+                 │
+                 ▼
+[ Deterministic MITRE & Policy Evaluation ]
+                 │
+                 ▼
+  [ IncidentRecord & JSONL Audit Persisted ]
+                 │
+                 ▼
+      [ Read-Only SOC Analyst UI ]
+```
+
+### 2. Scope Boundaries: Verified vs. Excluded
+
+| In Scope (LIVE LAB VALIDATED) | Explicitly Excluded (NOT EXECUTED / NOT IMPLEMENTED) |
+| :--- | :--- |
+| Real DC01 process execution telemetry | Real endpoint containment (**NOT IMPLEMENTED**) |
+| Real Sysmon Event ID 1 ingestion | Live endpoint isolation |
+| Real Splunk indexer retrieval (localhost:8089) | Jira issue creation (Jira was not used) |
+| Live OpenAI investigation (`gpt-5.6-sol`) | VirusTotal lookup (VirusTotal was not used) |
+| Deterministic policy & risk evaluation | Live human-approval execution path |
+| Local `IncidentRecord` persistence | Autonomous remediation or host mutation |
+| Local append-only JSONL audit persistence | Endpoint state modification |
+| Read-only browser UI rendering | External network egress |
+
+---
+
+### 3. Canonical Live Incident Details
+
+- **Validation Date**: `2026-10-08`
+- **Canonical Incident ID**: `INC-LIVE-DC01-20261008T191323685TUTC`
+
+#### Controlled Command Execution & Network Behavior
+- Executed on host **DC01**:
+  ```powershell
+  powershell.exe -NoProfile -Command "Invoke-WebRequest -Uri http://127.0.0.1:65535/AI-NativeSOC-LAB-TEST -UseBasicParsing"
+  ```
+- **Target URI**: `127.0.0.1:65535/AI-NativeSOC-LAB-TEST`
+- **Network Behavior**: The connection was intentionally targeted at an unassigned high port (`65535`) on loopback (`127.0.0.1`). The request was expected and designed to fail closed.
+- **External Isolation**: Zero external hosts were contacted; no network packets left the local host.
+
+#### Ingested Live Telemetry Facts
+- **Host**: `DC01`
+- **User**: `SOCLAB\Administrator`
+- **Detection ID**: `DET-POWERSHELL-002`
+- **Detection Name**: `suspicious_powershell_network_retrieval`
+- **Evidence Source**: Live Splunk Enterprise indexer (`https://localhost:8089` from Splunk-Server)
+- **Splunk Events Retrieved**: `1`
+- **MITRE ATT&CK Mapping**: `T1105` (Ingress Tool Transfer)
+
+#### Live OpenAI Investigation Results
+- **Provider**: `OpenAI`
+- **Model Configured for Run**: `gpt-5.6-sol`
+- **AI Confidence**: `high`
+- **Suspicious Indicator Count**: `3`
+
+#### Deterministic Policy Engine Results
+- **Risk Score**: `70`
+- **Risk Level**: `HIGH`
+- **Policy Disposition**: `HUMAN_REVIEW`
+- **Proposed Action**: `create_incident_record`
+- **Approval Required**: `no`
+- **Simulation Status**: `NOT_EXECUTED`
+- **Detail Code**: `incident_record_deferred`
+
+#### Response Truthfulness & Non-Claims
+- **NO endpoint isolation occurred**.
+- **NO real containment occurred**.
+- **NO response action was authorized or executed**.
+- **Endpoint state remained completely unmodified**.
+- **Jira was not used**.
+- **VirusTotal was not used**.
+
+#### Audit Trail & Artifact Persistence
+- **12 in-memory audit events** generated during the run lifecycle.
+- Persisted to append-only JSONL: `artifacts/audit/agent_audit.jsonl`
+- Live `IncidentRecord` artifact persisted to: `artifacts/incidents/INC-LIVE-DC01-20261008T191323685TUTC.json`
+
+---
+
+### 4. Manual Browser UI Validation
+
+The persisted live incident was rendered in the SOC Analyst UI hosted on the Splunk-Server VM and inspected across the isolated internal network from Kali Linux.
+
+Visual browser inspection verified that the UI accurately displayed:
+- **Detection**: `DET-POWERSHELL-002` (`suspicious_powershell_network_retrieval`)
+- **Host**: `DC01`
+- **MITRE ATT&CK**: `T1105`
+- **Risk & Severity**: `HIGH / 70`
+- **AI Assessment**: Confidence `high`, 3 suspicious indicators
+- **Deterministic Policy**: Disposition `HUMAN_REVIEW`, action `create_incident_record (unexecuted - deferred)`
+- **Approval Gate**: `NOT REQUIRED`
+- **Simulation State**: `NOT_EXECUTED`
+- **Containment**: Explicitly rendered as `NOT IMPLEMENTED`
+- **Audit Timeline**: Correlated 12-event chronological audit trail rendered correctly
+
+---
+
+### 5. Splunk Management / API Boundary Verification
+
+During live validation, network boundaries for the Splunk management interface were tested:
+1. **Local Access**: Local export endpoint `https://localhost:8089/services/search/jobs/export` functioned correctly on Splunk-Server under the active Splunk Free configuration.
+2. **Remote Access Boundary**: Remote management access from Kali was verified blocked with HTTP 401 under the current Splunk Free configuration. Splunk reported remote login disabled, and allowRemoteLogin remains unchanged.
+3. **Boundary Decision**: `allowRemoteLogin` was intentionally left unchanged (disabled).
+
+**Security Interpretation**: The project gateway continues to use localhost:8089. Remote anonymous management access was not enabled.
+
+---
+
+### 6. Architectural Evaluation Finding: AI Advisory Factual Inconsistency
+
+During the live investigation, an important real-world model evaluation finding was observed and documented:
+
+> **Observed AI Advisory Output**:
+> The summary generated by `gpt-5.6-sol` stated:
+> *"No matching events were returned by the bounded Splunk search"*
+
+- **Ground Truth**: The deterministic investigation harness had in fact successfully retrieved exactly **1** matching live Splunk event (`DET-POWERSHELL-002`) from the indexer, which was passed into the investigation context.
+- **Classification**: This is documented faithfully as an **AI advisory factual inconsistency / hallucination-like error**. It is neither concealed nor rewritten.
+- **Why This Validates the Architecture**:
+  This finding provides direct empirical proof of the core architectural premise of this project:
+  - **AI output is strictly advisory**: Large language models can hallucinate or contradict facts present in their prompt context.
+  - **Deterministic controls remain authoritative**: Because the model has zero control over state, policy, or execution, the model's factual inconsistency had **zero effect** on:
+    - retrieved evidence (1 live event retained in `IncidentRecord`)
+    - MITRE mapping (`T1105`)
+    - deterministic risk score (`70`)
+    - policy disposition (`HUMAN_REVIEW`)
+    - approval requirements (`no`)
+    - execution state (`NOT_EXECUTED`)
+  If the agent had possessed autonomous authority, this hallucination could have led to a silent drop or incorrect state transition. Under the lab's deterministic unidirectional architecture, the authoritative evidence and policy engine governed the incident without degradation.
+
+---
+
+### 7. Artifact Store Inventory & Host Locality Note
+
+- **Historical Artifacts**: The Splunk-Server host currently contains multiple historical incident artifacts from iterative engineering runs. These artifacts are intentionally retained as historical validation records and will be curated and labeled during the upcoming documentation and demo milestones (Milestones 21–23).
+- **Host Locality**: Incident artifact filenames (e.g., `INC-LIVE-DC01-20261008T191323685TUTC.json`) are local to each machine's artifact store (`artifacts/incidents/`) and should not be assumed globally unique across separate lab hosts.
+
+---
+
+## 13. Project Roadmap (Milestones 16–23)
 
 ### Core Roadmap Invariants
 - **Single-Agent Architecture Principle**: Maintain a single-agent architecture unless a clear, measurable security-engineering benefit justifies multi-agent complexity.
@@ -2430,50 +2679,16 @@ In the initial post-Milestone-13 planning, the SOC Analyst UI was projected as M
 - Comprehensive adversarial validation across tool-authorization abuse (14A), untrusted content & prompt injection (14B), and RuntimeGuard / kill-switch / execution budgets (14C). 52 new tests across 3 suites; canonical offline suite at Milestone 14 closure: 1,509/1,509 PASS; zero production security gaps found.
 
 ### Milestone 15 — SOC Analyst UI / Investigation Console
-- **Status**: **PLANNED**
-- **Purpose**: Create an analyst-facing interface over the existing deterministic backend.
-- **Boundary Constraint**: *Initial UI scope must remain strictly read-only and observational.*
-
-**Suggested Sub-phases**:
-- **15A — UI Architecture + Read-Only Incident List**: Thin presentation layer / bounded read-only API displaying list of ingested incidents and status without direct privileged tool authority.
-- **15B — Incident Detail / Evidence View**: Deep inspection view displaying bounded telemetry attributes (Sysmon Event ID 1, 7-field ModSecurity evidence, decoded commands) as inert evidence.
-- **15C — AI Assessment vs. Deterministic Policy Visualization**: Clear visual distinction between advisory AI hypotheses/confidence and authoritative deterministic policy risk score/disposition.
-- **15D — Threat Intelligence / Jira / Audit Timeline**: Chronological event timeline showing scope classification, TI enrichment results, downstream Jira ticket linkage, and append-only audit trail.
-- **15E — UI Security & Boundary Tests**: Verification that the UI layer cannot invoke arbitrary tools, execute arbitrary SPL, call providers directly, bypass ToolRouter or RuntimeGuard, perform endpoint isolation, disable accounts, modify firewall rules, change credentials, or create an autonomous action path.
-
-**Important Boundary Rules**:
-The UI must NOT:
-- invoke arbitrary tools
-- submit arbitrary SPL
-- call providers directly
-- bypass ToolRouter
-- bypass RuntimeGuard
-- bypass deterministic policy
-- perform endpoint isolation
-- disable accounts
-- modify firewall rules
-- change credentials
-- create a new autonomous action path
-
-**Desired Architecture**:
-```
-Browser UI
-    ↓
-Bounded read-only API / presentation layer
-    ↓
-Existing incident / audit data and application services
-    ↓
-No direct privileged-tool authority
-```
-
-**Architectural Rationale for Moving UI Forward**:
-The backend security boundaries are now mature enough to expose safely through a read-only analyst console. Building the UI earlier improves:
-- recruiter/interviewer demonstration
-- debugging and triage visibility
-- visibility into AI vs. deterministic decisions
-- visibility into audit and control state
-- later integration of approvals, new detections, Suricata, and runtime monitoring.
-*Approval and response action controls remain strictly deferred until Milestone 16.*
+- **Status**: **COMPLETE (IMPLEMENTED + TESTED OFFLINE / MANUALLY BROWSER VALIDATED)**
+- **Post-M15 Controlled Live Validation**: **LIVE LAB VALIDATED** (see Section 12 for verified live facts; baseline Milestone 15 retains its offline + browser-validated status)
+- **Scope Completed**:
+  - **15A**: UI Architecture & Read-Only Incident List (`ui/app.py`, `ui/incident_reader.py`, `ui/templates/incidents.html`)
+  - **15B**: Incident Detail & Inert Evidence View (Sysmon Event ID 1 inert XML, WEB01 ModSecurity 7-field cards, strict regex ID validation)
+  - **15C**: AI Assessment vs. Deterministic Policy Visualization (visual segregation of advisory model findings vs authoritative risk/policy rules, governance pipeline)
+  - **15D**: Threat Intelligence / Jira / Audit Timeline (persisted TI status, Jira tracking cards, read-only sequential JSONL audit reader with timeline output bounded to 200 events)
+  - **15E**: UI Security & Boundary Verification (GET-only enforcement, path traversal protection, zero provider connectivity, zero tool authority)
+  - **Manual UI Polish**: Unified milestone-wide branding, unexecuted action clarity, normalized uppercase audit outcomes.
+- **Boundary Constraint**: *Console remains strictly read-only and observational; zero response action authority; containment is NOT IMPLEMENTED.*
 
 ### Milestone 16 — Human Approval & Consequential Action Boundary
 - **Status**: **PLANNED**

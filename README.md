@@ -21,6 +21,8 @@ A hands-on, defensible engineering lab demonstrating AI-assisted security operat
 * **WEB01 Threat-Intelligence Policy Integration**: **IMPLEMENTED + TESTED + LIVE TESTED** (Controlled public-source VirusTotal enrichment via full deterministic WEB01 control path; sanitized `8.8.8.8` fixture; private IPs remain ineligible; RuntimeGuard engaged; exactly 1 live VT lookup)
 * **Canonical Security Evaluations**: **17 / 17 PASS (100.0%)** (7 baseline + 10 WEB01 adversarial scenarios; 0 security violations)
 * **Agent Security Guardrails & Adversarial Validation (Milestone 14)**: **COMPLETE (IMPLEMENTED + TESTED OFFLINE)** (14A Tool-Authorization Abuse [commit `d913f84`]; 14B Untrusted Content & Prompt Injection [commit `807ad85`]; 14C RuntimeGuard & Kill Switch [commit `5b3b0f4`]; 52 new tests across 3 suites; canonical offline suite at Milestone 14 closure: 1,509/1,509 PASS with 0 failures, 0 skips)
+* **SOC Analyst UI / Investigation Console (Milestone 15)**: **IMPLEMENTED + TESTED OFFLINE / MANUALLY BROWSER VALIDATED** (FastAPI read-only presentation layer, dark-mode console, bounded evidence views, AI advisory vs deterministic policy visualization, threat intel & Jira tracking cards, read-only sequential JSONL audit reader with timeline output bounded to 200 events, 0 state mutation, 100% test coverage across 15A–15E)
+* **Post-Milestone-15 Controlled Live Validation**: **LIVE LAB VALIDATED** (2026-10-08; canonical incident `INC-LIVE-DC01-20261008T191323685TUTC`; DC01 PowerShell `127.0.0.1:65535` $\rightarrow$ Sysmon Event ID 1 $\rightarrow$ Splunk UF $\rightarrow$ Splunk Enterprise $\rightarrow$ bounded `DET-POWERSHELL-002` $\rightarrow$ live OpenAI investigation `gpt-5.6-sol` $\rightarrow$ deterministic policy $\rightarrow$ `IncidentRecord` & JSONL persistence $\rightarrow$ Browser UI validated from Kali; zero real containment, Jira/VT not used)
 * **Human approval DENY**: **INTERACTIVELY DEMONSTRATED**
 * **Human approval APPROVE**: **INTERACTIVELY DEMONSTRATED**
 * **Endpoint isolation**: **SIMULATED ONLY**
@@ -222,6 +224,8 @@ To maintain strict truthfulness across technical interviews and documentation, s
 | **Tool-Authorization Abuse Guardrails (14A)** | Adversarial Testing / Security Controls | **IMPLEMENTED + TESTED OFFLINE** | 23 adversarial tests (commit `d913f84`); unallowlisted tools, arbitrary SPL, forbidden arguments, provider overrides fail closed before execution; RuntimeGuard & kill-switch denial verified. |
 | **Untrusted Content & Prompt-Injection Boundary (14B)** | Adversarial Testing / Security Controls | **IMPLEMENTED + TESTED OFFLINE** | 15 adversarial tests (commit `807ad85`); telemetry, ModSecurity evidence, and TI data remain inert evidence; cannot alter tool permissions, forge approval, or leak canary secrets; ADF codeBlock containment verified. |
 | **RuntimeGuard & Execution-Budget Enforcement (14C)** | Adversarial Testing / Security Controls | **IMPLEMENTED + TESTED OFFLINE** | 14 adversarial tests (commit `5b3b0f4`); cumulative tool budget exhaustion, irreversible kill-switch latching, halt-state persistence, separate-run isolation, downstream execution blocking across TI, simulation, and ticketing verified. |
+| **SOC Analyst UI (Milestone 15)** | Presentation / Observability | **IMPLEMENTED + TESTED OFFLINE / MANUALLY BROWSER VALIDATED** | Read-only FastAPI console (`ui/app.py`); strict regex incident ID validation; bounded telemetry display; AI advisory vs deterministic policy separation; read-only sequential JSONL audit reader with timeline output bounded to 200 events; verified across 5 test suites; zero tool/containment authority. |
+| **Post-M15 Controlled Live Validation** | End-to-End Live Validation | **LIVE LAB VALIDATED** | Controlled live exercise (2026-10-08); canonical incident `INC-LIVE-DC01-20261008T191323685TUTC`; real DC01 Sysmon $\rightarrow$ Splunk UF $\rightarrow$ Splunk Enterprise $\rightarrow$ bounded `DET-POWERSHELL-002` $\rightarrow$ live OpenAI `gpt-5.6-sol` $\rightarrow$ deterministic policy $\rightarrow$ persistence $\rightarrow$ Kali browser UI; zero real containment. |
 | **Suricata Network IDS Telemetry** | Network Detection | **DEFERRED** | Suricata remains deferred after earlier pfSense package-manager/integration problems. It is not currently installed/operational in the lab and is not required for the current WEB01 ModSecurity path. |
 | **Real Endpoint Containment** | Containment Safety | **NOT IMPLEMENTED** | Destructive containment actions explicitly excluded from V1 scope; not executed in 6A. |
 
@@ -367,16 +371,20 @@ To ensure defense-in-depth and prevent model regressions, all deterministic secu
 * **Milestone 14 — Agent Security Guardrails & Adversarial Validation**: **COMPLETE**
   Comprehensive adversarial validation across tool-authorization abuse (14A), untrusted content & prompt injection (14B), and RuntimeGuard / kill-switch / execution budgets (14C). 52 new tests across 3 suites; canonical offline suite at Milestone 14 closure: 1,509/1,509 PASS; zero production security gaps found.
 
-* **Milestone 15 — SOC Analyst UI / Investigation Console**: **PLANNED**
+* **Milestone 15 — SOC Analyst UI / Investigation Console**: **COMPLETE (IMPLEMENTED + TESTED OFFLINE / MANUALLY BROWSER VALIDATED)**
   Create an analyst-facing interface over the existing deterministic backend.
-  *Initial UI scope must remain strictly read-only and observational.*
+  *Initial UI scope remains strictly read-only and observational; zero response action authority; containment is NOT IMPLEMENTED.*
+  * **Post-M15 Controlled Live Validation**: **LIVE LAB VALIDATED** (see Section 12 in `docs/implementation-notes.md`).
+    - Scope: real DC01 process telemetry, real Sysmon ingestion, real Splunk retrieval, live OpenAI investigation, deterministic policy evaluation, incident/audit persistence, UI rendering.
+    - Explicit exclusions: real containment, live endpoint isolation, Jira write, VirusTotal enrichment, live human-approval execution path.
 
-  **Suggested Sub-phases**:
+  **Completed Sub-phases**:
   - **15A — UI Architecture + Read-Only Incident List**: Thin presentation layer / bounded read-only API displaying list of ingested incidents and status without direct privileged tool authority.
-  - **15B — Incident Detail / Evidence View**: Deep inspection view displaying bounded telemetry attributes (Sysmon Event ID 1, 7-field ModSecurity evidence, decoded commands) as inert evidence.
+  - **15B — Incident Detail / Evidence View**: Deep inspection view displaying bounded telemetry attributes (Sysmon Event ID 1 inert XML, 7-field ModSecurity evidence, decoded commands) as inert evidence.
   - **15C — AI Assessment vs. Deterministic Policy Visualization**: Clear visual distinction between advisory AI hypotheses/confidence and authoritative deterministic policy risk score/disposition.
   - **15D — Threat Intelligence / Jira / Audit Timeline**: Chronological event timeline showing scope classification, TI enrichment results, downstream Jira ticket linkage, and append-only audit trail.
   - **15E — UI Security & Boundary Tests**: Verification that the UI layer cannot invoke arbitrary tools, execute arbitrary SPL, call providers directly, bypass ToolRouter or RuntimeGuard, perform endpoint isolation, disable accounts, modify firewall rules, change credentials, or create an autonomous action path.
+  - **Manual UI Polish**: Harmonized milestone branding, unexecuted action clarity, normalized uppercase audit outcomes.
 
   *Desired Architecture*:
   ```
@@ -458,3 +466,11 @@ To ensure defense-in-depth and prevent model regressions, all deterministic secu
   - [x] **14A**: Tool-Authorization Abuse Tests (**IMPLEMENTED + TESTED OFFLINE**; commit `d913f84`; 23/23 tests pass; unallowlisted tools, arbitrary SPL, forbidden arguments, provider overrides fail closed before backend execution).
   - [x] **14B**: Untrusted Content & Prompt-Injection Boundary Validation (**IMPLEMENTED + TESTED OFFLINE**; commit `807ad85`; 15/15 tests pass; logs, ModSecurity, and TI remain inert data; ADF codeBlock containment; canary confidentiality verified; Jira comment ingestion marked NOT APPLICABLE / NOT INGESTED; document retrieval marked NOT APPLICABLE / NOT IMPLEMENTED).
   - [x] **14C**: RuntimeGuard / Kill-Switch / Execution-Budget Abuse Validation (**IMPLEMENTED + TESTED OFFLINE**; commit `5b3b0f4`; 14/14 tests pass; tool budget exhaustion, kill-switch latching, halt-state persistence, separate-run isolation, failure propagation, downstream execution blocking across TI, simulation, and ticketing).
+- [x] **Milestone 15**: SOC Analyst UI / Investigation Console (**COMPLETE (IMPLEMENTED + TESTED OFFLINE / MANUALLY BROWSER VALIDATED)**):
+  - [x] **15A**: UI Architecture & Read-Only Incident List (`ui/app.py`, `ui/incident_reader.py`, `ui/templates/incidents.html`).
+  - [x] **15B**: Incident Detail & Inert Evidence View (Sysmon Event ID 1 inert XML, WEB01 ModSecurity 7-field cards, strict regex ID validation).
+  - [x] **15C**: AI Assessment vs. Deterministic Policy Visualization (visual segregation of advisory model findings vs authoritative risk/policy rules, governance pipeline).
+  - [x] **15D**: Threat Intelligence / Jira / Audit Timeline (persisted TI status, Jira tracking cards, read-only sequential JSONL audit reader with timeline output bounded to 200 events).
+  - [x] **15E**: UI Security & Boundary Verification (GET-only enforcement, path traversal protection, zero provider connectivity, zero tool authority).
+  - [x] **Manual UI Polish**: Unified milestone-wide branding, unexecuted action clarity, normalized uppercase audit outcomes.
+  - [x] **Post-M15 Controlled Live Validation**: **LIVE LAB VALIDATED** (2026-10-08; canonical incident `INC-LIVE-DC01-20261008T191323685TUTC`; DC01 PowerShell `127.0.0.1:65535` $\rightarrow$ Sysmon Event ID 1 $\rightarrow$ Splunk UF $\rightarrow$ Splunk Enterprise $\rightarrow$ bounded `DET-POWERSHELL-002` $\rightarrow$ live OpenAI `gpt-5.6-sol` $\rightarrow$ deterministic policy $\rightarrow$ `IncidentRecord` & JSONL persistence $\rightarrow$ Browser UI validated from Kali; zero real containment, Jira/VT not used).
