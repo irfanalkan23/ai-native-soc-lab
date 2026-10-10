@@ -144,21 +144,28 @@ class TestUiSecurityBoundaries(unittest.TestCase):
     # =========================================================================
 
     def test_01_enumerated_routes_only_allow_get(self) -> None:
-        """Enumerate application routes and confirm exclusively expected GET paths are registered."""
-        expected_paths = {
+        """Enumerate application routes and confirm exclusively expected paths and methods are registered."""
+        expected_get_paths = {
             "/",
             "/api/incidents",
             "/api/incidents/{incident_id}",
             "/api/incidents/{incident_id}/audit",
             "/incidents/{incident_id}",
         }
+        expected_post_paths = {
+            "/api/incidents/{incident_id}/approval/approve",
+            "/api/incidents/{incident_id}/approval/deny",
+        }
         actual_routes = {route.path for route in self.app.routes}
-        self.assertEqual(actual_routes, expected_paths)
+        self.assertEqual(actual_routes, expected_get_paths | expected_post_paths)
 
-        # Confirm all registered routes have exclusively GET methods
+        # Confirm all registered routes have strictly allowlisted methods
         for route in self.app.routes:
             if hasattr(route, "methods"):
-                self.assertEqual(route.methods, {"GET"})
+                if route.path in expected_get_paths:
+                    self.assertEqual(route.methods, {"GET"})
+                elif route.path in expected_post_paths:
+                    self.assertEqual(route.methods, {"POST"})
 
     def test_02_post_returns_405_on_all_routes(self) -> None:
         """POST requests to all defined routes return HTTP 405 Method Not Allowed."""

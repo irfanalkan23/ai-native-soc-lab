@@ -526,6 +526,9 @@
       </div>
     </div>
 
+    <!-- Human Approval Mutation Gate -->
+    {{APPROVAL_CONTROLS_SECTION}}
+
     <div class="grid-2">
       <!-- 1. Deterministic Security Decision (Authoritative) -->
       <div class="card card-policy-elevated">
@@ -733,5 +736,38 @@
       <div>Deterministic Policy &bull; Bounded Evidence &bull; Human-in-the-Loop &bull; Correlated Audit History</div>
     </footer>
   </div>
+  <script>
+    document.addEventListener('DOMContentLoaded', function() {
+      function bindDecisionForm(formId) {
+        var form = document.getElementById(formId);
+        if (!form) return;
+        form.addEventListener('submit', function(e) {
+          e.preventDefault();
+          var tokenInput = form.querySelector('input[name="csrf_token"]');
+          var token = tokenInput ? tokenInput.value : '';
+          fetch(form.action, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-CSRF-Token': token
+            },
+            body: JSON.stringify({ csrf_token: token })
+          }).then(function(res) {
+            if (res.ok) {
+              window.location.reload();
+            } else {
+              return res.json().then(function(data) {
+                alert('Decision Error (' + res.status + '): ' + (data.detail || 'Request failed'));
+              });
+            }
+          }).catch(function(err) {
+            alert('Communication error');
+          });
+        });
+      }
+      bindDecisionForm('approval-form');
+      bindDecisionForm('deny-form');
+    });
+  </script>
 </body>
 </html>

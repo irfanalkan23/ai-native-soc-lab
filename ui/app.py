@@ -1,23 +1,66 @@
 """FastAPI application for the SOC Analyst UI presentation layer.
 
 Architecture Principle:
-    Exclusively provides read-only presentation endpoints:
+    Provides exactly 5 intended read-only GET routes:
     - GET /: Server-rendered analyst incident console (list).
     - GET /incidents/{incident_id}: Server-rendered incident detail page.
     - GET /api/incidents: Allowlisted incident summaries as JSON.
     - GET /api/incidents/{incident_id}: Allowlisted incident detail as JSON.
-    Existing persisted incident artifacts are consumed through a read-only UI path.
-    Holds ZERO execution authority: cannot invoke tools, run SPL, mutate policy,
-    call providers, trigger actions, or modify RuntimeGuard.
+    - GET /api/incidents/{incident_id}/audit: Allowlisted correlated audit events as JSON.
+
+    Provides exactly 2 bounded human approval mutation POST routes (Milestone 16D):
+    - POST /api/incidents/{incident_id}/approval/approve: Express analyst approval intent.
+    - POST /api/incidents/{incident_id}/approval/deny: Express analyst denial intent.
+
+    Trust & Scope Boundaries:
+    - Browser expresses analyst intent ONLY (zero caller-supplied action/policy/keys).
+    - Server re-reads persisted state; RuntimeGuard and policy enforce strict authority.
+    - Real containment remains strictly NOT IMPLEMENTED (simulation only).
+    - Lab-local anti-CSRF / origin protection; zero user authentication / RBAC claimed.
 """
 
+import dataclasses
 import html
+import json
+import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+import re
+import secrets
+from typing import Any, Dict, List, Optional, Set, Union
+from urllib.parse import urlparse
 
-from fastapi import FastAPI, HTTPException, Query, status
+from fastapi import FastAPI, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse
 
+from investigator.approval import (
+    ActionAuthorizationContext,
+    ApprovalDecision,
+    ApprovalLedger,
+    ApprovalLedgerError,
+    ApprovalReasonCode,
+    ApprovalRecord,
+    ApprovalRegistry,
+    DEFAULT_APPROVAL_LEDGER_PATH,
+    DEFAULT_APPROVER,
+)
+from investigator.audit import AuditEvent, AuditEventType, AuditLog
+from investigator.audit_writer import JsonlAuditWriter
+from investigator.incident_record import (
+    IncidentApprovalStatus,
+    IncidentJsonWriter,
+    IncidentRecord,
+    IncidentWriterError,
+)
+from investigator.policy import (
+    ActionDisposition,
+    PolicyDecision,
+    ProposedAction,
+    RiskLevel,
+)
+from investigator.simulator import (
+    SimulatedResponseExecutor,
+    SimulationStatus,
+)
 from ui.audit_reader import (
     DEFAULT_AUDIT_LIMIT,
     DEFAULT_AUDIT_LOG_PATH,
@@ -30,6 +73,7 @@ from ui.incident_reader import (
     DEFAULT_LIMIT,
     MAX_LIMIT,
     MIN_LIMIT,
+    SAFE_INCIDENT_ID_PATTERN,
     IncidentReader,
 )
 from ui.models import (
@@ -423,22 +467,237 @@ def _render_evidence_section(detail: IncidentDetailView) -> str:
     return f'<div class="prop-value">Standard endpoint telemetry recorded for host: {_esc(detail.target_host)}</div>'
 
 
+DEFAULT_UI_PORT = 8010
+
+DEFAULT_ALLOWED_ORIGINS = {
+    f"http://127.0.0.1:{DEFAULT_UI_PORT}",
+    f"http://localhost:{DEFAULT_UI_PORT}",
+}
+
+
+def _normalize_origin(origin: Optional[str]) -> Optional[str]:
+    """Strictly normalize an origin string to scheme://netloc (lowercase, no trailing slash).
+
+    Fails closed (returns None) on:
+      - None or non-string
+      - empty string
+      - 'null'
+      - '*' or any wildcard pattern
+      - non-http / non-https schemes
+      - missing netloc or embedded credentials ('@' in netloc)
+      - unexpected path components
+    """
+    if not isinstance(origin, str):
+        return None
+    raw = origin.strip().lower()
+    if not raw or raw in ("null", "*") or "*" in raw:
+        return None
+    try:
+        parsed = urlparse(raw)
+        if parsed.scheme not in ("http", "https"):
+            return None
+        if not parsed.netloc or "@" in parsed.netloc:
+            return None
+        if parsed.path and parsed.path != "/":
+            return None
+        return f"{parsed.scheme}://{parsed.netloc}"
+    except Exception:
+        return None
+
+
+def _resolve_allowed_origins(
+    explicit_origins: Optional[Union[List[str], Set[str]]] = None,
+) -> Set[str]:
+    """Resolve trusted exact origin allowlist from defaults, config, and environment."""
+    allowed: Set[str] = set()
+    for origin in DEFAULT_ALLOWED_ORIGINS:
+        norm = _normalize_origin(origin)
+        if norm:
+            allowed.add(norm)
+
+    # Read server startup configuration from environment variable UI_ALLOWED_ORIGINS
+    env_val = os.getenv("UI_ALLOWED_ORIGINS", "").strip()
+    if env_val:
+        for entry in re.split(r"[,;\s]+", env_val):
+            norm = _normalize_origin(entry)
+            if norm:
+                allowed.add(norm)
+
+    # Add explicitly passed origins from create_app
+    if explicit_origins:
+        for entry in explicit_origins:
+            norm = _normalize_origin(entry)
+            if norm:
+                allowed.add(norm)
+
+    return allowed
+
+
+def _is_allowed_origin(origin_header: Optional[str], allowed_origins: Set[str]) -> bool:
+    """Validate if an Origin header strictly matches the exact configured allowlist.
+
+    Exact match only: no wildcard, no lookalike prefix/suffix, no port mismatch.
+    """
+    if not origin_header:
+        return False
+    norm = _normalize_origin(origin_header)
+    if not norm:
+        return False
+    return norm in allowed_origins
+
+
+def _is_allowed_referer(referer_header: Optional[str], allowed_origins: Set[str]) -> bool:
+    """Validate if a Referer header strictly matches the exact configured allowlist."""
+    if not referer_header:
+        return True
+    try:
+        parsed = urlparse(referer_header.strip().lower())
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            return False
+        origin_from_ref = f"{parsed.scheme}://{parsed.netloc}"
+        return origin_from_ref in allowed_origins
+    except Exception:
+        return False
+
+
+def _validate_origin_and_csrf(
+    request: Request,
+    body_dict: Dict[str, Any],
+    app_csrf_token: str,
+    allowed_origins: Set[str],
+) -> None:
+    """Enforce strict local lab origin validation, CSRF token, and body allowlist."""
+    # 1. Origin header check
+    origin = request.headers.get("origin")
+    if origin:
+        if not _is_allowed_origin(origin, allowed_origins):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="origin_forbidden")
+    else:
+        # 2. Referer header check if origin is absent
+        referer = request.headers.get("referer")
+        if referer and not _is_allowed_referer(referer, allowed_origins):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="referer_forbidden")
+
+    # 3. CSRF token check
+    token = request.headers.get("x-csrf-token") or body_dict.get("csrf_token")
+    if not token or str(token).strip() != app_csrf_token:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="csrf_token_invalid")
+
+    # 4. Strict request body fields allowlist (Zero caller-controlled parameters)
+    unexpected = set(body_dict.keys()) - {"csrf_token"}
+    if unexpected:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="unexpected_fields")
+
+
+async def _parse_mutation_body(request: Request) -> Dict[str, Any]:
+    """Parse mutation request body enforcing allowlisted Content-Types only."""
+    ct_header = request.headers.get("content-type", "")
+    ct = ct_header.split(";")[0].strip().lower()
+
+    if ct not in ("application/json", "application/x-www-form-urlencoded"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="unsupported_content_type")
+
+    if ct == "application/json":
+        try:
+            body = await request.json()
+            if not isinstance(body, dict):
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="malformed_body")
+            return body
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="malformed_json")
+
+    # application/x-www-form-urlencoded
+    try:
+        form = await request.form()
+        return dict(form)
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="malformed_form")
+
+
+def _render_approval_controls(detail: IncidentDetailView, csrf_token: str) -> str:
+    """Render human-in-the-loop approval controls or finalized state notice."""
+    app_stat = (detail.approval_status or "").strip().upper()
+    sim_stat = (detail.simulation_status or "").strip().upper()
+    prop_act = (detail.proposed_action or "").strip()
+
+    is_pending = (
+        detail.requires_human_approval
+        and app_stat in ("REQUIRED", "PENDING", "REQUIRED / PENDING", "NOT_REQUIRED", "")
+        and app_stat not in ("APPROVED", "DENIED")
+        and sim_stat != "SIMULATED"
+        and prop_act == ProposedAction.SIMULATE_ENDPOINT_ISOLATION.value
+    )
+
+    if not is_pending:
+        return ""
+
+    return f"""<div class="card card-approval-mutation" style="margin-bottom: 24px; border: 1px solid var(--accent-cyan); background: rgba(8, 145, 178, 0.05);">
+  <div class="card-header">
+    <div class="card-title">
+      <span style="color: var(--accent-cyan); font-weight: 700;">Human-in-the-Loop Approval Gate</span>
+    </div>
+    <span class="badge-category cat-approval">MUTATION GATE &bull; BOUNDED INTENT</span>
+  </div>
+  <div class="section-sublabel" style="color: var(--text-primary); font-weight: 600; margin-top: 8px;">
+    PROPOSED ACTION: Simulated endpoint isolation
+  </div>
+  <div style="background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 6px; padding: 12px; margin-top: 12px; margin-bottom: 16px;">
+    <div style="color: #f87171; font-weight: 700; font-size: 0.8125rem;">REAL ENDPOINT ISOLATION: NOT IMPLEMENTED</div>
+    <div class="sub-text" style="color: var(--text-secondary); margin-top: 4px;">
+      SIMULATION ONLY: Approving this action authorizes deterministic simulation of endpoint isolation. Real containment, firewall modification, account disablement, or network alteration is NOT IMPLEMENTED.
+    </div>
+  </div>
+  <div style="display: flex; gap: 12px; align-items: center; margin-top: 8px;">
+    <form id="approval-form" method="POST" action="/api/incidents/{_esc(detail.incident_id)}/approval/approve">
+      <input type="hidden" name="csrf_token" value="{_esc(csrf_token)}">
+      <button type="submit" id="btn-approve" class="btn btn-approve" style="background: #059669; color: white; border: 1px solid #10b981; padding: 8px 16px; border-radius: 4px; font-weight: 600; cursor: pointer;">Approve simulated action</button>
+    </form>
+    <form id="deny-form" method="POST" action="/api/incidents/{_esc(detail.incident_id)}/approval/deny">
+      <input type="hidden" name="csrf_token" value="{_esc(csrf_token)}">
+      <button type="submit" id="btn-deny" class="btn btn-deny" style="background: #dc2626; color: white; border: 1px solid #ef4444; padding: 8px 16px; border-radius: 4px; font-weight: 600; cursor: pointer;">Deny</button>
+    </form>
+  </div>
+</div>"""
+
+
 def create_app(
     incidents_dir: Optional[Union[Path, str]] = None,
     audit_path: Optional[Union[Path, str]] = None,
+    approval_registry: Optional[Any] = None,
+    approval_ledger_path: Optional[Union[Path, str]] = None,
+    runtime_guard: Optional[Any] = None,
+    allowed_origins: Optional[Union[List[str], Set[str]]] = None,
 ) -> FastAPI:
-    """Create and configure a read-only FastAPI application instance."""
+    """Create and configure the FastAPI application instance with presentation and approval routes."""
     app = FastAPI(
         title="AI-Native SOC Lab — Investigation Console",
-        description="Read-only analyst presentation interface for investigated incidents.",
+        description="Analyst presentation and human approval interface for investigated incidents.",
         version="1.0.0",
         docs_url=None,  # Disable OpenAPI UI to avoid unneeded endpoints
         redoc_url=None,
         openapi_url=None,
     )
 
+    # Process-local anti-CSRF token for mutation protection
+    app.state.csrf_token = secrets.token_urlsafe(32)
+    # Trusted server-configured exact origin allowlist
+    app.state.allowed_origins = _resolve_allowed_origins(allowed_origins)
+
     reader = IncidentReader(incidents_dir or DEFAULT_INCIDENTS_DIR)
     audit_reader = AuditReader(audit_path or DEFAULT_AUDIT_LOG_PATH)
+    audit_writer = JsonlAuditWriter(audit_path or DEFAULT_AUDIT_LOG_PATH)
+    incident_writer = IncidentJsonWriter(incidents_dir or DEFAULT_INCIDENTS_DIR)
+
+    if approval_registry is not None:
+        active_registry = approval_registry
+    elif approval_ledger_path is not None:
+        active_registry = ApprovalRegistry(ledger=ApprovalLedger(path=Path(approval_ledger_path)))
+    else:
+        active_registry = ApprovalRegistry(ledger=ApprovalLedger(path=DEFAULT_APPROVAL_LEDGER_PATH))
+
+    guard = runtime_guard
 
     @app.get("/api/incidents", response_class=JSONResponse)
     def get_incidents(
@@ -618,6 +877,7 @@ def create_app(
         policy_chips_html = _render_policy_reason_chips(detail.policy_reason_codes)
         governance_pipeline_html = _render_governance_pipeline(detail)
         evidence_content = _render_evidence_section(detail)
+        approval_controls_html = _render_approval_controls(detail, app.state.csrf_token)
 
         rendered = template_html.replace("{{INCIDENT_ID}}", _esc(detail.incident_id))
         rendered = rendered.replace("{{DETECTION_NAME}}", _esc(detail.detection_name))
@@ -658,7 +918,272 @@ def create_app(
         rendered = rendered.replace("{{TI_STATUS_NOTE}}", _esc(ti_status_note))
         rendered = rendered.replace("{{EVIDENCE_CONTENT}}", evidence_content)
         rendered = rendered.replace("{{AUDIT_TIMELINE_CONTENT}}", audit_timeline_html)
+        rendered = rendered.replace("{{APPROVAL_CONTROLS_SECTION}}", approval_controls_html)
+        rendered = rendered.replace("{{CSRF_TOKEN}}", _esc(app.state.csrf_token))
 
         return HTMLResponse(content=rendered, status_code=status.HTTP_200_OK)
+
+    @app.post("/api/incidents/{incident_id}/approval/approve", response_class=JSONResponse)
+    async def post_incident_approval_approve(incident_id: str, request: Request) -> Dict[str, Any]:
+        """Approve allowlisted simulated response action for an incident.
+
+        Validates origin, lab-local anti-CSRF token, and ensures caller provides
+        zero action parameters. Re-reads persisted IncidentRecord from disk, verifies
+        authoritative approvability, checks RuntimeGuard, validates and consumes approval,
+        runs deterministic simulation, appends single audit sequence, and updates incident.
+        """
+        if not SAFE_INCIDENT_ID_PATTERN.match(incident_id):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid_incident_id")
+
+        body = await _parse_mutation_body(request)
+        _validate_origin_and_csrf(request, body, app.state.csrf_token, app.state.allowed_origins)
+
+        target_path = (reader.incidents_dir / f"{incident_id}.json").resolve()
+        if target_path.parent != reader.incidents_dir.resolve():
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid_incident_id")
+        if not target_path.is_file():
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="incident_not_found")
+
+        try:
+            with open(target_path, "r", encoding="utf-8") as f:
+                raw_data = json.load(f)
+            if not isinstance(raw_data, dict):
+                raise ValueError("raw_data must be dict")
+        except (json.JSONDecodeError, OSError, ValueError):
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="persisted_incident_malformed")
+
+        # Verify approvability
+        if not raw_data.get("requires_human_approval"):
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="approval_not_required")
+
+        if raw_data.get("proposed_action") != ProposedAction.SIMULATE_ENDPOINT_ISOLATION.value:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="unsupported_proposed_action")
+
+        cur_app = str(raw_data.get("approval_status", "")).strip().upper()
+        cur_sim = str(raw_data.get("simulation_status", "")).strip().upper()
+        if cur_app == "APPROVED" or cur_sim == "SIMULATED":
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="incident_already_finalized")
+        if cur_app == "DENIED":
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="incident_already_finalized")
+
+        # Check replay grant in registry and persistent ledger
+        try:
+            if hasattr(active_registry, "_ledger") and active_registry._ledger is not None:
+                ledger_ids, ledger_grants = active_registry._ledger.load_consumed()
+                active_registry._consumed_approval_ids.update(ledger_ids)
+                active_registry._consumed_grant_keys.update(ledger_grants)
+
+            if active_registry.is_grant_consumed(
+                incident_id, ProposedAction.SIMULATE_ENDPOINT_ISOLATION
+            ):
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="approval_already_consumed")
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="approval_ledger_corrupt")
+
+        # Check RuntimeGuard precedence (RuntimeGuard halt does NOT consume approval)
+        if guard is not None and hasattr(guard, "state"):
+            if getattr(guard.state, "halted", False) or getattr(guard.state, "kill_switch_engaged", False):
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="runtime_guard_halted")
+
+        # Reconstruct policy decision and authorization context
+        try:
+            policy_decision = PolicyDecision(
+                risk_score=int(raw_data["risk_score"]),
+                risk_level=RiskLevel(raw_data["risk_level"]),
+                action_disposition=ActionDisposition(raw_data["disposition"]),
+                proposed_action=ProposedAction(raw_data["proposed_action"]),
+                requires_human_approval=bool(raw_data["requires_human_approval"]),
+                reasons=tuple(raw_data.get("policy_reason_codes", ())),
+            )
+            auth_context = ActionAuthorizationContext(
+                incident_id=incident_id,
+                policy_decision=policy_decision,
+            )
+        except Exception:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="persisted_incident_malformed")
+
+        # Issue trusted approval record
+        approval_record = ApprovalRecord(
+            incident_id=incident_id,
+            proposed_action=policy_decision.proposed_action,
+            decision=ApprovalDecision.APPROVED,
+            approver=DEFAULT_APPROVER,
+            reason_code=ApprovalReasonCode.APPROVAL_GRANTED.value,
+        )
+
+        # Build authoritative audit events trail
+        audit_log = AuditLog()
+        audit_log.append(AuditEvent(
+            event_type=AuditEventType.APPROVAL_REQUESTED,
+            incident_id=incident_id,
+            sequence=0,
+            detail_code="approval_requested",
+        ))
+        audit_log.append(AuditEvent(
+            event_type=AuditEventType.APPROVAL_GRANTED,
+            incident_id=incident_id,
+            sequence=1,
+            detail_code="approval_granted",
+        ))
+
+        # Execute simulation via trusted executor
+        executor = SimulatedResponseExecutor(approval_registry=active_registry)
+        try:
+            sim_result = executor.execute(
+                authorization_context=auth_context,
+                approval_record=approval_record,
+                audit_log=audit_log,
+                runtime_guard=guard,
+            )
+        except ApprovalLedgerError:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="approval_ledger_failure")
+        except Exception:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="simulation_execution_error")
+
+        if sim_result.status != SimulationStatus.SIMULATED:
+            if sim_result.detail_code == "simulation_blocked_already_consumed":
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="approval_already_consumed")
+            if sim_result.detail_code == "simulation_blocked_expired":
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="approval_expired")
+            if sim_result.detail_code == "simulation_blocked_persistence_failed":
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="approval_ledger_failure")
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=sim_result.detail_code)
+
+        # Persist audit events
+        try:
+            audit_writer.write_events(audit_log.events())
+        except Exception:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="audit_persistence_failed")
+
+        # Update persisted incident record
+        try:
+            rec = IncidentRecord.from_dict(raw_data)
+            updated_rec = dataclasses.replace(
+                rec,
+                approval_status=IncidentApprovalStatus.APPROVED.value,
+                approval_reason_code=ApprovalReasonCode.APPROVAL_GRANTED.value,
+                simulation_status=SimulationStatus.SIMULATED.value,
+                simulation_detail_code="simulated_endpoint_isolation",
+            )
+            incident_writer.write_record(updated_rec, overwrite=True)
+        except Exception:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="persistence_error")
+
+        return {
+            "incident_id": incident_id,
+            "approval_status": "APPROVED",
+            "simulation_status": "SIMULATED",
+            "real_action_status": "NOT_IMPLEMENTED",
+            "detail_code": "simulated_endpoint_isolation",
+        }
+
+    @app.post("/api/incidents/{incident_id}/approval/deny", response_class=JSONResponse)
+    async def post_incident_approval_deny(incident_id: str, request: Request) -> Dict[str, Any]:
+        """Deny allowlisted simulated response action for an incident.
+
+        Validates origin, lab-local anti-CSRF token, and ensures caller provides
+        zero action parameters. Re-reads persisted IncidentRecord from disk, verifies
+        authoritative state, records denial in audit log and updates persisted incident record.
+        Never consumes approval grant or executes simulation.
+        """
+        if not SAFE_INCIDENT_ID_PATTERN.match(incident_id):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid_incident_id")
+
+        body = await _parse_mutation_body(request)
+        _validate_origin_and_csrf(request, body, app.state.csrf_token, app.state.allowed_origins)
+
+        target_path = (reader.incidents_dir / f"{incident_id}.json").resolve()
+        if target_path.parent != reader.incidents_dir.resolve():
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid_incident_id")
+        if not target_path.is_file():
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="incident_not_found")
+
+        try:
+            with open(target_path, "r", encoding="utf-8") as f:
+                raw_data = json.load(f)
+            if not isinstance(raw_data, dict):
+                raise ValueError("raw_data must be dict")
+        except (json.JSONDecodeError, OSError, ValueError):
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="persisted_incident_malformed")
+
+        # Verify approvability
+        if not raw_data.get("requires_human_approval"):
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="approval_not_required")
+
+        if raw_data.get("proposed_action") != ProposedAction.SIMULATE_ENDPOINT_ISOLATION.value:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="unsupported_proposed_action")
+
+        cur_app = str(raw_data.get("approval_status", "")).strip().upper()
+        cur_sim = str(raw_data.get("simulation_status", "")).strip().upper()
+        if cur_app == "APPROVED" or cur_sim == "SIMULATED":
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="incident_already_finalized")
+        if cur_app == "DENIED":
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="incident_already_finalized")
+
+        # Check replay grant in registry and persistent ledger
+        try:
+            if hasattr(active_registry, "_ledger") and active_registry._ledger is not None:
+                ledger_ids, ledger_grants = active_registry._ledger.load_consumed()
+                active_registry._consumed_approval_ids.update(ledger_ids)
+                active_registry._consumed_grant_keys.update(ledger_grants)
+
+            if active_registry.is_grant_consumed(
+                incident_id, ProposedAction.SIMULATE_ENDPOINT_ISOLATION
+            ):
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="approval_already_consumed")
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="approval_ledger_corrupt")
+
+        # Persist audit sequence
+        try:
+            denial_events = [
+                AuditEvent(
+                    event_type=AuditEventType.APPROVAL_REQUESTED,
+                    incident_id=incident_id,
+                    sequence=0,
+                    detail_code="approval_requested",
+                ),
+                AuditEvent(
+                    event_type=AuditEventType.APPROVAL_DENIED,
+                    incident_id=incident_id,
+                    sequence=1,
+                    detail_code=ApprovalReasonCode.APPROVAL_DENIED.value,
+                ),
+                AuditEvent(
+                    event_type=AuditEventType.SIMULATION_NOT_EXECUTED,
+                    incident_id=incident_id,
+                    sequence=2,
+                    detail_code="simulation_blocked_denied",
+                ),
+            ]
+            audit_writer.write_events(denial_events)
+        except Exception:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="audit_persistence_failed")
+
+        # Update persisted incident record
+        try:
+            rec = IncidentRecord.from_dict(raw_data)
+            updated_rec = dataclasses.replace(
+                rec,
+                approval_status=IncidentApprovalStatus.DENIED.value,
+                approval_reason_code=ApprovalReasonCode.APPROVAL_DENIED.value,
+                simulation_status=SimulationStatus.NOT_EXECUTED.value,
+                simulation_detail_code="simulation_blocked_denied",
+            )
+            incident_writer.write_record(updated_rec, overwrite=True)
+        except Exception:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="persistence_error")
+
+        return {
+            "incident_id": incident_id,
+            "approval_status": "DENIED",
+            "simulation_status": "NOT_EXECUTED",
+            "real_action_status": "NOT_IMPLEMENTED",
+            "detail_code": "simulation_blocked_denied",
+        }
 
     return app

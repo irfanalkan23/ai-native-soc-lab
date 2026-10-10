@@ -126,12 +126,14 @@ class IncidentApprovalStatus(str, Enum):
     NOT_REQUIRED = "NOT_REQUIRED"
     APPROVED = "APPROVED"
     DENIED = "DENIED"
+    PENDING = "PENDING"
 
 
 ALLOWED_APPROVAL_STATUSES = frozenset({
     IncidentApprovalStatus.NOT_REQUIRED.value,
     IncidentApprovalStatus.APPROVED.value,
     IncidentApprovalStatus.DENIED.value,
+    IncidentApprovalStatus.PENDING.value,
 })
 
 ALLOWED_APPROVAL_REASON_CODES = frozenset({
@@ -462,6 +464,74 @@ class IncidentRecord:
             ensure_ascii=False,
             sort_keys=True,
             indent=indent,
+        )
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "IncidentRecord":
+        """Deserialize an allowlisted dictionary representation into a validated IncidentRecord."""
+        if not isinstance(data, dict):
+            raise IncidentRecordError("data must be a dict")
+
+        modsec = None
+        if isinstance(data.get("modsecurity_evidence"), dict):
+            m = data["modsecurity_evidence"]
+            modsec = ModSecuritySqliEvidence(
+                host=m["host"],
+                src_ip=m["src_ip"],
+                rule_id=m["rule_id"],
+                rule_msg=m["rule_msg"],
+                severity=m["severity"],
+                anomaly_score=m["anomaly_score"],
+                unique_id=m["unique_id"],
+            )
+
+        obs = None
+        if isinstance(data.get("threat_intel_observation"), dict):
+            o = data["threat_intel_observation"]
+            obs = ThreatIntelObservation(
+                indicator=o["indicator"],
+                indicator_type=o["indicator_type"],
+                provider=o["provider"],
+                verdict=o["verdict"],
+                malicious_count=o["malicious_count"],
+                suspicious_count=o["suspicious_count"],
+                harmless_count=o["harmless_count"],
+                undetected_count=o["undetected_count"],
+                source_reference=o.get("source_reference", f"indicator:{o['indicator']}"),
+            )
+
+        raw_reasons = data.get("policy_reason_codes", ())
+        policy_reasons = tuple(raw_reasons) if isinstance(raw_reasons, (list, tuple)) else ()
+
+        return cls(
+            schema_version=str(data.get("schema_version", SCHEMA_VERSION)),
+            incident_id=str(data["incident_id"]),
+            created_at_utc=str(data["created_at_utc"]),
+            detection_id=str(data["detection_id"]),
+            detection_name=str(data["detection_name"]),
+            target_host=str(data["target_host"]),
+            target_user=str(data.get("target_user", "SYSTEM")),
+            evidence_source=str(data.get("evidence_source", "Unknown")),
+            decoded_command=data.get("decoded_command"),
+            mitre_technique_id=data.get("mitre_technique_id"),
+            investigation_summary=str(data.get("investigation_summary", "")),
+            confidence_level=str(data.get("confidence_level", "high")),
+            suspicious_indicator_count=int(data.get("suspicious_indicator_count", 0)),
+            recommended_next_step=str(data.get("recommended_next_step", "")),
+            risk_score=int(data["risk_score"]),
+            risk_level=str(data["risk_level"]),
+            disposition=str(data.get("disposition", ActionDisposition.APPROVAL_REQUIRED.value)),
+            proposed_action=str(data["proposed_action"]),
+            requires_human_approval=bool(data["requires_human_approval"]),
+            policy_reason_codes=policy_reasons,
+            approval_status=str(data["approval_status"]),
+            approval_reason_code=data.get("approval_reason_code"),
+            simulation_status=str(data["simulation_status"]),
+            simulation_detail_code=str(data.get("simulation_detail_code", "simulation_not_required")),
+            modsecurity_evidence=modsec,
+            threat_intel_status=data.get("threat_intel_status"),
+            threat_intel_skip_reason=data.get("threat_intel_skip_reason"),
+            threat_intel_observation=obs,
         )
 
 
