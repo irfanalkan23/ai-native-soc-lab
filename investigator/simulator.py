@@ -22,7 +22,9 @@ from typing import Any, Optional
 from investigator.approval import (
     ActionAuthorizationContext,
     ApprovalDecision,
+    ApprovalLedgerError,
     ApprovalRecord,
+    ApprovalValidationCode,
 )
 from investigator.audit import AuditEvent, AuditEventType, AuditLog
 from investigator.policy import ProposedAction
@@ -193,18 +195,41 @@ class SimulatedResponseExecutor:
                     audit_log,
                 )
 
-            # 5. Freshness & Replay Resistance Check via ApprovalRegistry if present
+            # 5. Authoritative validation and one-time consumption via ApprovalRegistry if present
             if self._approval_registry is not None:
-                # If registry has validate_freshness, check freshness first
-                if hasattr(self._approval_registry, "validate_freshness"):
-                    from investigator.approval import ApprovalValidationCode
-                    fresh_code = self._approval_registry.validate_freshness(approval_record)
+                if hasattr(self._approval_registry, "validate_and_consume"):
+                    try:
+                        fresh_code = self._approval_registry.validate_and_consume(
+                            authorization_context=authorization_context,
+                            approval_record=approval_record,
+                            runtime_guard=runtime_guard,
+                            audit_log=audit_log,
+                        )
+                    except ApprovalLedgerError:
+                        return self._record_and_return(
+                            incident_id,
+                            target_action,
+                            SimulationStatus.NOT_EXECUTED,
+                            "simulation_blocked_persistence_failed",
+                            audit_log,
+                        )
+                    except Exception as exc:
+                        raise SimulationError("audit_recording_failed") from exc
+
                     if fresh_code is ApprovalValidationCode.APPROVAL_EXPIRED:
                         return self._record_and_return(
                             incident_id,
                             target_action,
                             SimulationStatus.NOT_EXECUTED,
                             "simulation_blocked_expired",
+                            audit_log,
+                        )
+                    if fresh_code is ApprovalValidationCode.APPROVAL_ALREADY_CONSUMED:
+                        return self._record_and_return(
+                            incident_id,
+                            target_action,
+                            SimulationStatus.NOT_EXECUTED,
+                            "simulation_blocked_already_consumed",
                             audit_log,
                         )
                     if fresh_code is not ApprovalValidationCode.APPROVAL_VALID:
@@ -216,51 +241,8 @@ class SimulatedResponseExecutor:
                             audit_log,
                         )
 
-                # Replay check (in-memory or persistent store)
-                if self._approval_registry.is_consumed(approval_record.approval_id) or (
-                    hasattr(self._approval_registry, "is_grant_consumed")
-                    and self._approval_registry.is_grant_consumed(incident_id, target_action)
-                ):
-                    return self._record_and_return(
-                        incident_id,
-                        target_action,
-                        SimulationStatus.NOT_EXECUTED,
-                        "simulation_blocked_already_consumed",
-                        audit_log,
-                    )
-
-            # 6. Approved and verified: Consume before simulating
+            # 6. Approved and verified: record simulation completed
             if approval_record.decision is ApprovalDecision.APPROVED:
-                # One-time consumption prior to simulation (with fail-closed ledger write if configured)
-                if self._approval_registry is not None:
-                    # If registry has ledger, append to ledger first
-                    ledger = getattr(self._approval_registry, "_ledger", None)
-                    if ledger is not None:
-                        try:
-                            ledger.append_consumption(approval_record)
-                        except Exception:
-                            if audit_log is not None:
-                                try:
-                                    seq = len(audit_log.events())
-                                    audit_log.append(AuditEvent(
-                                        event_type=AuditEventType.APPROVAL_VALIDATION_FAILED,
-                                        incident_id=incident_id,
-                                        sequence=seq,
-                                        detail_code="approval_persistence_failed",
-                                    ))
-                                except Exception as exc:
-                                    raise SimulationError("audit_recording_failed") from exc
-                            return self._record_and_return(
-                                incident_id,
-                                target_action,
-                                SimulationStatus.NOT_EXECUTED,
-                                "simulation_blocked_persistence_failed",
-                                audit_log,
-                            )
-
-                    self._approval_registry._consumed_approval_ids.add(approval_record.approval_id)
-                    if hasattr(self._approval_registry, "_consumed_grant_keys"):
-                        self._approval_registry._consumed_grant_keys.add((incident_id, target_action.value))
 
                 detail_code = "simulated_endpoint_isolation"
                 if audit_log is not None:

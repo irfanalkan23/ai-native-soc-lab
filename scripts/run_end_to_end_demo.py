@@ -31,8 +31,9 @@ import argparse
 from datetime import datetime, timezone
 import io
 from pathlib import Path
+import re
 import sys
-from typing import Any, Dict, List, Optional, TextIO, Tuple
+from typing import Any, Callable, Dict, List, Optional, TextIO, Tuple
 
 # Ensure repository root is on sys.path
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -46,10 +47,13 @@ from gateway.splunk_search import (
     SplunkSearchError,
 )
 from investigator.approval import (
+    DEFAULT_APPROVAL_LEDGER_PATH,
     ActionAuthorizationContext,
     ApprovalDecision,
     ApprovalGateError,
+    ApprovalLedger,
     ApprovalRecord,
+    ApprovalRegistry,
     request_cli_approval,
 )
 from investigator.audit import AuditEvent, AuditEventType, AuditLog
@@ -141,6 +145,38 @@ from investigator.threat_intel import (
 SYNTHETIC_CRITICAL_PAYLOAD_B64 = (
     "SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQAIABOAGUAdAAuAFcAZQBiAEMAbABpAGUAbgB0ACkALgBEAG8AdwBuAGwAbwBhAGQAUwB0AHIAaQBuAGcAKAAiAGgAdAB0AHAAOgAvAC8AOAAuADgALgA4AC4AOAAvAHMAIgApAA=="
 )
+
+DEFAULT_SYNTHETIC_INCIDENT_ID = "INC-DEMO-CRIT-2026-001"
+SAFE_INCIDENT_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+def _validate_synthetic_incident_id(incident_id: str) -> str:
+    """Validate that an explicitly supplied synthetic incident ID is safe and bounded."""
+    if type(incident_id) is not str or not incident_id.strip():
+        raise ValueError("synthetic_incident_id must be a non-empty str")
+    if len(incident_id) > 64:
+        raise ValueError("synthetic_incident_id exceeds max length of 64 characters")
+    if not SAFE_INCIDENT_ID_PATTERN.match(incident_id):
+        raise ValueError(
+            "synthetic_incident_id must be printable alphanumeric ASCII with dashes/underscores only"
+        )
+    return incident_id
+
+
+def generate_synthetic_incident_id(
+    clock: Optional[Callable[[], datetime]] = None,
+) -> str:
+    """Generate a bounded, filesystem-safe unique incident ID for demo runs.
+
+    Format: INC-DEMO-CRIT-<UTC_TIMESTAMP>
+    Example: INC-DEMO-CRIT-20261010T084530123456Z
+    Guaranteed <= 64 characters, safe for filesystem filenames and audit logs.
+    """
+    now = clock() if clock is not None else datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    clean_ts = now.strftime("%Y%m%dT%H%M%S%fZ")
+    return f"INC-DEMO-CRIT-{clean_ts}"[:64]
 
 
 def _parse_event_timestamp(time_str: str) -> Optional[datetime]:
@@ -496,6 +532,11 @@ def run_demo(
     guard: Optional[RuntimeGuard] = None,
     enrich_threat_intel: bool = False,
     threat_intel_provider: str = "fake",
+    approval_registry: Optional[ApprovalRegistry] = None,
+    approval_ledger: Optional[ApprovalLedger] = None,
+    approval_ledger_path: Optional[Path] = None,
+    approval_clock: Optional[Callable[[], datetime]] = None,
+    synthetic_incident_id: Optional[str] = None,
 ) -> int:
     """Execute the end-to-end integration demo workflow.
 
@@ -602,8 +643,17 @@ def run_demo(
         retrieved_count = len(raw_records)
 
     elif mode == "synthetic-critical":
+        if synthetic_incident_id is not None:
+            try:
+                inc_id = _validate_synthetic_incident_id(synthetic_incident_id)
+            except ValueError as err:
+                out_stream.write(f"[!] Invalid synthetic incident ID: {err}\n")
+                return 1
+        else:
+            inc_id = DEFAULT_SYNTHETIC_INCIDENT_ID
+
         incident = InvestigationInput(
-            incident_id="INC-DEMO-CRIT-2026-001",
+            incident_id=inc_id,
             timestamp="2026-09-17T12:00:00Z",
             host="DC01",
             user="SYSTEM",
@@ -871,12 +921,22 @@ def run_demo(
         out_stream.write(f"[!] Runtime guard blocked simulation: {err}\n")
         return 1
 
-    executor = SimulatedResponseExecutor()
+    if approval_registry is not None:
+        active_registry = approval_registry
+    elif approval_ledger is not None:
+        active_registry = ApprovalRegistry(ledger=approval_ledger, clock=approval_clock)
+    elif approval_ledger_path is not None:
+        active_registry = ApprovalRegistry(ledger=ApprovalLedger(path=approval_ledger_path), clock=approval_clock)
+    else:
+        active_registry = ApprovalRegistry(clock=approval_clock)
+
+    executor = SimulatedResponseExecutor(approval_registry=active_registry)
     try:
         sim_result = executor.execute(
             authorization_context=auth_context,
             approval_record=approval_record,
             audit_log=audit_log,
+            runtime_guard=runtime_guard,
         )
     except SimulationError as err:
         out_stream.write(f"[!] Simulated response execution error: {err}\n")
@@ -1092,6 +1152,12 @@ def main() -> int:
         default="fake",
         help="Threat-intel provider for --enrich-threat-intel (only 'fake' is supported in this milestone).",
     )
+    parser.add_argument(
+        "--incident-id",
+        type=str,
+        default=None,
+        help="Optional explicit incident ID override (for deterministic test fixtures).",
+    )
 
     args = parser.parse_args()
 
@@ -1117,6 +1183,10 @@ def main() -> int:
     if args.jira_issue_type is not None and (not args.create_ticket or args.ticket_provider != "jira"):
         parser.error("--jira-issue-type requires --create-ticket and --ticket-provider jira")
 
+    synthetic_incident_id = args.incident_id
+    if args.mode == "synthetic-critical" and synthetic_incident_id is None:
+        synthetic_incident_id = generate_synthetic_incident_id()
+
     return run_demo(
         mode=args.mode,
         provider=provider,
@@ -1130,6 +1200,7 @@ def main() -> int:
         kill_switch=args.kill_switch,
         enrich_threat_intel=args.enrich_threat_intel,
         threat_intel_provider=args.threat_intel_provider,
+        synthetic_incident_id=synthetic_incident_id,
     )
 
 
