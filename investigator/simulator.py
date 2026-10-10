@@ -52,6 +52,7 @@ SIMULATION_DETAIL_CODES = frozenset({
     "simulation_not_required",
     "human_review_required",
     "incident_record_deferred",
+    "simulation_deferred_pending_approval",
 })
 
 

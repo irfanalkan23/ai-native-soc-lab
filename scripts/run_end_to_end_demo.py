@@ -465,6 +465,8 @@ def _render_safe_summary(
     if approval_record is not None:
         stream.write(f"  Approval Decision: {approval_record.decision.value} ({approval_record.reason_code})\n")
         stream.write(f"  Approver Label:    {approval_record.approver}\n")
+    elif decision.requires_human_approval:
+        stream.write("  Approval State:    PENDING (Deferred to SOC Analyst UI)\n")
     else:
         stream.write("  Approval Prompt:   SKIPPED (Action does not require approval)\n")
 
@@ -537,6 +539,7 @@ def run_demo(
     approval_ledger_path: Optional[Path] = None,
     approval_clock: Optional[Callable[[], datetime]] = None,
     synthetic_incident_id: Optional[str] = None,
+    approval_mode: str = "cli",
 ) -> int:
     """Execute the end-to-end integration demo workflow.
 
@@ -897,20 +900,144 @@ def run_demo(
     )
 
     # -----------------------------------------------------------------------
-    # Step 5: Human Approval Gate (Only when strictly required)
+    # Step 5: Human Approval Gate & Deferred UI Branch
     # -----------------------------------------------------------------------
     approval_record: Optional[ApprovalRecord] = None
     if policy_decision.requires_human_approval:
-        try:
-            approval_record = request_cli_approval(
-                context=auth_context,
-                stream_in=in_stream,
-                stream_out=out_stream,
-                audit_log=audit_log,
+        if approval_mode == "ui":
+            sim_result = SimulationResult(
+                incident_id=incident.incident_id,
+                status=SimulationStatus.NOT_EXECUTED,
+                proposed_action=policy_decision.proposed_action,
+                detail_code="simulation_deferred_pending_approval",
             )
-        except ApprovalGateError as err:
-            out_stream.write(f"[!] Approval gate error: {err}\n")
-            return 1
+            incident_rec: Optional[IncidentRecord] = None
+            written_incident_path: Optional[Path] = None
+            try:
+                incident_rec = build_incident_record(
+                    investigation_input=incident,
+                    investigation_result=inv_result,
+                    policy_decision=policy_decision,
+                    simulation_result=sim_result,
+                    approval_record=None,
+                    evidence_source=evidence_source,
+                    deterministic_decoded_command=deterministic_decoded,
+                    mitre_technique_id=mitre_id,
+                )
+                target_incidents_dir = incidents_dir or DEFAULT_INCIDENTS_DIR
+                writer = IncidentJsonWriter(target_incidents_dir)
+                written_incident_path = writer.write_record(incident_rec, overwrite=True)
+            except (IncidentRecordError, IncidentConsistencyError, IncidentWriterError) as err:
+                out_stream.write(f"[!] incident_record_persistence_failed: {err}\n")
+                return 1
+
+            ticket_result: Optional[TicketResult] = None
+            if create_ticket:
+                try:
+                    runtime_guard.check_execution_permitted(RuntimeCheckpoint.TICKETING)
+                except RuntimeHaltError as err:
+                    out_stream.write(f"[!] Runtime guard blocked ticketing write: {err}\n")
+                    return 1
+
+                seq = len(audit_log.events())
+                audit_log.append(AuditEvent(
+                    event_type=AuditEventType.TICKET_REQUESTED,
+                    incident_id=incident.incident_id,
+                    sequence=seq,
+                    detail_code="ticket_request_initiated",
+                ))
+
+                try:
+                    project_key = jira_project if (ticket_provider == "jira" and jira_project) else "SEC"
+                    issue_type = jira_issue_type if (ticket_provider == "jira" and jira_issue_type) else "Incident"
+                    ticket_config = TicketConfig(
+                        project_key=project_key,
+                        issue_type=issue_type,
+                        allowed_labels=tuple(sorted(ALLOWED_TICKET_LABELS)),
+                        include_decoded_command=False,
+                    )
+                    ticket_req = build_ticket_request(incident_rec, ticket_config)
+
+                    if ticket_provider == "fake":
+                        ticket_client = FakeTicketClient()
+                    elif ticket_provider == "jira":
+                        ticket_client = jira_client or JiraTicketClient.from_env()
+                    else:
+                        raise TicketClientError(f"unsupported ticket provider: {ticket_provider}")
+
+                    ticket_result = ticket_client.create_ticket(ticket_req)
+                    if not ticket_result.success:
+                        raise TicketingError("ticket_creation_failed")
+
+                    seq = len(audit_log.events())
+                    audit_log.append(AuditEvent(
+                        event_type=AuditEventType.TICKET_CREATED,
+                        incident_id=incident.incident_id,
+                        sequence=seq,
+                        detail_code=ticket_result.detail_code,
+                    ))
+                    # Update persisted record with jira_ticket_key
+                    incident_rec = incident_rec.with_jira_ticket_key(ticket_result.ticket_key)
+                    written_incident_path = writer.write_record(incident_rec, overwrite=True)
+                except (TicketingError, Exception):
+                    seq = len(audit_log.events())
+                    audit_log.append(AuditEvent(
+                        event_type=AuditEventType.TICKET_FAILED,
+                        incident_id=incident.incident_id,
+                        sequence=seq,
+                        detail_code="ticket_dispatch_failed",
+                    ))
+                    out_stream.write("[!] ticket_creation_failed\n")
+                    if persist_audit:
+                        target_audit_path = audit_log_path or DEFAULT_AUDIT_LOG_PATH
+                        try:
+                            writer_audit = JsonlAuditWriter(target_audit_path)
+                            writer_audit.write_events(audit_log.events())
+                        except (AuditWriterError, AuditPathError, AuditWriteError):
+                            out_stream.write("[!] audit_persistence_failed\n")
+                            return 1
+                    return 1
+
+            target_audit_path: Optional[Path] = None
+            if persist_audit:
+                target_audit_path = audit_log_path or DEFAULT_AUDIT_LOG_PATH
+                try:
+                    writer_audit = JsonlAuditWriter(target_audit_path)
+                    writer_audit.write_events(audit_log.events())
+                except (AuditWriterError, AuditPathError, AuditWriteError):
+                    out_stream.write("[!] audit_persistence_failed\n")
+                    return 1
+
+            out_stream.write(f"\n[*] Incident {incident.incident_id} is awaiting analyst approval in the SOC Analyst UI.\n")
+            _render_safe_summary(
+                stream=out_stream,
+                incident=incident,
+                evidence_source=evidence_source,
+                retrieved_count=retrieved_count,
+                decoded_command=deterministic_decoded,
+                mitre_technique=mitre_id,
+                inv_result=inv_result,
+                decision=policy_decision,
+                approval_record=None,
+                sim_result=sim_result,
+                audit_log=audit_log,
+                persisted_path=target_audit_path,
+                written_incident_path=written_incident_path,
+                ticket_result=ticket_result,
+                ti_signal=ti_signal,
+            )
+            return 0
+        else:
+            try:
+                approval_record = request_cli_approval(
+                    context=auth_context,
+                    stream_in=in_stream,
+                    stream_out=out_stream,
+                    audit_log=audit_log,
+                )
+            except ApprovalGateError as err:
+                out_stream.write(f"[!] Approval gate error: {err}\n")
+                return 1
 
     # -----------------------------------------------------------------------
     # Step 6: Simulated Response Execution (Zero Endpoint Mutation)
@@ -1019,6 +1146,11 @@ def run_demo(
                 sequence=seq,
                 detail_code=ticket_result.detail_code,
             ))
+            if incident_rec is not None and write_incident:
+                incident_rec = incident_rec.with_jira_ticket_key(ticket_result.ticket_key)
+                target_incidents_dir = incidents_dir or DEFAULT_INCIDENTS_DIR
+                writer = IncidentJsonWriter(target_incidents_dir)
+                written_incident_path = writer.write_record(incident_rec, overwrite=True)
         except (TicketingError, Exception):
             seq = len(audit_log.events())
             audit_log.append(AuditEvent(
@@ -1075,8 +1207,8 @@ def run_demo(
     return 0
 
 
-def main() -> int:
-    """Parse command line arguments and execute the demo harness."""
+def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
+    """Parse command line arguments and return validated Namespace."""
     parser = argparse.ArgumentParser(
         description="AI-Native SOC Lab -- End-to-End Demo Integration Harness",
     )
@@ -1158,17 +1290,18 @@ def main() -> int:
         default=None,
         help="Optional explicit incident ID override (for deterministic test fixtures).",
     )
+    parser.add_argument(
+        "--approval-mode",
+        choices=["cli", "ui"],
+        default="cli",
+        help="Approval workflow mode: 'cli' prompts interactively in terminal; 'ui' defers approval-required actions to the SOC Analyst UI.",
+    )
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     # Invariant: synthetic-critical mode must NOT accept --provider
     if args.mode == "synthetic-critical" and args.provider is not None:
         parser.error("--provider is not allowed for synthetic-critical mode (strictly uses deterministic FakeModel)")
-
-    # live modes default to fake if not specified
-    provider = args.provider
-    if args.mode in ("live-benign", "live-network-retrieval") and provider is None:
-        provider = "fake"
 
     if not (1 <= args.minutes <= 60):
         parser.error("--minutes must be between 1 and 60")
@@ -1182,6 +1315,18 @@ def main() -> int:
 
     if args.jira_issue_type is not None and (not args.create_ticket or args.ticket_provider != "jira"):
         parser.error("--jira-issue-type requires --create-ticket and --ticket-provider jira")
+
+    return args
+
+
+def main() -> int:
+    """Parse command line arguments and execute the demo harness."""
+    args = _parse_args()
+
+    # live modes default to fake if not specified
+    provider = args.provider
+    if args.mode in ("live-benign", "live-network-retrieval") and provider is None:
+        provider = "fake"
 
     synthetic_incident_id = args.incident_id
     if args.mode == "synthetic-critical" and synthetic_incident_id is None:
@@ -1201,6 +1346,7 @@ def main() -> int:
         enrich_threat_intel=args.enrich_threat_intel,
         threat_intel_provider=args.threat_intel_provider,
         synthetic_incident_id=synthetic_incident_id,
+        approval_mode=args.approval_mode,
     )
 
 

@@ -26,7 +26,7 @@ Security & Trust Model:
        durability guarantee claimed), path traversal protection, sanitized exceptions.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from enum import Enum
 import json
@@ -205,6 +205,7 @@ class IncidentRecord:
     threat_intel_status: Optional[str] = None
     threat_intel_skip_reason: Optional[str] = None
     threat_intel_observation: Optional[ThreatIntelObservation] = None
+    jira_ticket_key: Optional[str] = None
 
     def __post_init__(self) -> None:
         """Validate all field types, bounds, and allowlisted enums."""
@@ -419,6 +420,17 @@ class IncidentRecord:
                     "threat_intel_skip_reason must be None when threat_intel_status is None"
                 )
 
+        # 18. jira_ticket_key (Optional)
+        if self.jira_ticket_key is not None:
+            if type(self.jira_ticket_key) is not str or not self.jira_ticket_key.strip():
+                raise IncidentRecordError("jira_ticket_key must be a non-empty str or None")
+            if len(self.jira_ticket_key) > 64:
+                raise IncidentRecordError("jira_ticket_key exceeds max length 64")
+
+    def with_jira_ticket_key(self, ticket_key: str) -> "IncidentRecord":
+        """Return a validated copy of IncidentRecord with jira_ticket_key populated."""
+        return replace(self, jira_ticket_key=ticket_key)
+
     def to_dict(self) -> Dict[str, Any]:
         """Return a structured dictionary representation with allowlisted fields only."""
         d: Dict[str, Any] = {
@@ -455,6 +467,8 @@ class IncidentRecord:
             d["threat_intel_skip_reason"] = self.threat_intel_skip_reason
         if self.threat_intel_observation is not None:
             d["threat_intel_observation"] = self.threat_intel_observation.to_dict()
+        if self.jira_ticket_key is not None:
+            d["jira_ticket_key"] = self.jira_ticket_key
         return d
 
     def to_json(self, indent: int = 2) -> str:
@@ -532,6 +546,7 @@ class IncidentRecord:
             threat_intel_status=data.get("threat_intel_status"),
             threat_intel_skip_reason=data.get("threat_intel_skip_reason"),
             threat_intel_observation=obs,
+            jira_ticket_key=data.get("jira_ticket_key") or data.get("ticket_key"),
         )
 
 
@@ -545,6 +560,7 @@ def build_incident_record(
     deterministic_decoded_command: Optional[str] = None,
     mitre_technique_id: Optional[str] = None,
     created_at_utc: Optional[str] = None,
+    jira_ticket_key: Optional[str] = None,
 ) -> IncidentRecord:
     """Build and validate an immutable IncidentRecord from verified pipeline outputs.
 
@@ -612,11 +628,17 @@ def build_incident_record(
     # 4. Human Approval and Simulation Consistency
     if policy_decision.requires_human_approval:
         if approval_record is None:
-            raise IncidentConsistencyError("Consequential policy decision mandates approval_record, but None was provided")
-        if policy_decision.proposed_action is not ProposedAction.SIMULATE_ENDPOINT_ISOLATION:
+            if (
+                simulation_result.status is SimulationStatus.NOT_EXECUTED
+                and simulation_result.detail_code == "simulation_deferred_pending_approval"
+            ):
+                approval_status = IncidentApprovalStatus.PENDING.value
+                approval_reason_code = None
+            else:
+                raise IncidentConsistencyError("Consequential policy decision mandates approval_record, but None was provided")
+        elif policy_decision.proposed_action is not ProposedAction.SIMULATE_ENDPOINT_ISOLATION:
             raise IncidentConsistencyError("Consequential approval strictly required only for SIMULATE_ENDPOINT_ISOLATION")
-
-        if approval_record.decision is ApprovalDecision.APPROVED:
+        elif approval_record.decision is ApprovalDecision.APPROVED:
             approval_status = IncidentApprovalStatus.APPROVED.value
             approval_reason_code = approval_record.reason_code
             if (
@@ -700,6 +722,7 @@ def build_incident_record(
         approval_reason_code=approval_reason_code,
         simulation_status=simulation_result.status.value,
         simulation_detail_code=simulation_result.detail_code,
+        jira_ticket_key=jira_ticket_key,
     )
 
 
