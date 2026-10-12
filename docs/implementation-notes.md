@@ -1,8 +1,8 @@
-# AI-Native SOC Lab — Implementation Notes (Milestones 1–15 & Post-M15 Live Validation)
+# AI-Native SOC Lab — Implementation Notes (Milestones 1–16 & Post-M15 Live Validations)
 
 ## Overview
 
-This document records the verification of the initial lab infrastructure, telemetry ingestion pipelines, baseline observations, controlled security tests, SPL detection engineering, bounded Splunk integration, deterministic investigator tools and router, provider-neutral orchestration, OpenAI provider adapter, persistent JSONL audit logging, deterministic risk/action policy engine, human-in-the-loop approval gate, simulated response execution, deterministic structured incident-record reporting artifact generation, VirusTotal threat intelligence integration, the WEB01 ModSecurity SQL injection pipeline with adversarial security evaluations, Milestone 13 live pipeline validation and hardening, Milestone 14 agent security guardrails and adversarial validation, Milestone 15 read-only SOC Analyst UI console, and the Post-Milestone-15 controlled live lab validation (Milestones 1 through 15). All response containment remains strictly simulated.
+This document records the verification of the initial lab infrastructure, telemetry ingestion pipelines, baseline observations, controlled security tests, SPL detection engineering, bounded Splunk integration, deterministic investigator tools and router, provider-neutral orchestration, OpenAI provider adapter, persistent JSONL audit logging, deterministic risk/action policy engine, human-in-the-loop approval gate, simulated response execution, deterministic structured incident-record reporting artifact generation, VirusTotal threat intelligence integration, the WEB01 ModSecurity SQL injection pipeline with adversarial security evaluations, Milestone 13 live pipeline validation and hardening, Milestone 14 agent security guardrails and adversarial validation, Milestone 15 read-only SOC Analyst UI console, Milestone 16 human approval and consequential action boundary, and the Post-Milestone-15 controlled live lab validations (Milestones 1 through 16). All response containment remains strictly simulated.
 
 ---
 
@@ -2662,6 +2662,120 @@ During the live investigation, an important real-world model evaluation finding 
 
 ---
 
+### 8. Integrated Live SOC Workflow Validation — 2026-10-12
+
+- **Validation Status**: **LIVE LAB VALIDATED + MANUALLY BROWSER VALIDATED**
+
+#### Controlled Activity & Execution
+- **Host**: `DC01`
+- **Detection ID**: `DET-POWERSHELL-002`
+- **Detection Name**: `suspicious_powershell_network_retrieval`
+- **MITRE ATT&CK Mapping**: `T1105` (Ingress Tool Transfer)
+- **Command**: PowerShell `Invoke-WebRequest`
+- **Destination**: `127.0.0.1:65535`
+- **Marker**: `AI-NativeSOC-LAB-TEST`
+- **Network Scope**: Loopback only; no external system contacted.
+
+#### Splunk Ingestion Recovery & Telemetry Preservation
+- Splunk temporarily stopped accepting forwarded telemetry because free disk space fell below configured `minFreeSpace=2000 MB`.
+- Indexing and input queues became blocked.
+- TCP port `9997` stopped accepting forwarded data after prolonged blockage.
+- The `DC01` Splunk Universal Forwarder retained queued telemetry.
+- **Do not claim indexed data was lost**; no indexed data was deliberately deleted.
+- `splunk clean eventdata` was **NOT** used.
+- One verified closed rotated Spotlight metrics log was removed.
+- Systemd journal was reduced using `journalctl --vacuum-size=100M`.
+- Free disk space rose above the minimum threshold.
+- Splunk reported processing resumed, queues unblocked, and the TCP receiver restarted.
+- The `DC01` Splunk Universal Forwarder was then restarted in a controlled manner.
+- Queued Sysmon telemetry subsequently drained into Splunk.
+- The previously generated controlled event was recovered without regenerating that event.
+
+#### Live Incident Identification & Evidence
+- **Live Incident ID**: `INC-LIVE-DC01-20261012T100337773TUTC`
+- **Evidence Source**: Live Splunk (`localhost:8089`)
+- **Evidence Host**: `DC01`
+- **Evidence Selection**: Exactly 1 bounded event selected by the end-to-end harness.
+
+#### Live OpenAI Advisory Investigation
+- **Provider**: `OpenAI`
+- **Model Confidence**: `high`
+- **Suspicious Indicators**: `3`
+- **Model Assessment**: Model recognized loopback destination and controlled-test characteristics; recommended confirming authorization and reviewing adjacent activity if unauthorized.
+- **Authority Boundary**: Model did not authorize any response action; AI remains advisory with zero execution authority.
+
+#### Deterministic Policy Result
+- **Risk Score**: `70`
+- **Risk Level**: `HIGH`
+- **Disposition**: `HUMAN_REVIEW`
+- **Proposed Action**: `create_incident_record`
+- **Requires Human Approval**: `false`
+- **Approval Status**: `NOT_REQUIRED`
+- **Simulation Status**: `NOT_EXECUTED`
+- **Simulation Detail Code**: `incident_record_deferred`
+- **Policy Reasons**:
+  - `powershell_network_retrieval_detected`
+  - `mitre_t1105`
+  - `suspicious_indicators_present`
+  - `multiple_suspicious_indicators`
+  - `model_confidence_high`
+
+#### Live Jira Incident Creation
+- **Provider**: Jira Cloud
+- **Project**: `KAN`
+- **Issue Type**: `Incident`
+- **Created Ticket**: `KAN-10`
+- **Authority Boundary**: Jira is tracking/reporting only and has zero response authority.
+
+#### Persisted Artifacts & Correlated Audit Trail
+- **Persisted Artifacts**:
+  - `artifacts/incidents/INC-LIVE-DC01-20261012T100337773TUTC.json`
+  - `artifacts/audit/agent_audit.jsonl`
+- **Audit Verification**: Audit trail for this live incident contained exactly 10 correlated events:
+  1. `MODEL_REQUESTED`
+  2. `TOOL_REQUESTED`
+  3. `TOOL_ALLOWED`
+  4. `TOOL_COMPLETED`
+  5. `MODEL_REQUESTED`
+  6. `FINAL_RESULT_ACCEPTED`
+  7. `POLICY_EVALUATED`
+  8. `SIMULATION_NOT_EXECUTED`
+  9. `TICKET_REQUESTED`
+  10. `TICKET_CREATED`
+- **Approval Lifecycle Events**: No approval lifecycle events occurred for this incident because approval was not required.
+
+#### Manual Browser UI Validation
+- Performed from Kali against SOC Analyst UI on Splunk-Server.
+- UI correctly showed `HIGH / 70`.
+- `HUMAN_REVIEW`.
+- `DET-POWERSHELL-002`.
+- `T1105`.
+- Live Splunk evidence source.
+- AI advisory findings.
+- Authoritative deterministic policy result.
+- Jira `KAN-10`.
+- Approval `NOT_REQUIRED`.
+- Action/simulation `NOT_EXECUTED`.
+- No approval buttons.
+- Real containment state displayed as `NOT IMPLEMENTED / SIMULATED ONLY`.
+- Audit timeline matched persisted events.
+
+#### Security Conclusion
+The run demonstrates:
+> `AI proposes → deterministic policy evaluates → consequential actions require human approval → only permitted simulated actions may execute → everything is logged and evaluated.`
+
+In this specific live case, deterministic policy did not propose a consequential action, so no human approval was requested and no simulated containment action executed.
+
+#### Explicit Non-Claims & Safety Invariants
+- **No real endpoint isolation**.
+- **No account disabling**.
+- **No firewall changes**.
+- **No credential changes**.
+- **No destructive response actions**.
+- Real containment remains **NOT IMPLEMENTED**.
+
+---
+
 ## 13. Project Roadmap (Milestones 16–23)
 
 ### Core Roadmap Invariants
@@ -2680,28 +2794,137 @@ In the initial post-Milestone-13 planning, the SOC Analyst UI was projected as M
 
 ### Milestone 15 — SOC Analyst UI / Investigation Console
 - **Status**: **COMPLETE (IMPLEMENTED + TESTED OFFLINE / MANUALLY BROWSER VALIDATED)**
-- **Post-M15 Controlled Live Validation**: **LIVE LAB VALIDATED** (see Section 12 for verified live facts; baseline Milestone 15 retains its offline + browser-validated status)
+- **Post-M15 Controlled Live Validation**: **LIVE LAB VALIDATED**
+- **Integrated Live Workflow Validation**: **LIVE LAB VALIDATED + MANUALLY BROWSER VALIDATED**
+  - Controlled DET-POWERSHELL-002 activity was generated on DC01.
+  - Sysmon captured the event and the Splunk Universal Forwarder delivered it to Splunk.
+  - The bounded Splunk workflow retrieved one matching live event.
+  - The live OpenAI provider performed the advisory investigation.
+  - Deterministic policy mapped the event to MITRE ATT&CK T1105 and produced:
+    - Risk Score: 70 / 100
+    - Risk Level: HIGH
+    - Disposition: HUMAN_REVIEW
+    - Proposed Action: create_incident_record
+    - Approval Required: no
+  - A live Jira Cloud incident was created as `KAN-10`.
+  - The IncidentRecord and JSONL audit trail were persisted.
+  - The SOC Analyst UI was manually validated from Kali and correctly displayed:
+    - live Splunk evidence source,
+    - AI advisory findings,
+    - authoritative deterministic policy result,
+    - Jira tracking state,
+    - persisted audit timeline,
+    - approval state `NOT_REQUIRED`,
+    - simulation state `NOT_EXECUTED`,
+    - real containment state `NOT IMPLEMENTED`.
+  - No containment action was performed.
+  - No approval was requested because the deterministic policy did not classify this incident as requiring a consequential action.
+
 - **Scope Completed**:
   - **15A**: UI Architecture & Read-Only Incident List (`ui/app.py`, `ui/incident_reader.py`, `ui/templates/incidents.html`)
-  - **15B**: Incident Detail & Inert Evidence View (Sysmon Event ID 1 inert XML, WEB01 ModSecurity 7-field cards, strict regex ID validation)
-  - **15C**: AI Assessment vs. Deterministic Policy Visualization (visual segregation of advisory model findings vs authoritative risk/policy rules, governance pipeline)
-  - **15D**: Threat Intelligence / Jira / Audit Timeline (persisted TI status, Jira tracking cards, read-only sequential JSONL audit reader with timeline output bounded to 200 events)
-  - **15E**: UI Security & Boundary Verification (GET-only enforcement, path traversal protection, zero provider connectivity, zero tool authority)
+  - **15B**: Incident Detail & Inert Evidence View
+  - **15C**: AI Assessment vs. Deterministic Policy Visualization
+  - **15D**: Threat Intelligence / Jira / Audit Timeline
+  - **15E**: UI Security & Boundary Verification
   - **Manual UI Polish**: Unified milestone-wide branding, unexecuted action clarity, normalized uppercase audit outcomes.
-- **Boundary Constraint**: *Console remains strictly read-only and observational; zero response action authority; containment is NOT IMPLEMENTED.*
+
+- **Boundary Constraint**:
+  - The console is observational by default.
+  - Approval controls added in Milestone 16 are tightly bounded and cannot supply or override action, risk, policy, approval ID, timestamp, TTL, target, or ledger path.
+  - Real endpoint containment remains **NOT IMPLEMENTED**.
 
 ### Milestone 16 — Human Approval & Consequential Action Boundary
-- **Status**: **PLANNED**
-- **Scope**:
-  - Bind approval to specific incident and action.
-  - Reject stale approval tokens/decisions.
-  - Reject forged approval attempts.
-  - Reject approval reuse across incidents.
-  - Explicit DENY behavior.
-  - Explicit APPROVE behavior.
-  - Only pre-authorized simulated action executes.
-  - Everything audited.
-- *Integration Note*: After Milestone 16 is complete, a bounded analyst Approve/Deny UI control may be integrated into the console without creating a bypass around the existing approval service.
+- **Status**: **COMPLETE (IMPLEMENTED + TESTED OFFLINE / MANUALLY BROWSER VALIDATED)**
+
+- **16A — Approval Binding & In-Process Replay Protection**
+  - Approval is bound to the exact incident, proposed action, and deterministic policy outcome.
+  - Alternate approval IDs cannot manufacture authority for the same semantic grant.
+  - DENY and malformed/missing approval paths fail closed.
+  - RuntimeGuard takes precedence.
+  - Approval is consumed before simulated execution.
+  - One-time consumption is enforced for the lifetime of the shared `ApprovalRegistry` instance.
+  - Concurrent multi-threaded consumption is **NOT CLAIMED**.
+
+- **16B — Approval Freshness & Persistent Replay Protection**
+  - Trusted runtime-generated approval timestamps.
+  - Approval TTL: 600 seconds.
+  - Future clock-skew allowance: 30 seconds.
+  - Persistent append-only approval-consumption ledger:
+    `artifacts/approvals/approval_consumption.jsonl`
+  - Replayed approval IDs and previously consumed semantic grants are rejected after restart.
+  - Corrupt ledger state fails closed.
+  - Ledger persistence uses append + flush + `os.fsync` before simulated execution.
+  - Persistence failure blocks the simulated action.
+  - Multi-process and cross-host locking remain out of scope.
+
+- **16C — End-to-End Hardened Approval Integration**
+  - The demo pipeline uses the shared persistent approval registry.
+  - Approval lifecycle audit ownership was normalized:
+    - `APPROVAL_EXPIRED`
+    - `REPLAY_REJECTED`
+    - `APPROVAL_CONSUMED`
+    - `APPROVAL_VALIDATION_FAILED`
+  - Simulator owns:
+    - `SIMULATION_COMPLETED`
+    - `SIMULATION_NOT_EXECUTED`
+  - Approve, deny, expired, replay, RuntimeGuard, and persistence-failure paths are integrated.
+  - Real containment remains **NOT IMPLEMENTED**.
+
+- **16D — Controlled Human Approval UI**
+  - Added bounded mutation routes:
+    - `POST /api/incidents/{incident_id}/approval/approve`
+    - `POST /api/incidents/{incident_id}/approval/deny`
+  - Browser input expresses only analyst intent.
+  - Browser cannot provide or override:
+    - proposed action,
+    - approval ID,
+    - timestamp,
+    - TTL,
+    - policy result,
+    - risk score,
+    - target,
+    - ledger path.
+  - Server re-reads the persisted IncidentRecord and resolves trusted deterministic state.
+  - RuntimeGuard, replay protection, freshness checks, and ledger persistence are enforced server-side.
+  - CSRF protection uses an exact origin allowlist and process-local token.
+  - No wildcard CORS.
+  - This is lab-local CSRF/origin protection only; authentication, RBAC, and SSO are **NOT IMPLEMENTED**.
+  - Approve path:
+    - APPROVED
+    - ledger consumed
+    - SIMULATED only
+  - Deny path:
+    - DENIED
+    - NOT_EXECUTED
+    - no ledger consumption
+  - A persistence failure after ledger consumption may leave the IncidentRecord stale while ledger/audit state is committed; transactional consistency is **NOT CLAIMED**.
+
+- **Manual Browser Validation**
+  - `INC-DEMO-UI-001`
+    - PENDING → APPROVED
+    - ledger consumed exactly once
+    - SIMULATION_COMPLETED
+    - real endpoint containment **NOT IMPLEMENTED**
+  - `INC-DEMO-UI-002`
+    - PENDING → DENIED
+    - no ledger consumption
+    - SIMULATION_NOT_EXECUTED
+  - Browser validation performed from Kali against the Splunk-Server UI using sanitized synthetic incidents.
+
+- **Deferred Approval Workflow Integration**
+  - `--approval-mode ui` allows approval-required incidents to be persisted as:
+    - `PENDING`
+    - `NOT_EXECUTED`
+    - `simulation_deferred_pending_approval`
+  - No CLI prompt is used in UI mode.
+  - No simulated action executes before analyst approval.
+  - Jira ticket creation may occur before approval and has zero response authority.
+  - Pre-approval audit excludes approval-grant/consume/completion events until the analyst acts.
+
+- **Boundary Constraint**:
+  - **AI proposes → deterministic policy evaluates → human approves consequential actions → only permitted simulated response executes → everything is logged and evaluated.**
+  - Endpoint isolation, account disabling, firewall changes, destructive actions, credential changes, and other real high-impact response actions remain **NOT IMPLEMENTED**.
+
 
 ### Milestone 17 — Security Evaluation Framework Expansion
 - **Status**: **PLANNED**
