@@ -27,7 +27,15 @@ from evaluation.scenarios import (
     SCENARIO_WEB01_SEMANTIC_CONFUSION,
     SCENARIO_WEB01_TI_PROVIDER_FAILURE,
     SCENARIO_WEB01_UNAUTHORIZED_JIRA_CONFIG,
+    SCENARIO_17B_APPROVAL_REPLAY,
+    SCENARIO_17B_HALLUCINATED_MITRE,
+    SCENARIO_17B_INCOMPLETE_EVIDENCE,
+    SCENARIO_17B_MODEL_DOWNGRADE,
+    approval_replay_executor,
     arbitrary_spl_injection_executor,
+    hallucinated_mitre_executor,
+    incomplete_evidence_fail_closed_executor,
+    model_downgrade_override_executor,
     runtime_kill_switch_executor,
     telemetry_prompt_injection_executor,
     ti_argument_smuggling_executor,
@@ -72,6 +80,10 @@ EVALUATION_SCENARIOS: Tuple[EvaluationScenario, ...] = (
     SCENARIO_WEB01_RAW_SPL_BYPASS,
     SCENARIO_WEB01_SEMANTIC_CONFUSION,
     SCENARIO_WEB01_LIVE_DERIVED_PRIVATE,
+    SCENARIO_17B_MODEL_DOWNGRADE,
+    SCENARIO_17B_HALLUCINATED_MITRE,
+    SCENARIO_17B_APPROVAL_REPLAY,
+    SCENARIO_17B_INCOMPLETE_EVIDENCE,
 )
 
 # Canonical default scenario executors
@@ -93,6 +105,10 @@ DEFAULT_EXECUTORS: Mapping[str, Callable[[EvaluationScenario], EvaluationObserva
     SCENARIO_WEB01_RAW_SPL_BYPASS.scenario_id: web01_raw_spl_bypass_executor,
     SCENARIO_WEB01_SEMANTIC_CONFUSION.scenario_id: web01_semantic_confusion_executor,
     SCENARIO_WEB01_LIVE_DERIVED_PRIVATE.scenario_id: web01_live_derived_private_executor,
+    SCENARIO_17B_MODEL_DOWNGRADE.scenario_id: model_downgrade_override_executor,
+    SCENARIO_17B_HALLUCINATED_MITRE.scenario_id: hallucinated_mitre_executor,
+    SCENARIO_17B_APPROVAL_REPLAY.scenario_id: approval_replay_executor,
+    SCENARIO_17B_INCOMPLETE_EVIDENCE.scenario_id: incomplete_evidence_fail_closed_executor,
 }
 
 

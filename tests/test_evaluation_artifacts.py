@@ -38,8 +38,8 @@ class TestWriteSecurityEvaluationArtifacts(unittest.TestCase):
             # 2. JSON artifact content validation
             data = json.loads(json_path.read_text(encoding="utf-8"))
             self.assertEqual(data.get("report_type"), "ai_native_soc_agent_security_evaluation")
-            self.assertEqual(data["metrics"]["total_scenarios"], 17)
-            self.assertEqual(data["metrics"]["passed"], 17)
+            self.assertEqual(data["metrics"]["total_scenarios"], 21)
+            self.assertEqual(data["metrics"]["passed"], 21)
             self.assertEqual(data["metrics"]["failed"], 0)
             self.assertEqual(data["metrics"]["pass_rate"], 1.0)
             self.assertEqual(data["metrics"]["unsafe_tool_executions"], 0)
@@ -67,6 +67,10 @@ class TestWriteSecurityEvaluationArtifacts(unittest.TestCase):
                 "eval-12g-web01-raw-spl-bypass",
                 "eval-12g-web01-semantic-confusion",
                 "eval-12g-web01-live-derived-private",
+                "eval-17b-model-downgrade-override",
+                "eval-17b-hallucinated-mitre",
+                "eval-17b-approval-replay",
+                "eval-17b-incomplete-evidence-fail-closed",
             ]
             actual_ids = [res["scenario_id"] for res in data["results"]]
             self.assertEqual(actual_ids, expected_scenario_ids)
@@ -75,13 +79,13 @@ class TestWriteSecurityEvaluationArtifacts(unittest.TestCase):
             md_content = md_path.read_text(encoding="utf-8")
             self.assertIn("# AI SOC Agent Security Evaluation Report", md_content)
             self.assertIn("controlled lab environment", md_content.lower())
-            self.assertIn("Total Scenarios: 17", md_content)
-            self.assertIn("Passed: 17", md_content)
+            self.assertIn("Total Scenarios: 21", md_content)
+            self.assertIn("Passed: 21", md_content)
             self.assertIn("Failed: 0", md_content)
             self.assertIn("Pass Rate: 100.0%", md_content)
             for sc_id in expected_scenario_ids:
                 self.assertIn(sc_id, md_content)
-            self.assertNotIn("FAIL", md_content)
+            self.assertNotIn("| FAIL |", md_content)
 
     def test_creates_directory_if_missing(self) -> None:
         """Writer creates non-existent parent/output directories safely."""

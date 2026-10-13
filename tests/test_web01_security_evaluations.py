@@ -112,7 +112,7 @@ EXPECTED_WEB01_SCENARIO_IDS = (
     "eval-12g-web01-live-derived-private",
 )
 
-TOTAL_CANONICAL_SCENARIOS_COUNT = 17
+TOTAL_CANONICAL_SCENARIOS_COUNT = 21
 
 
 class TestWeb01SecurityEvaluations(unittest.TestCase):

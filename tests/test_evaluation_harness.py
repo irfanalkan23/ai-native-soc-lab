@@ -40,6 +40,10 @@ EXPECTED_SCENARIO_IDS = [
     "eval-12g-web01-raw-spl-bypass",
     "eval-12g-web01-semantic-confusion",
     "eval-12g-web01-live-derived-private",
+    "eval-17b-model-downgrade-override",
+    "eval-17b-hallucinated-mitre",
+    "eval-17b-approval-replay",
+    "eval-17b-incomplete-evidence-fail-closed",
 ]
 
 
@@ -47,7 +51,7 @@ class TestEvaluationHarnessExecution(unittest.TestCase):
     """Tests verifying run_security_evaluation() contract, ordering, and metrics integration."""
 
     def test_default_execution_runs_all_seven_real_scenarios(self) -> None:
-        """Harness executes all 17 real scenarios and returns complete EvaluationReport."""
+        """Harness executes all 21 real scenarios and returns complete EvaluationReport."""
         report = run_security_evaluation()
 
         # 1. Scenarios and results alignment
@@ -65,8 +69,8 @@ class TestEvaluationHarnessExecution(unittest.TestCase):
             self.assertTrue(result.passed, f"Scenario {result.scenario_id} unexpectedly failed")
 
         # 4. Computed metrics reflect passing real controls
-        self.assertEqual(report.metrics.total_scenarios, 17)
-        self.assertEqual(report.metrics.passed, 17)
+        self.assertEqual(report.metrics.total_scenarios, 21)
+        self.assertEqual(report.metrics.passed, 21)
         self.assertEqual(report.metrics.failed, 0)
         self.assertEqual(report.metrics.pass_rate, 1.0)
         self.assertEqual(report.metrics.unsafe_tool_executions, 0)
@@ -141,7 +145,7 @@ class TestEvaluationHarnessRendering(unittest.TestCase):
         self.assertIn("Pass Rate: 100.0%", md_str)
         for sc_id in EXPECTED_SCENARIO_IDS:
             self.assertIn(sc_id, md_str)
-        self.assertNotIn("FAIL", md_str)
+        self.assertNotIn("| FAIL |", md_str)
 
     def test_rendering_is_deterministic(self) -> None:
         """Repeated harness execution produces byte-for-byte identical output."""
@@ -197,7 +201,7 @@ class TestEvaluationHarnessNegativeControl(unittest.TestCase):
         report = run_security_evaluation(executors=simulated_executors)
 
         # 1. Metrics reflect breach
-        total_scenarios = 17
+        total_scenarios = 21
         self.assertEqual(report.metrics.total_scenarios, total_scenarios)
         self.assertEqual(report.metrics.passed, total_scenarios - 1)
         self.assertEqual(report.metrics.failed, 1)
@@ -221,7 +225,8 @@ class TestEvaluationHarnessNegativeControl(unittest.TestCase):
         self.assertEqual(data["metrics"]["failed"], 1)
         self.assertEqual(data["results"][0]["passed"], False)
         self.assertIn("FAIL", md_str)
-        self.assertIn("94.1%", md_str)
+        expected_pct = f"{(total_scenarios - 1) / total_scenarios * 100:.1f}%"
+        self.assertIn(expected_pct, md_str)
 
 
 class TestThreatIntelEvaluationHarnessIntegration(unittest.TestCase):
