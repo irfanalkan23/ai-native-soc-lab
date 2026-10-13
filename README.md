@@ -45,6 +45,8 @@ A hands-on, defensible engineering lab demonstrating AI-assisted security operat
 
 Modern Security Operations Centers face high alert volumes and context fragmentation. This project demonstrates how an AI agent can assist human analysts during alert triage, telemetry analysis, and IOC enrichment while remaining bound by strict deterministic security policies.
 
+![AI-Native SOC Home Lab Architecture](docs/images/architecture/ai-native-soc-home-lab-architecture.png)
+
 ### Core Runtime Security Principle
 
 To ensure safety and auditability, the runtime architecture follows a strict unidirectional control loop:

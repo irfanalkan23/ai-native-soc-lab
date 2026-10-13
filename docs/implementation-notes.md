@@ -8,6 +8,8 @@ This document records the verification of the initial lab infrastructure, teleme
 
 ## 1. Verified Infrastructure
 
+![AI-Native SOC Home Lab Architecture](images/architecture/ai-native-soc-home-lab-architecture.png)
+
 All components have been deployed, networked, and verified in an isolated virtualized lab environment:
 
 | Component | Role | Details / Specifications | Status |
