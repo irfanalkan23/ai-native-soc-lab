@@ -36,6 +36,10 @@ _EVENT_CATEGORY_MAP: Dict[str, str] = {
     "APPROVAL_REQUESTED": "APPROVAL",
     "APPROVAL_GRANTED": "APPROVAL",
     "APPROVAL_DENIED": "APPROVAL",
+    "APPROVAL_EXPIRED": "APPROVAL",
+    "APPROVAL_VALIDATION_FAILED": "APPROVAL",
+    "APPROVAL_CONSUMED": "APPROVAL",
+    "APPROVAL_REPLAY_REJECTED": "APPROVAL",
     "SIMULATION_COMPLETED": "SIMULATION",
     "SIMULATION_NOT_EXECUTED": "SIMULATION",
     "TICKET_REQUESTED": "TICKETING",
@@ -146,9 +150,8 @@ class AuditReader:
             logger.warning("Failed to read audit log from %s: %s", self._path.name, exc)
             return []
 
-        # Deterministic ordering: sequence number ascending, timestamp ascending, detail_code tie-breaker
-        matched_events.sort(key=lambda ev: (ev.sequence, ev.timestamp or "", ev.detail_code))
-
+        # Preserves append-only chronological lifecycle order as recorded in the audit log.
+        # Sequence numbers are batch-local and cannot be assumed globally unique across batches.
         return matched_events[:clamped_limit]
 
     def _parse_event_record(self, record: Dict[str, Any], expected_id: str) -> Optional[AuditEventView]:

@@ -616,7 +616,7 @@ class TestUiSecurityBoundaries(unittest.TestCase):
         self.assertEqual(len(resp.json()), MAX_AUDIT_LIMIT)
 
     def test_37_audit_sorting_is_deterministic(self) -> None:
-        """Audit events written in reverse order are sorted deterministically ascending."""
+        """Audit events preserve deterministic append-only ledger order."""
         self._append_audit([
             {
                 "incident_id": "INC-15E-001",
@@ -638,7 +638,7 @@ class TestUiSecurityBoundaries(unittest.TestCase):
 
         events = self.client.get("/api/incidents/INC-15E-001/audit").json()
         seqs = [e["sequence"] for e in events]
-        self.assertEqual(seqs, sorted(seqs))
+        self.assertEqual(seqs, [1, 2, 99, 5])
 
     # =========================================================================
     # Part H — Oversized Data Handling

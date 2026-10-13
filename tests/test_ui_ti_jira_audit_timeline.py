@@ -341,9 +341,9 @@ class TestThreatIntelJiraAuditTimeline(unittest.TestCase):
         self.assertEqual(events[1]["sequence"], 2)
         self.assertEqual(events[1]["event_type"], "TOOL_ALLOWED")
 
-    def test_12_audit_events_sorted_deterministically(self) -> None:
-        """Audit events are sorted deterministically by sequence and timestamp regardless of file order."""
-        # Append out-of-order records
+    def test_12_audit_events_preserve_append_order(self) -> None:
+        """Audit events preserve append-only ledger order deterministically."""
+        # Append records in order 5, 1, 3
         self._append_audit_events([
             {
                 "incident_id": "INC-15D-001",
@@ -374,7 +374,7 @@ class TestThreatIntelJiraAuditTimeline(unittest.TestCase):
         resp = self.client.get("/api/incidents/INC-15D-001/audit")
         self.assertEqual(resp.status_code, 200)
         items = resp.json()
-        self.assertEqual([item["sequence"] for item in items], [1, 3, 5])
+        self.assertEqual([item["sequence"] for item in items], [5, 1, 3])
 
     def test_13_cross_incident_audit_isolation(self) -> None:
         """Strict isolation: Incident A's events never appear on Incident B's page or API."""
@@ -707,5 +707,131 @@ class TestThreatIntelJiraAuditTimeline(unittest.TestCase):
         self.assertIn("NOT EXECUTED", html)
 
 
+    def test_31_multi_batch_deferred_approval_timeline_preserves_append_order(self) -> None:
+        """Separate audit batches reusing sequence numbers render in true append/chronological order.
+
+        Regression test for presentation defect:
+            Batch 1: Investigation events (sequences 0–11 ending with APPROVAL_REQUIRED).
+            Batch 2: Approval lifecycle events (sequences 0–3 starting with APPROVAL_REQUESTED,
+                     APPROVAL_GRANTED, APPROVAL_CONSUMED, SIMULATION_COMPLETED).
+
+        Verifies:
+            1. All 16 events render in exact append order (Batch 1 followed by Batch 2).
+            2. Approval events (0–3) appear strictly AFTER APPROVAL_REQUIRED (#11).
+            3. No sequence interleaving occurs (e.g. APPROVAL_REQUESTED #0 does not interleave with MODEL_REQUESTED #0).
+            4. Original sequence values are preserved for evidence badge display.
+            5. APPROVAL_CONSUMED is categorized as 'APPROVAL' (not 'UNKNOWN / OTHER').
+        """
+        batch_1_investigation = [
+            {"incident_id": "INC-15D-001", "sequence": 0, "event_type": "MODEL_REQUESTED", "detail_code": "decision_idx=0"},
+            {"incident_id": "INC-15D-001", "sequence": 1, "event_type": "TOOL_REQUESTED", "detail_code": "decode_base64_powershell_requested"},
+            {"incident_id": "INC-15D-001", "sequence": 2, "event_type": "TOOL_ALLOWED", "detail_code": "decode_base64_powershell_allowed"},
+            {"incident_id": "INC-15D-001", "sequence": 3, "event_type": "TOOL_COMPLETED", "detail_code": "decode_base64_powershell_ok"},
+            {"incident_id": "INC-15D-001", "sequence": 4, "event_type": "MODEL_REQUESTED", "detail_code": "decision_idx=1"},
+            {"incident_id": "INC-15D-001", "sequence": 5, "event_type": "TOOL_REQUESTED", "detail_code": "map_mitre_technique_requested"},
+            {"incident_id": "INC-15D-001", "sequence": 6, "event_type": "TOOL_ALLOWED", "detail_code": "map_mitre_technique_allowed"},
+            {"incident_id": "INC-15D-001", "sequence": 7, "event_type": "TOOL_COMPLETED", "detail_code": "map_mitre_technique_ok"},
+            {"incident_id": "INC-15D-001", "sequence": 8, "event_type": "MODEL_REQUESTED", "detail_code": "decision_idx=2"},
+            {"incident_id": "INC-15D-001", "sequence": 9, "event_type": "FINAL_RESULT_ACCEPTED", "detail_code": "ok"},
+            {"incident_id": "INC-15D-001", "sequence": 10, "event_type": "POLICY_EVALUATED", "detail_code": "risk_critical"},
+            {"incident_id": "INC-15D-001", "sequence": 11, "event_type": "APPROVAL_REQUIRED", "detail_code": "approval_required"},
+        ]
+
+        batch_2_approval = [
+            {"incident_id": "INC-15D-001", "sequence": 0, "event_type": "APPROVAL_REQUESTED", "detail_code": "approval_requested"},
+            {"incident_id": "INC-15D-001", "sequence": 1, "event_type": "APPROVAL_GRANTED", "detail_code": "approval_granted"},
+            {"incident_id": "INC-15D-001", "sequence": 2, "event_type": "APPROVAL_CONSUMED", "detail_code": "approval_consumed"},
+            {"incident_id": "INC-15D-001", "sequence": 3, "event_type": "SIMULATION_COMPLETED", "detail_code": "simulated_endpoint_isolation"},
+        ]
+
+        self._append_audit_events(batch_1_investigation)
+        self._append_audit_events(batch_2_approval)
+
+        # 1. API Verification
+        resp_api = self.client.get("/api/incidents/INC-15D-001/audit")
+        self.assertEqual(resp_api.status_code, 200)
+        events = resp_api.json()
+        self.assertEqual(len(events), 16)
+
+        expected_event_types = [
+            "MODEL_REQUESTED",
+            "TOOL_REQUESTED",
+            "TOOL_ALLOWED",
+            "TOOL_COMPLETED",
+            "MODEL_REQUESTED",
+            "TOOL_REQUESTED",
+            "TOOL_ALLOWED",
+            "TOOL_COMPLETED",
+            "MODEL_REQUESTED",
+            "FINAL_RESULT_ACCEPTED",
+            "POLICY_EVALUATED",
+            "APPROVAL_REQUIRED",
+            "APPROVAL_REQUESTED",
+            "APPROVAL_GRANTED",
+            "APPROVAL_CONSUMED",
+            "SIMULATION_COMPLETED",
+        ]
+        actual_event_types = [e["event_type"] for e in events]
+        self.assertEqual(actual_event_types, expected_event_types)
+
+        expected_sequences = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 0, 1, 2, 3]
+        actual_sequences = [e["sequence"] for e in events]
+        self.assertEqual(actual_sequences, expected_sequences)
+
+        # 2. Category Check: APPROVAL_CONSUMED must be APPROVAL (not UNKNOWN / OTHER)
+        consumed_event = events[14]
+        self.assertEqual(consumed_event["event_type"], "APPROVAL_CONSUMED")
+        self.assertEqual(consumed_event["category"], "APPROVAL")
+
+        # 3. HTML Presentation Verification
+        resp_html = self.client.get("/incidents/INC-15D-001")
+        self.assertEqual(resp_html.status_code, 200)
+        html = resp_html.text
+
+        idx_required = html.index("APPROVAL_REQUIRED")
+        idx_requested = html.index("APPROVAL_REQUESTED")
+        idx_granted = html.index("APPROVAL_GRANTED")
+        idx_consumed = html.index("APPROVAL_CONSUMED")
+        idx_completed = html.index("SIMULATION_COMPLETED")
+
+        # Must render in strict append lifecycle order:
+        self.assertLess(idx_required, idx_requested)
+        self.assertLess(idx_requested, idx_granted)
+        self.assertLess(idx_granted, idx_consumed)
+        self.assertLess(idx_consumed, idx_completed)
+
+        # Approval events must not contain 'UNKNOWN / OTHER'
+        self.assertNotIn("UNKNOWN / OTHER", html)
+
+    def test_32_approval_lifecycle_category_mappings(self) -> None:
+        """All approval lifecycle event types map to category 'APPROVAL'."""
+        approval_types = [
+            "APPROVAL_REQUIRED",
+            "APPROVAL_REQUESTED",
+            "APPROVAL_GRANTED",
+            "APPROVAL_DENIED",
+            "APPROVAL_EXPIRED",
+            "APPROVAL_VALIDATION_FAILED",
+            "APPROVAL_CONSUMED",
+            "APPROVAL_REPLAY_REJECTED",
+        ]
+        for seq, evt in enumerate(approval_types):
+            self._append_audit_events([{
+                "incident_id": "INC-15D-001",
+                "sequence": seq,
+                "event_type": evt,
+                "detail_code": "test_code",
+            }])
+
+        resp_api = self.client.get("/api/incidents/INC-15D-001/audit?limit=200")
+        self.assertEqual(resp_api.status_code, 200)
+        events = resp_api.json()
+        category_map = {e["event_type"]: e["category"] for e in events if e["event_type"] in approval_types}
+
+        for evt in approval_types:
+            self.assertEqual(category_map[evt], "APPROVAL", f"{evt} category was not APPROVAL")
+
+
 if __name__ == "__main__":
     unittest.main()
+

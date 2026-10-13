@@ -2861,7 +2861,7 @@ In the initial post-Milestone-13 planning, the SOC Analyst UI was projected as M
   - The demo pipeline uses the shared persistent approval registry.
   - Approval lifecycle audit ownership was normalized:
     - `APPROVAL_EXPIRED`
-    - `REPLAY_REJECTED`
+    - `APPROVAL_REPLAY_REJECTED`
     - `APPROVAL_CONSUMED`
     - `APPROVAL_VALIDATION_FAILED`
   - Simulator owns:
