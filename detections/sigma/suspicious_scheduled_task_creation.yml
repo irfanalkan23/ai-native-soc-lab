@@ -1,0 +1,37 @@
+# Status: EXPERIMENTAL
+# Note: Portable Sigma representation of suspicious scheduled task creation execution.
+# Semantic Note: CommandLine uses boundary-aware regex to approximate the authoritative
+# operational SPL token-boundary semantics ((^|[[:space:]])/create([[:space:]]|$)).
+# Operational note: Current lab Sysmon fields require _raw XML extraction in the authoritative SPL implementation.
+
+title: Suspicious Scheduled Task Creation
+id: c09a06ee-2216-43b5-bc5c-9c04da59434e
+status: experimental
+description: Detects Windows scheduled task creation using schtasks.exe command-line arguments.
+author: Irfan Alkan
+date: 2026-10-15
+
+logsource:
+  category: process_creation
+  product: windows
+
+detection:
+  selection_image:
+    Image|endswith:
+      - '\schtasks.exe'
+
+  selection_create:
+    CommandLine|re: '(?i)(^|\s)/create(\s|$)'
+
+  condition: selection_image and selection_create
+
+falsepositives:
+  - Legitimate administrative task creation
+  - Software deployment or management automation
+  - Routine operating system maintenance tasks
+
+level: medium
+
+tags:
+  - attack.persistence
+  - attack.t1053.005

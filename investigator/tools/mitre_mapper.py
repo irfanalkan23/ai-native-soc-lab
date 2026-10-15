@@ -63,6 +63,36 @@ _STATIC_MITRE_DATABASE: Dict[str, Dict[str, str]] = {
         "tactic_id": "TA0011",
         "tactic_name": "Command and Control",
     },
+    "det-task-001": {
+        "technique_id": "T1053.005",
+        "technique_name": "Scheduled Task/Job: Scheduled Task",
+        "tactic_id": "TA0003",
+        "tactic_name": "Persistence",
+    },
+    "suspicious_scheduled_task_creation": {
+        "technique_id": "T1053.005",
+        "technique_name": "Scheduled Task/Job: Scheduled Task",
+        "tactic_id": "TA0003",
+        "tactic_name": "Persistence",
+    },
+    "suspicious scheduled task creation": {
+        "technique_id": "T1053.005",
+        "technique_name": "Scheduled Task/Job: Scheduled Task",
+        "tactic_id": "TA0003",
+        "tactic_name": "Persistence",
+    },
+    "scheduled_task_creation_matches": {
+        "technique_id": "T1053.005",
+        "technique_name": "Scheduled Task/Job: Scheduled Task",
+        "tactic_id": "TA0003",
+        "tactic_name": "Persistence",
+    },
+    "c09a06ee-2216-43b5-bc5c-9c04da59434e": {
+        "technique_id": "T1053.005",
+        "technique_name": "Scheduled Task/Job: Scheduled Task",
+        "tactic_id": "TA0003",
+        "tactic_name": "Persistence",
+    },
 }
 
 

@@ -204,6 +204,41 @@ class SplunkSearchClient:
         )
         return self._execute_bounded_search(request)
 
+    def search_scheduled_task_creation(
+        self,
+        host: str = "DC01",
+        minutes: int = 15,
+        limit: int = 10,
+    ) -> List[Dict[str, Any]]:
+        """Query Splunk for suspicious scheduled task creations on host DC01.
+
+        Enforces policy validation before dispatching the request. The caller can
+        only supply bounded parameters (host, minutes, limit); arbitrary SPL and
+        endpoint paths cannot be supplied.
+
+        Args:
+            host: Target host name (strictly 'DC01').
+            minutes: Lookback window in minutes (1-60).
+            limit: Maximum events to return (1-50).
+
+        Returns:
+            List of dictionaries containing all 7 mandatory allowlisted fields:
+            _time, host, User, Image, CommandLine, ParentImage, ParentCommandLine.
+
+        Raises:
+            PolicyValidationError: If inputs violate policy boundaries.
+            SplunkConnectionError: If Splunk cannot be reached or times out.
+            SplunkResponseError: If Splunk returns an error envelope, HTTP error,
+                                 malformed data, missing mandatory fields, or excess events.
+        """
+        request = validate_search_request(
+            query_type="scheduled_task_creation_matches",
+            host=host,
+            minutes=minutes,
+            limit=limit,
+        )
+        return self._execute_bounded_search(request)
+
     def search_modsecurity_sqli(
         self,
         host: str = "web01",

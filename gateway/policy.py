@@ -17,6 +17,7 @@ class PolicyValidationError(ValueError):
 ALLOWED_QUERY_TYPES = frozenset({
     "encoded_powershell_matches",
     "powershell_network_retrieval_matches",
+    "scheduled_task_creation_matches",
     "modsecurity_sqli_matches",
 })
 ALLOWED_HOSTS = frozenset({"DC01", "web01"})
@@ -70,6 +71,13 @@ class SearchRequest:
         if self.host not in ALLOWED_HOSTS:
             raise PolicyValidationError(
                 f"Unauthorized host '{self.host}'. Allowed: {sorted(ALLOWED_HOSTS)}"
+            )
+
+        # Enforce deterministic query-type to host coupling
+        if self.query_type == "scheduled_task_creation_matches" and self.host != "DC01":
+            raise PolicyValidationError(
+                f"Unauthorized host '{self.host}' for query_type 'scheduled_task_creation_matches'. "
+                f"Allowed: ['DC01']"
             )
 
         # Validate minutes (strictly int, reject bool)
@@ -133,10 +141,20 @@ def build_allowlisted_spl(request: SearchRequest) -> str:
     if type(request.limit) is not int or not (MIN_LIMIT <= request.limit <= MAX_LIMIT):
         raise PolicyValidationError(f"Invalid limit parameter: {request.limit}")
 
+    if request.query_type == "scheduled_task_creation_matches" and request.host != "DC01":
+        raise PolicyValidationError(
+            f"Unauthorized host '{request.host}' for query_type 'scheduled_task_creation_matches'"
+        )
+
     if request.query_type == "encoded_powershell_matches":
+        image_predicate = r"(?i)powershell[.]exe$"
         cmd_predicate = r"(?i)(^|[[:space:]])-(encodedcommand|enc)([[:space:]]|$)"
     elif request.query_type == "powershell_network_retrieval_matches":
+        image_predicate = r"(?i)powershell[.]exe$"
         cmd_predicate = r"(?i)(Invoke-WebRequest|Invoke-RestMethod|[.]DownloadString\()"
+    elif request.query_type == "scheduled_task_creation_matches":
+        image_predicate = r"(?i)(^|[\\/])schtasks[.]exe$"
+        cmd_predicate = r"(?i)(^|[[:space:]])/create([[:space:]]|$)"
     elif request.query_type == "modsecurity_sqli_matches":
         return (
             f'search index=main sourcetype=modsecurity host="{request.host}" earliest="-{request.minutes}m" '
@@ -156,7 +174,7 @@ def build_allowlisted_spl(request: SearchRequest) -> str:
         '| rex field=_raw "<Data Name=[\'\\"]ParentImage[\'\\"]>(?<ParentImage>[^<]+)</Data>" '
         '| rex field=_raw "<Data Name=[\'\\"]ParentCommandLine[\'\\"]>(?<ParentCommandLine>[^<]+)</Data>" '
         '| rex field=_raw "<Data Name=[\'\\"]User[\'\\"]>(?<User>[^<]+)</Data>" '
-        '| where match(Image, "(?i)powershell[.]exe$") '
+        f'| where match(Image, "{image_predicate}") '
         f'| where match(CommandLine, "{cmd_predicate}") '
         '| sort - _time '
         f'| head {request.limit} '
