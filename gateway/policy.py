@@ -153,7 +153,7 @@ def build_allowlisted_spl(request: SearchRequest) -> str:
         image_predicate = r"(?i)powershell[.]exe$"
         cmd_predicate = r"(?i)(Invoke-WebRequest|Invoke-RestMethod|[.]DownloadString\()"
     elif request.query_type == "scheduled_task_creation_matches":
-        image_predicate = r"(?i)(^|[\\/])schtasks[.]exe$"
+        image_predicate = r"(?i)(^|.*[\\\\/])schtasks[.]exe$"
         cmd_predicate = r"(?i)(^|[[:space:]])/create([[:space:]]|$)"
     elif request.query_type == "modsecurity_sqli_matches":
         return (

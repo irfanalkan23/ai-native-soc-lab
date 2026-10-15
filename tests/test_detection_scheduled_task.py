@@ -35,7 +35,7 @@ from investigator.tools.mitre_mapper import (
 )
 
 # SPL predicate string defined in gateway policy and detections/splunk/suspicious_scheduled_task_creation.spl
-SPL_IMAGE_PREDICATE = r"(?i)(^|[\\/])schtasks[.]exe$"
+SPL_IMAGE_PREDICATE = r"(?i)(^|.*[\\\\/])schtasks[.]exe$"
 SPL_COMMANDLINE_PREDICATE = r"(?i)(^|[[:space:]])/create([[:space:]]|$)"
 
 # Python re does not support POSIX [[:space:]] syntax native to PCRE (Splunk match());
@@ -62,6 +62,11 @@ class TestScheduledTaskDetectionLogic(unittest.TestCase):
 
         self.assertIsNotNone(IMAGE_REGEX.search(image))
         self.assertIsNotNone(COMMANDLINE_REGEX.search(cmdline))
+
+    def test_exact_live_dc01_windows_path_matches(self) -> None:
+        """10. Regression: prove the exact live Windows DC01 path matches operational regex semantics."""
+        live_dc01_path = r"C:\Windows\System32\schtasks.exe"
+        self.assertIsNotNone(IMAGE_REGEX.search(live_dc01_path))
 
     def test_positive_image_path_boundary_variants(self) -> None:
         """Verify positive matching for various valid schtasks.exe executable paths."""
@@ -170,7 +175,7 @@ class TestScheduledTaskSPLRuleFile(unittest.TestCase):
         self.assertIn('rex field=_raw "<Data Name=[\'\\"]ParentImage[\'\\"]>(?<ParentImage>[^<]+)</Data>"', self.spl_content)
         self.assertIn('rex field=_raw "<Data Name=[\'\\"]ParentCommandLine[\'\\"]>(?<ParentCommandLine>[^<]+)</Data>"', self.spl_content)
         self.assertIn('rex field=_raw "<Data Name=[\'\\"]User[\'\\"]>(?<User>[^<]+)</Data>"', self.spl_content)
-        self.assertIn(r'where match(Image, "(?i)(^|[\\/])schtasks[.]exe$")', self.spl_content)
+        self.assertIn(r'where match(Image, "(?i)(^|.*[\\\\/])schtasks[.]exe$")', self.spl_content)
         self.assertIn('where match(CommandLine, "(?i)(^|[[:space:]])/create([[:space:]]|$)")', self.spl_content)
         self.assertIn("table _time host User Image CommandLine ParentImage ParentCommandLine", self.spl_content)
 
@@ -286,7 +291,7 @@ class TestScheduledTaskGatewaySupport(unittest.TestCase):
         self.assertIn('host="DC01"', spl)
         self.assertIn('earliest="-25m"', spl)
         self.assertIn("<EventID>1</EventID>", spl)
-        self.assertIn(r'where match(Image, "(?i)(^|[\\/])schtasks[.]exe$")', spl)
+        self.assertIn(r'where match(Image, "(?i)(^|.*[\\\\/])schtasks[.]exe$")', spl)
         self.assertIn('where match(CommandLine, "(?i)(^|[[:space:]])/create([[:space:]]|$)")', spl)
         self.assertIn("| sort - _time", spl)
         self.assertIn("| head 20", spl)

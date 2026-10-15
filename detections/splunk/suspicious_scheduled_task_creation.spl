@@ -4,6 +4,6 @@ index=main sourcetype="XmlWinEventLog:Microsoft-Windows-Sysmon/Operational" "<Ev
 | rex field=_raw "<Data Name=['\"]ParentImage['\"]>(?<ParentImage>[^<]+)</Data>"
 | rex field=_raw "<Data Name=['\"]ParentCommandLine['\"]>(?<ParentCommandLine>[^<]+)</Data>"
 | rex field=_raw "<Data Name=['\"]User['\"]>(?<User>[^<]+)</Data>"
-| where match(Image, "(?i)(^|[\\/])schtasks[.]exe$")
+| where match(Image, "(?i)(^|.*[\\\\/])schtasks[.]exe$")
 | where match(CommandLine, "(?i)(^|[[:space:]])/create([[:space:]]|$)")
 | table _time host User Image CommandLine ParentImage ParentCommandLine
