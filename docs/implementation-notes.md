@@ -3108,6 +3108,7 @@ The canonical harness persists updated evaluation reports containing all 21 scen
   - **Milestone 18B-2 — COMPLETE**: Live Lab Detection Plane Validation. Generated controlled harmless scheduled task on DC01, captured Sysmon Event ID 1 process creation, verified ingestion into Splunk, validated bounded Python client retrieval against live Splunk, and committed live-compatible path regex fix at `0c656ff`.
   - **Milestone 18B-3 — COMPLETE**: Investigation & Policy Integration. Extended `InvestigationInput` and generic process telemetry handling, integrated `DET-TASK-001` and `T1053.005` into `RiskPolicyEngine` with deterministic scoring (+25 base, +10 MITRE, indicators/confidence weights), generalized synthetic incident ID generation (`INC-DEMO-TASK`), and added offline test suite (`test_investigation_scheduled_task.py`). Committed at `0a22895`.
   - **Milestone 18B-4 — COMPLETE**: Live Integrated DET-TASK-001 Investigation Validation. Added `--mode live-scheduled-task` to end-to-end runner, implemented exact controlled fixture selector, established live fake model contract, validated against live Splunk on DC01 telemetry, and verified complete end-to-end governance lifecycle. Committed at `7740975`.
+  - **Milestone 18B-5 — COMPLETE**: Live OpenAI Validation for DET-TASK-001. Exercised the live OpenAI model path (`OPENAI_MODEL=gpt-5.6-sol`) against real DC01 Sysmon telemetry in Splunk, verifying advisory ToolRouter execution (bounded Splunk search + MITRE mapping), deterministic risk evaluation (65/100 HIGH), in-memory audit trail (12 events), non-containment invariants, and fail-closed security controls.
 
 #### Milestone 18B-4 — Live Integrated DET-TASK-001 Investigation Validation
 
@@ -3117,7 +3118,7 @@ The canonical harness persists updated evaluation reports containing all 21 scen
   - Bounded Splunk evidence retrieval: **LIVE LAB VALIDATED**
   - `DET-TASK-001` investigation & policy integration: **LIVE LAB VALIDATED**
   - `FakeModel` advisory path: **LIVE LAB VALIDATED** (with deterministic fake provider)
-  - `OpenAIModel` live validation for `DET-TASK-001`: **NOT YET VALIDATED**
+  - `OpenAIModel` live validation for `DET-TASK-001`: **LIVE LAB VALIDATED** (completed in M18B-5)
   - Jira live validation for `DET-TASK-001`: **NOT YET VALIDATED**
   - Endpoint containment: **NOT IMPLEMENTED / NOT EXECUTED**
 
@@ -3205,9 +3206,99 @@ python3 scripts/run_end_to_end_demo.py \
 | ToolRouter & MITRE mapping | **LIVE LAB VALIDATED** | Deterministic `map_mitre_technique` mapped to `T1053.005` |
 | Deterministic risk policy engine | **LIVE LAB VALIDATED** | Evaluated to score 65 HIGH / HUMAN_REVIEW |
 | AI investigation advisory loop | **LIVE LAB VALIDATED** | Executed via deterministic `FakeModel` |
-| Live OpenAI (`gpt-4o` / `gpt-5.6-sol`) | **NOT YET VALIDATED** | Adapter implemented and tested; live run with OpenAI API not yet performed for DET-TASK-001 |
+| Live OpenAI (`gpt-4o` / `gpt-5.6-sol`) | **LIVE LAB VALIDATED** | Validated against live DC01 telemetry in Milestone 18B-5 |
 | Live Jira Cloud ticketing | **NOT YET VALIDATED** | Adapter implemented and tested; live Jira creation not yet performed for DET-TASK-001 |
 | Threat intelligence enrichment | **NOT IN SCOPE** | Scheduled tasks do not contain external IP observables |
+| Real host containment / isolation | **NOT IMPLEMENTED** | System does not possess endpoint mutation capabilities |
+
+#### Milestone 18B-5 — Live OpenAI Validation for DET-TASK-001
+
+- **Validation Classification**:
+  - `DET-TASK-001` OpenAI advisory path: **LIVE LAB VALIDATED**
+  - `DET-TASK-001` bounded Splunk retrieval: **LIVE LAB VALIDATED**
+  - `DET-TASK-001` investigation & policy integration: **LIVE LAB VALIDATED**
+  - Jira live validation for `DET-TASK-001`: **NOT YET VALIDATED**
+  - Endpoint containment: **NOT IMPLEMENTED / NOT EXECUTED**
+
+##### Runtime Prerequisites & Operational Findings
+- **Python Virtual Environment**: Splunk-Server project virtual environment located at `.venv`.
+- **OpenAI Python SDK Version**: `2.16.0`.
+- **Configured Model**: `OPENAI_MODEL=gpt-5.6-sol`.
+- **Credential Handling**: Provider reads API credentials strictly from the process environment (`OPENAI_API_KEY`); no API keys are stored, logged, or committed to version control.
+- **Operational Runtime Discovery**: An initial invocation using system `python3` failed because the `openai` Python SDK was installed exclusively inside `.venv`. The authoritative runtime for OpenAI live execution is `.venv/bin/python`.
+
+##### Controlled Live Telemetry Event (DC01)
+- **Controlled Task Name**: `SOCLab-Task-Validation-3`
+- **Target Host**: `DC01`
+- **Target User**: `SOCLAB\Administrator`
+- **Process Executable**: `C:\Windows\System32\schtasks.exe`
+- **Detection ID**: `DET-TASK-001`
+- **MITRE Technique**: `T1053.005` (Scheduled Task/Job: Scheduled Task)
+- **Evidence Source**: `Live Splunk (localhost:8089)`
+- **Bounded Ingestion Retrieval**: Exactly 1 bounded Sysmon Event ID 1 process creation record matched and retrieved via `_find_exact_scheduled_task_fixture`.
+
+##### Successful Execution Command
+```bash
+.venv/bin/python scripts/run_end_to_end_demo.py \
+  --mode live-scheduled-task \
+  --provider openai \
+  --minutes 10
+```
+
+##### Successful Incident Identification
+`INC-LIVE-DC01-20261016T143226781TUTC`
+
+##### AI Advisory Investigation Assessment (Live OpenAIModel)
+- **Investigation Provider**: Live `OpenAIModel` using model `gpt-5.6-sol`.
+- **Assessed Confidence Level**: `medium`
+- **Suspicious Indicators Count**: 4
+- **Model Analysis**:
+  - Correctly recognized scheduled task creation (`schtasks.exe /create`).
+  - Noted the possibility of a benign administrative or controlled lab validation activity.
+  - Maintained truthfulness: Did not claim host compromise or confirmed malicious persistence.
+  - Recommended verification of task scheduling authorization and inspection of surrounding process telemetry.
+
+##### Deterministic Policy Evaluation (Authoritative Control Gate)
+- **Deterministic Risk Score**: `65 / 100` (+25 base detection `DET-TASK-001`, +10 authoritative MITRE `T1053.005`, +20 indicators $\ge 1$, +5 indicators $> 1$, +5 model confidence medium).
+- **Risk Level**: `HIGH`
+- **Action Disposition**: `HUMAN_REVIEW`
+- **Proposed Action**: `create_incident_record`
+- **Human Approval Required**: `no`
+- **Policy Reason Codes**:
+  - `scheduled_task_creation_detected`
+  - `mitre_t1053_005`
+  - `suspicious_indicators_present`
+  - `multiple_suspicious_indicators`
+  - `model_confidence_medium`
+
+##### Runtime Audit Accounting
+Exactly 12 in-memory audit events were recorded in verified chronological lifecycle order:
+- `MODEL_REQUESTED`
+- `TOOL_REQUESTED` (`bounded_splunk_search`)
+- `TOOL_ALLOWED`
+- `TOOL_COMPLETED`
+- `MODEL_REQUESTED`
+- `TOOL_REQUESTED` (`map_mitre_technique`)
+- `TOOL_ALLOWED`
+- `TOOL_COMPLETED`
+- `MODEL_REQUESTED`
+- `FINAL_RESULT_ACCEPTED`
+- `POLICY_EVALUATED`
+- `SIMULATION_NOT_EXECUTED`
+
+##### Operational Outcome & Safety Invariants
+- **Simulation Response**: `NOT_EXECUTED` (detail code: `incident_record_deferred`).
+- **Containment Authorization**: Zero containment action authorized or executed.
+- **Endpoint Integrity**: Endpoint state on DC01 was not modified by the AI agent.
+- **Manual Teardown**: Controlled scheduled task `SOCLab-Task-Validation-3` was manually deleted on DC01 following validation.
+
+##### Truthfulness Classification Summary
+| Component / Flow | Status | Truthfulness Note |
+|---|---|---|
+| DET-TASK-001 OpenAI advisory path | **LIVE LAB VALIDATED** | Live model decision loop executed with `gpt-5.6-sol` |
+| DET-TASK-001 bounded Splunk retrieval | **LIVE LAB VALIDATED** | Retrieved 1 bounded Sysmon Event ID 1 from live Splunk on DC01 |
+| DET-TASK-001 investigation/policy path | **LIVE LAB VALIDATED** | Evaluated deterministically to score 65 HIGH / HUMAN_REVIEW |
+| Jira live validation for DET-TASK-001 | **NOT YET VALIDATED** | Deferred; not exercised in this run |
 | Real host containment / isolation | **NOT IMPLEMENTED** | System does not possess endpoint mutation capabilities |
 
 ### Milestone 19 — Suricata / Network Detection Integration
