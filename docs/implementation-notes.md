@@ -3101,8 +3101,114 @@ The canonical harness persists updated evaluation reports containing all 21 scen
 - **Production Assurance Limitation**: These synthetic offline evaluation results demonstrate architectural safety boundaries in a lab environment and do not constitute production SOC assurance.
 
 ### Milestone 18 — Additional Detection Coverage
-- **Status**: **PLANNED**
-- Add a small number of high-value detections with full telemetry, SPL/Sigma, MITRE mapping, incident workflow, and evaluation coverage. Prioritize credential-access/LSASS behavior, scheduled task or service creation, and authentication abuse.
+- **Status**: **IN PROGRESS**
+- **Subphases**:
+  - **Milestone 18A — COMPLETE**: Detection Candidate Selection & Scope Boundary. Evaluated threat surface and operational telemetry; selected `DET-TASK-001` (Suspicious Scheduled Task Creation — MITRE ATT&CK `T1053.005`) for endpoint persistence coverage on Windows Server (`DC01`).
+  - **Milestone 18B-1 — COMPLETE**: Detection Plane Implementation. Authored Sigma rule (`detections/sigma/suspicious_scheduled_task_creation.yml`), SPL rule (`detections/splunk/suspicious_scheduled_task_creation.spl`), bounded gateway query type (`scheduled_task_creation_matches`), typed Splunk helper (`search_scheduled_task_creation`), and deterministic MITRE mapping (`T1053.005`). Committed at `1ea57e5`.
+  - **Milestone 18B-2 — COMPLETE**: Live Lab Detection Plane Validation. Generated controlled harmless scheduled task on DC01, captured Sysmon Event ID 1 process creation, verified ingestion into Splunk, validated bounded Python client retrieval against live Splunk, and committed live-compatible path regex fix at `0c656ff`.
+  - **Milestone 18B-3 — COMPLETE**: Investigation & Policy Integration. Extended `InvestigationInput` and generic process telemetry handling, integrated `DET-TASK-001` and `T1053.005` into `RiskPolicyEngine` with deterministic scoring (+25 base, +10 MITRE, indicators/confidence weights), generalized synthetic incident ID generation (`INC-DEMO-TASK`), and added offline test suite (`test_investigation_scheduled_task.py`). Committed at `0a22895`.
+  - **Milestone 18B-4 — COMPLETE**: Live Integrated DET-TASK-001 Investigation Validation. Added `--mode live-scheduled-task` to end-to-end runner, implemented exact controlled fixture selector, established live fake model contract, validated against live Splunk on DC01 telemetry, and verified complete end-to-end governance lifecycle. Committed at `7740975`.
+
+#### Milestone 18B-4 — Live Integrated DET-TASK-001 Investigation Validation
+
+- **Implementation Commit**: `7740975 feat: add live scheduled task investigation mode`
+- **Validation Classification**:
+  - `DET-TASK-001` detection telemetry: **LIVE LAB VALIDATED**
+  - Bounded Splunk evidence retrieval: **LIVE LAB VALIDATED**
+  - `DET-TASK-001` investigation & policy integration: **LIVE LAB VALIDATED**
+  - `FakeModel` advisory path: **LIVE LAB VALIDATED** (with deterministic fake provider)
+  - `OpenAIModel` live validation for `DET-TASK-001`: **NOT YET VALIDATED**
+  - Jira live validation for `DET-TASK-001`: **NOT YET VALIDATED**
+  - Endpoint containment: **NOT IMPLEMENTED / NOT EXECUTED**
+
+##### Infrastructure & Telemetry Recovery Note
+- **Splunk-Server Storage Expansion**: The root filesystem of `Splunk-Server` was expanded using existing unused LVM capacity:
+  - Before: ~19 GB root logical volume (`/dev/ubuntu-vg/ubuntu-lv`).
+  - After: ~38 GB root logical volume (`/dev/ubuntu-vg/ubuntu-lv`).
+  - Post-expansion free disk space: ~21 GB.
+- **VirtualBox Disk Sizing**: No VirtualBox `.vdi` disk expansion was required because `/dev/sda` was already 40 GB and the volume group (`ubuntu-vg`) had ~19 GB of unallocated extents.
+- **Splunk Receiver Verification**: Confirmed active and listening on `0.0.0.0:9997`.
+- **DC01 Forwarder Status**: Universal Forwarder verified actively sending telemetry to `192.168.1.101:9997`.
+- **Stale Forwarder Target**: The configured-but-inactive forwarder target `192.168.1.100:9997` remains deferred cleanup.
+- **Historical Ingestion Disclosure**: The earlier initial scheduled-task validation event from 2026-10-15 was dropped during an operational Splunk ingestion gap caused by disk pressure. History is preserved accurately: that event was not recovered. The second controlled validation on 2026-10-15 successfully established the detection plane as `LIVE LAB VALIDATED`. Milestone 18B-4 extends that validation through the integrated investigator and deterministic policy pipeline.
+
+##### Controlled Live Telemetry Generation (DC01)
+- **Validation Event Created**: Controlled harmless scheduled task `SOCLab-Task-Validation-3`.
+- **Command Line Executed on DC01**:
+  ```cmd
+  schtasks.exe /create /tn "SOCLab-Task-Validation-3" /tr "C:\Windows\System32\notepad.exe" /sc once /st 23:59 /f
+  ```
+- **Telemetry Ingestion & Bounded Retrieval**:
+  - Sysmon Event ID 1 (Process Create) captured the execution on DC01 and forwarded to Splunk index `main`.
+  - The live bounded `DET-TASK-001` query helper (`search_scheduled_task_creation`) returned exactly one matching event within the bounded window.
+- **Live Event Attributes**:
+  - `timestamp`: `2026-10-16 12:40:49.188 UTC`
+  - `host`: `DC01`
+  - `user`: `SOCLAB\Administrator`
+  - `image`: `C:\Windows\System32\schtasks.exe`
+  - `parent_image`: `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`
+  - `detection_id`: `DET-TASK-001`
+  - `detection_name`: `suspicious scheduled task creation`
+  - `mitre_technique_id`: `T1053.005` (Scheduled Task/Job: Scheduled Task)
+
+##### Live Integrated Execution
+The end-to-end investigation runner was executed on `Splunk-Server` using the live scheduled-task mode:
+```bash
+python3 scripts/run_end_to_end_demo.py \
+  --mode live-scheduled-task \
+  --provider fake \
+  --minutes 10
+```
+
+##### Observed Outcome & Governance Accounting
+- **Incident Identification**: `INC-LIVE-DC01-20261016T124049188TUTC`
+- **Evidence Source**: `Live Splunk (localhost:8089)`
+- **Bounded Retrieval**: 1 live Splunk event retrieved; exact controlled fixture matched via boundary-safe selector `_find_exact_scheduled_task_fixture`.
+- **AI Investigation Provider**: Deterministic `FakeModel` sequence (`_create_live_scheduled_task_fake_model`):
+  - Model confidence: `medium`
+  - Suspicious indicators: 2 (`scheduled_task_creation`, `persistence_mechanism`)
+  - Observations: Process creation observed; controlled lab validation task identified.
+  - Decoded command: `None` (Base64 decoding correctly omitted for scheduled tasks).
+- **Deterministic Policy Evaluation**:
+  - Risk Score: `65 / 100` (+25 base detection, +10 MITRE T1053.005, +20 indicators $\ge 1$, +5 indicators $> 1$, +5 model confidence medium).
+  - Risk Level: `HIGH`
+  - Action Disposition: `HUMAN_REVIEW`
+  - Proposed Action: `create_incident_record`
+  - Approval Required: `no`
+  - Policy Reason Codes:
+    - `scheduled_task_creation_detected`
+    - `mitre_t1053_005`
+    - `suspicious_indicators_present`
+    - `multiple_suspicious_indicators`
+    - `model_confidence_medium`
+- **Simulation Response**: `NOT_EXECUTED` (detail code: `incident_record_deferred`).
+- **Audit Trail Accounting**: Exactly 8 in-memory audit events recorded in strict lifecycle sequence:
+  1. `MODEL_REQUESTED`
+  2. `TOOL_REQUESTED` (`map_mitre_technique`)
+  3. `TOOL_ALLOWED`
+  4. `TOOL_COMPLETED`
+  5. `MODEL_REQUESTED`
+  6. `FINAL_RESULT_ACCEPTED`
+  7. `POLICY_EVALUATED`
+  8. `SIMULATION_NOT_EXECUTED`
+- **Safety & Containment Enforcement**:
+  - Zero containment action executed or authorized.
+  - Endpoint state on DC01 was never mutated by the investigation agent.
+  - Clean manual teardown: The controlled scheduled task `SOCLab-Task-Validation-3` was manually deleted on DC01 following validation.
+
+##### Truthfulness Matrix & Explicit Boundaries
+| Component / Flow | Status | Truthfulness Note |
+|---|---|---|
+| DC01 Sysmon Event ID 1 telemetry | **LIVE LAB VALIDATED** | Real Windows event generated on DC01 |
+| Splunk forwarder & indexer delivery | **LIVE LAB VALIDATED** | Ingested into Splunk `index=main` on `Splunk-Server` |
+| Bounded query & fixture selector | **LIVE LAB VALIDATED** | Bounded client retrieved exact match; failed closed on negatives |
+| ToolRouter & MITRE mapping | **LIVE LAB VALIDATED** | Deterministic `map_mitre_technique` mapped to `T1053.005` |
+| Deterministic risk policy engine | **LIVE LAB VALIDATED** | Evaluated to score 65 HIGH / HUMAN_REVIEW |
+| AI investigation advisory loop | **LIVE LAB VALIDATED** | Executed via deterministic `FakeModel` |
+| Live OpenAI (`gpt-4o` / `gpt-5.6-sol`) | **NOT YET VALIDATED** | Adapter implemented and tested; live run with OpenAI API not yet performed for DET-TASK-001 |
+| Live Jira Cloud ticketing | **NOT YET VALIDATED** | Adapter implemented and tested; live Jira creation not yet performed for DET-TASK-001 |
+| Threat intelligence enrichment | **NOT IN SCOPE** | Scheduled tasks do not contain external IP observables |
+| Real host containment / isolation | **NOT IMPLEMENTED** | System does not possess endpoint mutation capabilities |
 
 ### Milestone 19 — Suricata / Network Detection Integration
 - **Status**: **DEFERRED**
