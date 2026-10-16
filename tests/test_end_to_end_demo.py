@@ -1555,5 +1555,422 @@ class TestLiveNetworkRetrievalMode(unittest.TestCase):
             self.assertIn("T1105", ticket_req.description)
 
 
+class TestLiveScheduledTaskMode(unittest.TestCase):
+    """Live end-to-end runner support for scheduled task detection (live-scheduled-task)."""
+
+    def setUp(self) -> None:
+        self.cmd = 'schtasks.exe /create /tn "SOCLab-Task-Validation-3" /tr "notepad.exe" /sc once /st 12:00 /f'
+        self.scheduled_task_splunk_record = {
+            "_time": "2026-10-16T12:00:00.000+00:00",
+            "host": "DC01",
+            "User": "SYSTEM",
+            "Image": "C:\\Windows\\System32\\schtasks.exe",
+            "CommandLine": self.cmd,
+            "ParentImage": "C:\\Windows\\System32\\cmd.exe",
+            "ParentCommandLine": "cmd.exe /c start",
+        }
+
+    def test_cli_parser_mode_and_provider_contracts(self) -> None:
+        """CLI parser accepts live-scheduled-task mode, defaults provider to fake, and forbids free-form flags."""
+        from scripts.run_end_to_end_demo import main
+
+        # 1. Accepts --mode live-scheduled-task and defaults provider to 'fake'
+        try:
+            with patch("scripts.run_end_to_end_demo.run_demo", return_value=0) as mock_run_demo:
+                with patch.object(sys, "argv", ["run_end_to_end_demo.py", "--mode", "live-scheduled-task"]):
+                    code = main()
+            self.assertEqual(code, 0)
+            mock_run_demo.assert_called_once()
+            self.assertEqual(mock_run_demo.call_args.kwargs["mode"], "live-scheduled-task")
+            self.assertEqual(mock_run_demo.call_args.kwargs["provider"], "fake")
+        except SystemExit as exc:
+            self.fail(f"main() exited unexpectedly with code {exc.code} for --mode live-scheduled-task")
+
+        # 2. Accepts explicit --provider fake
+        try:
+            with patch("scripts.run_end_to_end_demo.run_demo", return_value=0) as mock_run_demo:
+                with patch.object(sys, "argv", ["run_end_to_end_demo.py", "--mode", "live-scheduled-task", "--provider", "fake"]):
+                    code = main()
+            self.assertEqual(code, 0)
+            mock_run_demo.assert_called_once()
+            self.assertEqual(mock_run_demo.call_args.kwargs["provider"], "fake")
+        except SystemExit as exc:
+            self.fail(f"main() exited unexpectedly with code {exc.code} for --provider fake")
+
+        # 3. Accepts explicit --provider openai
+        try:
+            with patch("scripts.run_end_to_end_demo.run_demo", return_value=0) as mock_run_demo:
+                with patch.object(sys, "argv", ["run_end_to_end_demo.py", "--mode", "live-scheduled-task", "--provider", "openai"]):
+                    code = main()
+            self.assertEqual(code, 0)
+            mock_run_demo.assert_called_once()
+            self.assertEqual(mock_run_demo.call_args.kwargs["provider"], "openai")
+        except SystemExit as exc:
+            self.fail(f"main() exited unexpectedly with code {exc.code} for --provider openai")
+
+        # 4. Rejects invalid provider choice
+        with patch.object(sys, "argv", ["run_end_to_end_demo.py", "--mode", "live-scheduled-task", "--provider", "anthropic"]):
+            with self.assertRaises(SystemExit) as ctx:
+                main()
+            self.assertEqual(ctx.exception.code, 2)
+
+        # 5. Forbids free-form CLI flags for query/detection customization
+        forbidden_flags = ["--detection-id", "--detection-name", "--query-type", "--spl", "--regex"]
+        for flag in forbidden_flags:
+            with patch.object(sys, "argv", ["run_end_to_end_demo.py", "--mode", "live-scheduled-task", flag, "untrusted_input"]):
+                with self.assertRaises(SystemExit) as ctx:
+                    main()
+                self.assertEqual(ctx.exception.code, 2)
+
+    def test_live_scheduled_task_bounded_search_dispatch(self) -> None:
+        """live-scheduled-task mode calls search_scheduled_task_creation and never unrelated searches."""
+        mock_splunk = MagicMock(spec=SplunkSearchClient)
+        mock_splunk.search_scheduled_task_creation.return_value = [self.scheduled_task_splunk_record]
+
+        out_stream = io.StringIO()
+        code = run_demo(
+            mode="live-scheduled-task",
+            provider="fake",
+            minutes=20,
+            persist_audit=False,
+            stream_in=io.StringIO(),
+            stream_out=out_stream,
+            splunk_client=mock_splunk,
+        )
+
+        self.assertEqual(code, 0)
+        mock_splunk.search_scheduled_task_creation.assert_called_once_with(
+            host="DC01",
+            minutes=20,
+            limit=5,
+        )
+        mock_splunk.search_encoded_powershell.assert_not_called()
+        mock_splunk.search_powershell_network_retrieval.assert_not_called()
+        output = out_stream.getvalue()
+        self.assertIn("AI-Native SOC Lab -- End-to-End Demo Outcome", output)
+
+    def test_find_exact_scheduled_task_fixture_helper_and_matching(self) -> None:
+        """Deterministic helper identifies controlled scheduled-task fixture using exact markers and boundary checks."""
+        import scripts.run_end_to_end_demo as demo_mod
+        finder = getattr(demo_mod, "_find_exact_scheduled_task_fixture", None)
+        self.assertIsNotNone(
+            finder,
+            "_find_exact_scheduled_task_fixture helper must be defined in scripts.run_end_to_end_demo",
+        )
+
+        older_matching = {
+            "_time": "2026-10-16T11:00:00.000+00:00",
+            "host": "DC01",
+            "User": "SYSTEM",
+            "Image": "C:\\Windows\\System32\\schtasks.exe",
+            "CommandLine": 'schtasks.exe /create /tn "SOCLab-Task-Validation-3" /tr "notepad.exe" /sc once /st 11:00 /f',
+            "ParentImage": "C:\\Windows\\System32\\cmd.exe",
+            "ParentCommandLine": "cmd.exe /c start",
+        }
+        newer_matching = {
+            "_time": "2026-10-16T12:00:00.000+00:00",
+            "host": "DC01",
+            "User": "SYSTEM",
+            "Image": "C:\\Windows\\System32\\schtasks.exe",
+            "CommandLine": 'schtasks.exe /create /tn "SOCLab-Task-Validation-3" /tr "notepad.exe" /sc once /st 12:00 /f',
+            "ParentImage": "C:\\Windows\\System32\\cmd.exe",
+            "ParentCommandLine": "cmd.exe /c start",
+        }
+        wrong_image = {
+            "_time": "2026-10-16T13:00:00.000+00:00",
+            "host": "DC01",
+            "User": "SYSTEM",
+            "Image": "C:\\Windows\\System32\\powershell.exe",
+            "CommandLine": 'schtasks.exe /create /tn "SOCLab-Task-Validation-3" /tr "notepad.exe" /sc once /st 13:00 /f',
+            "ParentImage": "C:\\Windows\\System32\\cmd.exe",
+            "ParentCommandLine": "cmd.exe /c start",
+        }
+        fake_schtasks_image = {
+            "_time": "2026-10-16T13:00:00.000+00:00",
+            "host": "DC01",
+            "User": "SYSTEM",
+            "Image": "C:\\Windows\\System32\\fakeschtasks.exe",
+            "CommandLine": 'fakeschtasks.exe /create /tn "SOCLab-Task-Validation-3" /tr "notepad.exe" /sc once /st 13:00 /f',
+            "ParentImage": "C:\\Windows\\System32\\cmd.exe",
+            "ParentCommandLine": "cmd.exe /c start",
+        }
+        delete_action = {
+            "_time": "2026-10-16T13:00:00.000+00:00",
+            "host": "DC01",
+            "User": "SYSTEM",
+            "Image": "C:\\Windows\\System32\\schtasks.exe",
+            "CommandLine": 'schtasks.exe /delete /tn "SOCLab-Task-Validation-3" /f',
+            "ParentImage": "C:\\Windows\\System32\\cmd.exe",
+            "ParentCommandLine": "cmd.exe /c start",
+        }
+        loose_marker_suffix = {
+            "_time": "2026-10-16T13:00:00.000+00:00",
+            "host": "DC01",
+            "User": "SYSTEM",
+            "Image": "C:\\Windows\\System32\\schtasks.exe",
+            "CommandLine": 'schtasks.exe /create /tn "SOCLab-Task-Validation-30" /tr "notepad.exe" /sc once /st 13:00 /f',
+            "ParentImage": "C:\\Windows\\System32\\cmd.exe",
+            "ParentCommandLine": "cmd.exe /c start",
+        }
+        loose_marker_dash_evil = {
+            "_time": "2026-10-16T13:00:00.000+00:00",
+            "host": "DC01",
+            "User": "SYSTEM",
+            "Image": "C:\\Windows\\System32\\schtasks.exe",
+            "CommandLine": 'schtasks.exe /create /tn "SOCLab-Task-Validation-3-evil" /tr "notepad.exe" /sc once /st 13:00 /f',
+            "ParentImage": "C:\\Windows\\System32\\cmd.exe",
+            "ParentCommandLine": "cmd.exe /c start",
+        }
+        loose_marker_prefix = {
+            "_time": "2026-10-16T13:00:00.000+00:00",
+            "host": "DC01",
+            "User": "SYSTEM",
+            "Image": "C:\\Windows\\System32\\schtasks.exe",
+            "CommandLine": 'schtasks.exe /create /tn "fake-SOCLab-Task-Validation-3" /tr "notepad.exe" /sc once /st 13:00 /f',
+            "ParentImage": "C:\\Windows\\System32\\cmd.exe",
+            "ParentCommandLine": "cmd.exe /c start",
+        }
+
+        # 1. Orders newest first and selects newest matching
+        selected = finder([older_matching, wrong_image, newer_matching])
+        self.assertIsNotNone(selected)
+        rec = selected[0] if isinstance(selected, tuple) else selected
+        self.assertEqual(rec["_time"], newer_matching["_time"])
+
+        # 2. Rejects wrong image
+        self.assertIsNone(finder([wrong_image]))
+        self.assertIsNone(finder([fake_schtasks_image]))
+
+        # 3. Rejects /delete
+        self.assertIsNone(finder([delete_action]))
+
+        # 4. Rejects loose task name markers
+        self.assertIsNone(finder([loose_marker_suffix]))
+        self.assertIsNone(finder([loose_marker_dash_evil]))
+        self.assertIsNone(finder([loose_marker_prefix]))
+
+        # 5. Returns None for empty records
+        self.assertIsNone(finder([]))
+
+    def test_live_scheduled_task_missing_fixture_fails_closed(self) -> None:
+        """When bounded search returns 0 events or no matching fixture, runner fails closed with exit code 1."""
+        mock_splunk = MagicMock(spec=SplunkSearchClient)
+        mock_splunk.search_scheduled_task_creation.return_value = []
+
+        out_stream = io.StringIO()
+        code = run_demo(
+            mode="live-scheduled-task",
+            provider="fake",
+            minutes=15,
+            stream_in=io.StringIO(),
+            stream_out=out_stream,
+            splunk_client=mock_splunk,
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("Controlled", out_stream.getvalue())
+
+    def test_live_scheduled_task_investigation_input_and_mitre_mapping(self) -> None:
+        """Selected live event maps to DET-TASK-001, suspicious scheduled task creation, and T1053.005."""
+        mock_splunk = MagicMock(spec=SplunkSearchClient)
+        mock_splunk.search_scheduled_task_creation.return_value = [self.scheduled_task_splunk_record]
+
+        out_stream = io.StringIO()
+        code = run_demo(
+            mode="live-scheduled-task",
+            provider="fake",
+            minutes=15,
+            stream_in=io.StringIO(),
+            stream_out=out_stream,
+            splunk_client=mock_splunk,
+        )
+
+        self.assertEqual(code, 0)
+        output = out_stream.getvalue()
+        self.assertIn("Detection ID:      DET-TASK-001", output)
+        self.assertIn("Detection Name:    suspicious scheduled task creation", output)
+        self.assertIn("MITRE Technique:   T1053.005", output)
+        self.assertIn("Target Host:       DC01", output)
+        self.assertIn("Target User:       SYSTEM", output)
+
+    def test_live_scheduled_task_evidence_completeness_and_policy_reasons(self) -> None:
+        """Absence of Base64 is expected (deterministic_decoded is None) and does NOT cause tool_failure."""
+        mock_splunk = MagicMock(spec=SplunkSearchClient)
+        mock_splunk.search_scheduled_task_creation.return_value = [self.scheduled_task_splunk_record]
+
+        out_stream = io.StringIO()
+        code = run_demo(
+            mode="live-scheduled-task",
+            provider="fake",
+            minutes=15,
+            stream_in=io.StringIO(),
+            stream_out=out_stream,
+            splunk_client=mock_splunk,
+        )
+
+        self.assertEqual(code, 0)
+        output = out_stream.getvalue()
+        self.assertIn("Decoded Command:   <none>", output)
+        self.assertIn("scheduled_task_creation_detected", output)
+        self.assertIn("mitre_t1053_005", output)
+        self.assertNotIn("benign_lab_fixture_matched", output)
+        self.assertNotIn("encoded_powershell_detected", output)
+        self.assertNotIn("decoded_command_present", output)
+
+    def test_mode_specific_evidence_completeness_semantics(self) -> None:
+        """Verify mode-specific completeness: live-scheduled-task expects T1053.005 and no Base64 decode."""
+        mock_splunk = MagicMock(spec=SplunkSearchClient)
+        mock_splunk.search_scheduled_task_creation.return_value = [self.scheduled_task_splunk_record]
+
+        eval_contexts: List[PolicyContext] = []
+        original_evaluate = RiskPolicyEngine.evaluate
+
+        def _intercept_evaluate(engine_self: Any, context: PolicyContext, *args: Any, **kwargs: Any) -> PolicyDecision:
+            eval_contexts.append(context)
+            return original_evaluate(engine_self, context, *args, **kwargs)
+
+        with patch.object(RiskPolicyEngine, "evaluate", side_effect=_intercept_evaluate, autospec=True):
+            code = run_demo(
+                mode="live-scheduled-task",
+                provider="fake",
+                minutes=15,
+                stream_in=io.StringIO(),
+                stream_out=io.StringIO(),
+                splunk_client=mock_splunk,
+            )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(len(eval_contexts), 1)
+        ctx = eval_contexts[0]
+        self.assertEqual(ctx.verified_detection_id, "DET-TASK-001")
+        self.assertIsNone(ctx.deterministic_decoded_command)
+        # Critical requirement: tool_failure_or_incomplete_evidence must be False!
+        self.assertFalse(ctx.tool_failure_or_incomplete_evidence)
+        self.assertEqual(ctx.mitre_technique_id, "T1053.005")
+
+    def test_live_scheduled_task_fake_model_contract(self) -> None:
+        """Fake model for live-scheduled-task describes task creation, maps T1053.005, and avoids Base64 decode."""
+        import scripts.run_end_to_end_demo as demo_mod
+        creator = getattr(demo_mod, "_create_live_scheduled_task_fake_model", None)
+        self.assertIsNotNone(
+            creator,
+            "_create_live_scheduled_task_fake_model helper must be defined in scripts.run_end_to_end_demo",
+        )
+
+        fake_model = creator(
+            command_line=self.scheduled_task_splunk_record["CommandLine"],
+            detection_name="suspicious scheduled task creation",
+            incident_id="INC-TEST-TASK-002",
+        )
+        decisions = fake_model.decisions
+        # Must not request decode_base64_powershell
+        tool_names = [d.tool_request.tool_name for d in decisions if d.tool_request is not None]
+        self.assertNotIn("decode_base64_powershell", tool_names)
+        self.assertIn("map_mitre_technique", tool_names)
+
+        # Final result must reflect scheduled task / T1053.005
+        final_dec = decisions[-1]
+        self.assertIsNotNone(final_dec.final_result)
+        res = final_dec.final_result
+        self.assertIsNone(res.decoded_command)
+        self.assertIn("T1053.005", res.mitre_techniques)
+        self.assertIn("scheduled_task_creation", res.suspicious_indicators)
+
+    @patch("investigator.providers.openai_provider.OpenAIModel")
+    def test_live_scheduled_task_openai_provider_selection(self, mock_openai_cls: MagicMock) -> None:
+        """live-scheduled-task supports --provider openai through the same OpenAIModel adapter."""
+        from investigator.model import DecisionType, ModelDecision
+        mock_model = MagicMock()
+        mock_model.decide.return_value = ModelDecision(
+            decision_type=DecisionType.FINAL_RESULT,
+            final_result=InvestigationResult(
+                summary="Scheduled task creation observed on DC01.",
+                observations=("schtasks.exe /create observed",),
+                decoded_command=None,
+                mitre_techniques=("T1053.005",),
+                suspicious_indicators=("scheduled_task_creation",),
+                recommended_next_step="Inspect execution context",
+                confidence_level="medium",
+                evidence_refs=("INC-TEST-TASK-002",),
+            ),
+        )
+        mock_openai_cls.return_value = mock_model
+
+        mock_splunk = MagicMock(spec=SplunkSearchClient)
+        mock_splunk.search_scheduled_task_creation.return_value = [self.scheduled_task_splunk_record]
+
+        out_stream = io.StringIO()
+        code = run_demo(
+            mode="live-scheduled-task",
+            provider="openai",
+            minutes=15,
+            stream_in=io.StringIO(),
+            stream_out=out_stream,
+            splunk_client=mock_splunk,
+        )
+
+        self.assertEqual(code, 0)
+        mock_openai_cls.assert_called_once_with()
+        self.assertIn("Detection ID:      DET-TASK-001", out_stream.getvalue())
+
+    def test_live_scheduled_task_incident_and_ticket_output(self) -> None:
+        """When write_incident and create_ticket are set, produces DET-TASK-001, T1053.005, and compatible output."""
+        mock_splunk = MagicMock(spec=SplunkSearchClient)
+        mock_splunk.search_scheduled_task_creation.return_value = [self.scheduled_task_splunk_record]
+
+        mock_ticket_client = MagicMock()
+        mock_ticket_client.create_ticket.return_value = TicketResult(
+            success=True,
+            ticket_key="SEC-8888",
+            provider="jira_cloud",
+            created_at_utc="2026-10-16T12:00:00Z",
+            detail_code="ticket_created_jira",
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            incidents_dir = Path(tmp_dir) / "incidents"
+            out_stream = io.StringIO()
+
+            code = run_demo(
+                mode="live-scheduled-task",
+                provider="fake",
+                minutes=15,
+                write_incident=True,
+                create_ticket=True,
+                ticket_provider="jira",
+                jira_project="SEC",
+                jira_issue_type="Incident",
+                jira_client=mock_ticket_client,
+                incidents_dir=incidents_dir,
+                stream_in=io.StringIO(),
+                stream_out=out_stream,
+                splunk_client=mock_splunk,
+            )
+
+            self.assertEqual(code, 0)
+
+            # 1. Verify Incident Record JSON
+            incident_files = list(incidents_dir.glob("*.json"))
+            self.assertEqual(len(incident_files), 1)
+            record_data = json.loads(incident_files[0].read_text(encoding="utf-8"))
+            self.assertEqual(record_data["detection_id"], "DET-TASK-001")
+            self.assertEqual(record_data["detection_name"], "suspicious scheduled task creation")
+            self.assertEqual(record_data["mitre_technique_id"], "T1053.005")
+            self.assertIsNone(record_data["decoded_command"])
+            self.assertIn("scheduled_task_creation_detected", record_data["policy_reason_codes"])
+            self.assertIn("mitre_t1053_005", record_data["policy_reason_codes"])
+            self.assertNotIn("benign_lab_fixture_matched", record_data["policy_reason_codes"])
+            self.assertNotIn("encoded_powershell_detected", record_data["policy_reason_codes"])
+
+            # 2. Verify Ticket Request payload
+            mock_ticket_client.create_ticket.assert_called_once()
+            ticket_req = mock_ticket_client.create_ticket.call_args[0][0]
+            self.assertNotIn("benign-test", ticket_req.labels)
+            self.assertNotIn("powershell", ticket_req.labels)
+            self.assertNotIn("network-retrieval", ticket_req.labels)
+            self.assertIn("suspicious scheduled task creation", ticket_req.summary)
+            self.assertIn("DET-TASK-001", ticket_req.description)
+            self.assertIn("T1053.005", ticket_req.description)
+
+
 if __name__ == "__main__":
     unittest.main()

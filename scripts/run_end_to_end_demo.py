@@ -275,6 +275,52 @@ def _find_exact_network_retrieval_fixture(
     return None
 
 
+_CONTROLLED_TASK_MARKER_REGEX = re.compile(r'(?i)(?:^|[\s"\'/=])SOCLab-Task-Validation-3(?:[\s"\'/]|$)')
+_CREATE_TOKEN_REGEX = re.compile(r'(?i)(?:^|[\s"\'/])/create(?:[\s"\'/]|$)')
+_SCHTASKS_IMAGE_REGEX = re.compile(r'(?i)(?:^|.*[\\/])schtasks\.exe$')
+
+
+def _find_exact_scheduled_task_fixture(
+    records: List[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """Order candidates by _time (newest first) and select the controlled scheduled task creation fixture.
+
+    Fixed matching properties:
+    - Image: must end with 'schtasks.exe' (case-insensitive, boundary-safe)
+    - CommandLine: must contain '/create' as a distinct token (case-insensitive)
+    - CommandLine: must contain the exact controlled marker 'SOCLab-Task-Validation-3' (boundary-safe)
+
+    Returns:
+        Selected record dict if found, else None.
+    """
+    dated_candidates: List[Tuple[datetime, Dict[str, Any]]] = []
+    for rec in records:
+        ts_str = rec.get("_time", "")
+        dt = _parse_event_timestamp(ts_str)
+        if dt is not None:
+            dated_candidates.append((dt, rec))
+
+    # Sort descending: newest first
+    dated_candidates.sort(key=lambda item: item[0], reverse=True)
+
+    for _dt, rec in dated_candidates:
+        image = str(rec.get("Image", ""))
+        cmd_line = str(rec.get("CommandLine", ""))
+
+        if not _SCHTASKS_IMAGE_REGEX.search(image):
+            continue
+
+        if not _CREATE_TOKEN_REGEX.search(cmd_line):
+            continue
+
+        if not _CONTROLLED_TASK_MARKER_REGEX.search(cmd_line):
+            continue
+
+        return rec
+
+    return None
+
+
 def _create_synthetic_critical_model(
     command_line: str,
     detection_name: str,
@@ -430,6 +476,48 @@ def _create_synthetic_scheduled_task_fake_model(
                 ),
                 recommended_next_step="Review scheduled task properties, target binary integrity, and persistence necessity.",
                 confidence_level="high",
+                evidence_refs=(incident_id,),
+            ),
+        ),
+    ]
+    model = FakeModel(decisions)
+    model.decisions = decisions
+    return model
+
+
+def _create_live_scheduled_task_fake_model(
+    command_line: str,
+    detection_name: str,
+    incident_id: str,
+) -> FakeModel:
+    """Construct a deterministic FakeModel sequence for live-scheduled-task mode."""
+    decisions = [
+        ModelDecision(
+            decision_type=DecisionType.TOOL_REQUEST,
+            tool_request=ToolRequest(
+                tool_name="map_mitre_technique",
+                arguments={"detection_ref": detection_name, "fail_closed": False},
+            ),
+        ),
+        ModelDecision(
+            decision_type=DecisionType.FINAL_RESULT,
+            final_result=InvestigationResult(
+                summary=(
+                    "Suspicious scheduled task creation observed on DC01; "
+                    "controlled scheduled task validation event identified with no unauthorized persistence."
+                ),
+                observations=(
+                    "schtasks.exe /create process creation observed in telemetry",
+                    "Controlled lab validation task SOCLab-Task-Validation-3 identified",
+                ),
+                decoded_command=None,
+                mitre_techniques=("T1053.005",),
+                suspicious_indicators=(
+                    "scheduled_task_creation",
+                    "persistence_mechanism",
+                ),
+                recommended_next_step="Review task schedule, binary target integrity, and persistence authorization.",
+                confidence_level="medium",
                 evidence_refs=(incident_id,),
             ),
         ),
@@ -764,6 +852,55 @@ def run_demo(
         )
         evidence_source = "Live Splunk (localhost:8089)"
         retrieved_count = len(raw_records)
+    elif mode == "live-scheduled-task":
+        client = splunk_client or SplunkSearchClient(verify_tls=False)
+        out_stream.write(f"[*] Querying bounded Splunk search on localhost:8089 (host=DC01, minutes={minutes}, limit=5)...\n")
+        out_stream.flush()
+
+        try:
+            raw_records = client.search_scheduled_task_creation(
+                host="DC01",
+                minutes=minutes,
+                limit=5,
+            )
+        except SplunkConnectionError as err:
+            out_stream.write(f"[!] Splunk connection error: {err}\n")
+            out_stream.write("[!] Note: live-scheduled-task requires running locally on Splunk-Server (localhost:8089).\n")
+            out_stream.write("[!] For offline/local demonstration, run with --mode synthetic-scheduled-task.\n")
+            return 1
+        except (SplunkResponseError, SplunkSearchError) as err:
+            out_stream.write(f"[!] Bounded Splunk search failed: {err}\n")
+            return 1
+
+        if not raw_records:
+            out_stream.write("[!] Controlled scheduled task validation fixture not found in the bounded Splunk window.\n")
+            out_stream.write("[!] Generate the approved scheduled task test event and retry.\n")
+            return 1
+
+        selected_record = _find_exact_scheduled_task_fixture(raw_records)
+        if selected_record is None:
+            out_stream.write("[!] Controlled scheduled task validation fixture not found in the bounded Splunk window.\n")
+            out_stream.write("[!] Generate the approved scheduled task test event and retry.\n")
+            return 1
+
+        deterministic_decoded = None
+        clean_time_id = selected_record["_time"].replace(":", "").replace("-", "").replace(" ", "T").replace("+", "").replace(".", "")
+        incident_id = f"INC-LIVE-DC01-{clean_time_id}"[:60]
+
+        incident = InvestigationInput(
+            incident_id=incident_id,
+            timestamp=selected_record["_time"],
+            host="DC01",
+            user=selected_record["User"],
+            image=selected_record["Image"],
+            command_line=selected_record["CommandLine"],
+            parent_image=selected_record["ParentImage"],
+            parent_command_line=selected_record["ParentCommandLine"],
+            detection_name="suspicious scheduled task creation",
+            detection_id=DET_TASK_001,
+        )
+        evidence_source = "Live Splunk (localhost:8089)"
+        retrieved_count = len(raw_records)
     elif mode == "synthetic-scheduled-task":
         if synthetic_incident_id is not None:
             try:
@@ -799,7 +936,7 @@ def run_demo(
     mitre_res = map_detection_to_mitre(incident.detection_name, fail_closed=False)
     mitre_id = mitre_res.technique_id if mitre_res.mapped else None
 
-    if mode in ("live-network-retrieval", "synthetic-scheduled-task"):
+    if mode in ("live-network-retrieval", "live-scheduled-task", "synthetic-scheduled-task"):
         expected_technique = "T1105" if mode == "live-network-retrieval" else "T1053.005"
         tool_failure = not (mitre_res.mapped and mitre_id == expected_technique)
     else:
@@ -822,6 +959,23 @@ def run_demo(
             detection_name=incident.detection_name,
             incident_id=incident.incident_id,
         )
+    elif mode == "live-scheduled-task":
+        if provider == "openai":
+            from investigator.providers.openai_provider import (
+                OpenAIModel,
+                OpenAIProviderError,
+            )
+            try:
+                model = OpenAIModel()
+            except OpenAIProviderError as err:
+                out_stream.write(f"[!] OpenAI provider configuration failed: {err}\n")
+                return 1
+        else:
+            model = _create_live_scheduled_task_fake_model(
+                command_line=incident.command_line,
+                detection_name=incident.detection_name,
+                incident_id=incident.incident_id,
+            )
     elif mode == "live-network-retrieval":
         if provider == "openai":
             from investigator.providers.openai_provider import (
@@ -1285,9 +1439,15 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--mode",
-        choices=["live-benign", "live-network-retrieval", "synthetic-critical", "synthetic-scheduled-task"],
+        choices=[
+            "live-benign",
+            "live-network-retrieval",
+            "live-scheduled-task",
+            "synthetic-critical",
+            "synthetic-scheduled-task",
+        ],
         required=True,
-        help="Demo mode to execute (live-benign, live-network-retrieval, synthetic-critical, or synthetic-scheduled-task).",
+        help="Demo mode to execute (live-benign, live-network-retrieval, live-scheduled-task, synthetic-critical, or synthetic-scheduled-task).",
     )
     parser.add_argument(
         "--provider",
@@ -1396,7 +1556,7 @@ def main() -> int:
 
     # live modes default to fake if not specified
     provider = args.provider
-    if args.mode in ("live-benign", "live-network-retrieval") and provider is None:
+    if args.mode in ("live-benign", "live-network-retrieval", "live-scheduled-task") and provider is None:
         provider = "fake"
 
     synthetic_incident_id = args.incident_id
