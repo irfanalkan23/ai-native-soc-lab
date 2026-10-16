@@ -30,6 +30,7 @@ from investigator.threat_intel import ThreatIntelPolicySignal, ThreatIntelSignal
 # Canonical lab detection ID for controlled encoded-PowerShell testing
 BENIGN_LAB_DETECTION_ID = "DET-POWERSHELL-001"
 DET_POWERSHELL_002 = "DET-POWERSHELL-002"
+DET_TASK_001 = "DET-TASK-001"
 EXACT_BENIGN_COMMAND = "Write-Host 'AI-NativeSOC-LAB-TEST'"
 
 
@@ -74,9 +75,11 @@ POLICY_REASON_CODES = frozenset({
     "benign_lab_fixture_matched",
     "encoded_powershell_detected",
     "powershell_network_retrieval_detected",
+    "scheduled_task_creation_detected",
     "decoded_command_present",
     "mitre_t1059_001",
     "mitre_t1105",
+    "mitre_t1053_005",
     "incomplete_evidence_uncertainty",
     "suspicious_indicators_present",
     "multiple_suspicious_indicators",
@@ -296,6 +299,9 @@ class RiskPolicyEngine:
         elif context.verified_detection_id == DET_POWERSHELL_002:
             raw_score += 25
             reasons.append("powershell_network_retrieval_detected")
+        elif context.verified_detection_id == DET_TASK_001:
+            raw_score += 25
+            reasons.append("scheduled_task_creation_detected")
 
         if context.deterministic_decoded_command is not None and context.deterministic_decoded_command.strip():
             raw_score += 10
@@ -307,6 +313,9 @@ class RiskPolicyEngine:
         elif context.mitre_technique_id == "T1105":
             raw_score += 10
             reasons.append("mitre_t1105")
+        elif context.mitre_technique_id == "T1053.005":
+            raw_score += 10
+            reasons.append("mitre_t1053_005")
 
         if context.tool_failure_or_incomplete_evidence:
             raw_score += 15

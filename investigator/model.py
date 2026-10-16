@@ -65,7 +65,7 @@ You may request the following tools via a structured ToolRequest only:
   - bounded_splunk_search:
       arguments:
         - query_type: string, fixed allowlisted selector, NOT arbitrary search text \
-(allowed values: "encoded_powershell_matches", "powershell_network_retrieval_matches"; \
+(allowed values: "encoded_powershell_matches", "powershell_network_retrieval_matches", "scheduled_task_creation_matches"; \
 optional, defaults to "encoded_powershell_matches")
         - host: string, must equal "DC01"
         - minutes: integer, 1-60 (do not pass string)

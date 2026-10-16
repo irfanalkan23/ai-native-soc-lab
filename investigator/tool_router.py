@@ -72,6 +72,7 @@ _BASE_ALLOWED_TOOLS: frozenset[str] = frozenset({
 ALLOWED_SPLUNK_QUERY_TYPES = frozenset({
     "encoded_powershell_matches",
     "powershell_network_retrieval_matches",
+    "scheduled_task_creation_matches",
     "modsecurity_sqli_matches",
 })
 
@@ -190,6 +191,12 @@ class ToolRouter:
                 )
             elif query_type == "powershell_network_retrieval_matches":
                 return self._splunk_client.search_powershell_network_retrieval(
+                    host=host,
+                    minutes=minutes,
+                    limit=limit,
+                )
+            elif query_type == "scheduled_task_creation_matches":
+                return self._splunk_client.search_scheduled_task_creation(
                     host=host,
                     minutes=minutes,
                     limit=limit,

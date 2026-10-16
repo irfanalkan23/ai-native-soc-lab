@@ -86,6 +86,7 @@ from investigator.orchestrator import (
 from investigator.policy import (
     BENIGN_LAB_DETECTION_ID,
     DET_POWERSHELL_002,
+    DET_TASK_001,
     EXACT_BENIGN_COMMAND,
     ActionDisposition,
     PolicyContext,
@@ -165,10 +166,11 @@ def _validate_synthetic_incident_id(incident_id: str) -> str:
 
 def generate_synthetic_incident_id(
     clock: Optional[Callable[[], datetime]] = None,
+    prefix: str = "INC-DEMO-CRIT",
 ) -> str:
     """Generate a bounded, filesystem-safe unique incident ID for demo runs.
 
-    Format: INC-DEMO-CRIT-<UTC_TIMESTAMP>
+    Format: <prefix>-<UTC_TIMESTAMP>
     Example: INC-DEMO-CRIT-20261010T084530123456Z
     Guaranteed <= 64 characters, safe for filesystem filenames and audit logs.
     """
@@ -176,7 +178,7 @@ def generate_synthetic_incident_id(
     if now.tzinfo is None:
         now = now.replace(tzinfo=timezone.utc)
     clean_ts = now.strftime("%Y%m%dT%H%M%S%fZ")
-    return f"INC-DEMO-CRIT-{clean_ts}"[:64]
+    return f"{prefix}-{clean_ts}"[:64]
 
 
 def _parse_event_timestamp(time_str: str) -> Optional[datetime]:
@@ -390,6 +392,44 @@ def _create_live_network_retrieval_fake_model(
                 ),
                 recommended_next_step="Review endpoint network transfer policies and verify controlled test context.",
                 confidence_level="medium",
+                evidence_refs=(incident_id,),
+            ),
+        ),
+    ]
+    model = FakeModel(decisions)
+    model.decisions = decisions
+    return model
+
+
+def _create_synthetic_scheduled_task_fake_model(
+    detection_name: str,
+    incident_id: str,
+) -> FakeModel:
+    """Construct a deterministic FakeModel sequence for synthetic-scheduled-task mode."""
+    decisions = [
+        ModelDecision(
+            decision_type=DecisionType.TOOL_REQUEST,
+            tool_request=ToolRequest(
+                tool_name="map_mitre_technique",
+                arguments={"detection_ref": detection_name, "fail_closed": False},
+            ),
+        ),
+        ModelDecision(
+            decision_type=DecisionType.FINAL_RESULT,
+            final_result=InvestigationResult(
+                summary="Suspicious scheduled task creation observed on DC01 using schtasks.exe.",
+                observations=(
+                    "schtasks.exe /create executed on DC01",
+                    "Task targets batch script in temp directory",
+                ),
+                decoded_command=None,
+                mitre_techniques=("T1053.005",),
+                suspicious_indicators=(
+                    "scheduled_task_persistence",
+                    "temp_directory_target",
+                ),
+                recommended_next_step="Review scheduled task properties, target binary integrity, and persistence necessity.",
+                confidence_level="high",
                 evidence_refs=(incident_id,),
             ),
         ),
@@ -724,6 +764,31 @@ def run_demo(
         )
         evidence_source = "Live Splunk (localhost:8089)"
         retrieved_count = len(raw_records)
+    elif mode == "synthetic-scheduled-task":
+        if synthetic_incident_id is not None:
+            try:
+                inc_id = _validate_synthetic_incident_id(synthetic_incident_id)
+            except ValueError as err:
+                out_stream.write(f"[!] Invalid synthetic incident ID: {err}\n")
+                return 1
+        else:
+            inc_id = "INC-DEMO-TASK-2026-001"
+
+        incident = InvestigationInput(
+            incident_id=inc_id,
+            timestamp="2026-10-15T10:00:00Z",
+            host="DC01",
+            user="SYSTEM",
+            image="C:\\Windows\\System32\\schtasks.exe",
+            command_line="schtasks.exe /create /tn SecurityHealthFix /tr C:\\Windows\\Temp\\update.bat /sc daily /st 09:00 /f",
+            parent_image="C:\\Windows\\System32\\cmd.exe",
+            parent_command_line="cmd.exe /c update.bat",
+            detection_name="suspicious scheduled task creation",
+            detection_id=DET_TASK_001,
+        )
+        deterministic_decoded = None
+        evidence_source = "Sanitized Local Synthetic Fixture"
+        retrieved_count = 0
     else:
         out_stream.write(f"[!] Unknown mode: {mode}\n")
         return 1
@@ -734,8 +799,9 @@ def run_demo(
     mitre_res = map_detection_to_mitre(incident.detection_name, fail_closed=False)
     mitre_id = mitre_res.technique_id if mitre_res.mapped else None
 
-    if mode == "live-network-retrieval":
-        tool_failure = not (mitre_res.mapped and mitre_id == "T1105")
+    if mode in ("live-network-retrieval", "synthetic-scheduled-task"):
+        expected_technique = "T1105" if mode == "live-network-retrieval" else "T1053.005"
+        tool_failure = not (mitre_res.mapped and mitre_id == expected_technique)
     else:
         tool_failure = deterministic_decoded is None
 
@@ -749,6 +815,11 @@ def run_demo(
             command_line=incident.command_line,
             detection_name=incident.detection_name,
             decoded_command=deterministic_decoded or "",
+            incident_id=incident.incident_id,
+        )
+    elif mode == "synthetic-scheduled-task":
+        model = _create_synthetic_scheduled_task_fake_model(
+            detection_name=incident.detection_name,
             incident_id=incident.incident_id,
         )
     elif mode == "live-network-retrieval":
@@ -1214,9 +1285,9 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--mode",
-        choices=["live-benign", "live-network-retrieval", "synthetic-critical"],
+        choices=["live-benign", "live-network-retrieval", "synthetic-critical", "synthetic-scheduled-task"],
         required=True,
-        help="Demo mode to execute (live-benign, live-network-retrieval, or synthetic-critical).",
+        help="Demo mode to execute (live-benign, live-network-retrieval, synthetic-critical, or synthetic-scheduled-task).",
     )
     parser.add_argument(
         "--provider",
@@ -1299,9 +1370,9 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
 
     args = parser.parse_args(argv)
 
-    # Invariant: synthetic-critical mode must NOT accept --provider
-    if args.mode == "synthetic-critical" and args.provider is not None:
-        parser.error("--provider is not allowed for synthetic-critical mode (strictly uses deterministic FakeModel)")
+    # Invariant: synthetic modes must NOT accept --provider
+    if args.mode in ("synthetic-critical", "synthetic-scheduled-task") and args.provider is not None:
+        parser.error(f"--provider is not allowed for {args.mode} mode (strictly uses deterministic FakeModel)")
 
     if not (1 <= args.minutes <= 60):
         parser.error("--minutes must be between 1 and 60")
@@ -1329,8 +1400,9 @@ def main() -> int:
         provider = "fake"
 
     synthetic_incident_id = args.incident_id
-    if args.mode == "synthetic-critical" and synthetic_incident_id is None:
-        synthetic_incident_id = generate_synthetic_incident_id()
+    if args.mode in ("synthetic-critical", "synthetic-scheduled-task") and synthetic_incident_id is None:
+        prefix = "INC-DEMO-TASK" if args.mode == "synthetic-scheduled-task" else "INC-DEMO-CRIT"
+        synthetic_incident_id = generate_synthetic_incident_id(prefix=prefix)
 
     return run_demo(
         mode=args.mode,
