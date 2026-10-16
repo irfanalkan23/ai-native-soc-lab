@@ -93,6 +93,238 @@ The lab demonstrates defense-in-depth across multiple enterprise telemetry layer
 
 ---
 
+## Getting Started & Demo Paths
+
+This repository strictly separates the **software control plane** (reproducible anywhere) from the **live physical/virtual home lab** (requires dedicated virtualization infrastructure). A reviewer can clone this repository, run the entire test suite, execute deterministic evaluation harnesses, run synthetic incident pipelines, and launch the SOC Analyst UI locally without needing access to the author's home lab or external paid API accounts.
+
+```
+┌────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ TRACK 1: OFFLINE PORTFOLIO DEMO                                                                       │
+│ • Zero external infrastructure or credentials required                                                 │
+│ • Deterministic test fixtures, fake model/ticket providers, local JSONL audit trail                    │
+│ • Exercises: Test suite (1,897 tests), Security evaluations (21/21), Decision evaluations, UI console  │
+└────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ TRACK 2: FULL HOME-LAB VALIDATION                                                                      │
+│ • Requires dedicated VirtualBox LabNet, pfSense, DC01, WEB01, Splunk Enterprise indexer                │
+│ • Requires user-supplied API credentials for OpenAI, Jira Cloud, and VirusTotal                        │
+│ • Exercises: Real adversary simulation, Sysmon/ModSecurity ingestion, live Splunk retrieval, live APIs │
+└────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Track 1: Offline Portfolio Demo (Reviewer Quick Start)
+
+The offline portfolio track demonstrates the complete deterministic agentic security architecture, policy engine, evaluation harnesses, and analyst presentation console on any standard developer workstation.
+
+**What the offline track does NOT require:**
+* No pfSense firewall or isolated LabNet network
+* No Kali Linux attacker VM
+* No Windows Server 2022 Active Directory (`DC01`) or Sysmon forwarder
+* No Linux web server (`WEB01`), Apache, or OWASP ModSecurity
+* No Splunk Enterprise indexer or Universal Forwarder
+* No Jira Cloud account or API token
+* No OpenAI API key or model access
+* No VirusTotal API credentials
+
+#### Minimum Prerequisites
+* **Git**: Installed and available in system `PATH`
+* **Python**: Python 3.12 recommended / lab validated on Python 3.12 (specifically tested on `3.12.4`)
+* **Operating System**: Linux, macOS, or Windows
+* **Environment Configuration**: Optional `.env.example` template provided in repository root (`cp .env.example .env`). The offline track uses deterministic mock providers and requires no environment variables.
+
+#### Step-by-Step Offline Execution
+
+1. **Clone and enter the repository**:
+   ```bash
+   git clone https://github.com/irfanalkan23/ai-native-soc-lab.git
+   cd ai-native-soc-lab
+   ```
+
+2. **Create and activate a virtual environment**:
+   * *Linux / macOS*:
+     ```bash
+     python3 -m venv .venv
+     source .venv/bin/activate
+     ```
+   * *Windows (PowerShell)*:
+     ```powershell
+     python -m venv .venv
+     .venv\Scripts\Activate.ps1
+     ```
+
+3. **Install project dependencies**:
+   ```bash
+   pip install -r requirements.txt
+   ```
+   *(Installs `fastapi`, `uvicorn`, `httpx`, and `openai`. No compilers or native build chains required.)*
+
+4. **Run the automated unit and integration test suite** `[OFFLINE]`:
+   ```bash
+   python -m unittest discover -s tests -p "test_*.py"
+   ```
+   * **Verification**: Discovers all 1,897 tests across gateway retrieval, deterministic policy, approval gates, UI routes, security evaluations, and adversarial boundaries.
+   * **Credentials & Offline Safety**: The baseline 1,889 unit and integration tests run 100% offline with zero external network calls. The 8 live smoke tests under `tests/live/` are protected by credential and opt-in guards (`RUN_LIVE_VT_TESTS=1`, `OPENAI_API_KEY`, `JIRA_BASE_URL`) and skip automatically when external credentials are not set.
+   * **Expected Outcome**: `OK` (clean pass across all executed tests; live suites skipped when credentials are absent).
+
+5. **Run the canonical security evaluation harness** `[OFFLINE]`:
+   ```bash
+   python scripts/run_security_evaluation.py
+   ```
+   * **Verification**: Executes 21 automated deterministic security evaluation scenarios testing prompt injection isolation, tool allowlist enforcement, argument smuggling prevention, model downgrade rejection, approval replay rejection, and fail-closed error handling.
+   * **Credentials**: None required (deterministic scripted provider).
+   * **Artifacts Generated**: Writes byte-deterministic JSON and Markdown evaluation summaries to `artifacts/evaluation/security_eval_*.json`.
+   * **Expected Outcome**: `21/21 scenarios passed (100.0%)` with zero security violations.
+   * **Safety**: Completely safe offline.
+
+6. **Run the deterministic decision evaluation harness** `[OFFLINE]`:
+   ```bash
+   python scripts/run_decision_evaluation.py
+   ```
+   * **Verification**: Evaluates 10 structured triage scenarios against the deterministic policy engine to ensure risk scores, disposition actions, and human approval gates remain consistent across model variations.
+   * **Credentials**: None required.
+   * **Expected Outcome**: `10/10 scenarios passed (100.0%)`.
+   * **Safety**: Completely safe offline.
+
+7. **Generate synthetic incident artifacts for local inspection** `[OFFLINE]`:
+   *(A fresh clone has no incident records or audit logs because runtime artifacts in `artifacts/incidents/` and `artifacts/audit/` are gitignored. Running these safe synthetic commands auto-creates the directories and populates local artifacts for the UI console.)*
+
+   * *Synthetic Scheduled Task Persistence Demo (DET-TASK-001 — Non-Interactive)*:
+     ```bash
+     python scripts/run_end_to_end_demo.py --mode synthetic-scheduled-task --write-incident --persist-audit
+     ```
+     * **Behavior**: Ingests a sanitized scheduled task creation fixture (`T1053.005`), runs deterministic triage and policy scoring (`risk_score=70`, `HIGH`, `HUMAN_REVIEW`), and auto-creates and persists `artifacts/incidents/INC-DEMO-TASK-*.json` and `artifacts/audit/agent_audit.jsonl`. Runs completely non-interactively without operator prompts.
+     * **Credentials**: None required (strictly uses deterministic `FakeModel`).
+     * **Safety Boundary**: Non-destructive and completely offline.
+
+   * *Synthetic Critical Incident Demo (ModSecurity SQLi + Policy Gate + Interactive CLI Approval)*:
+     ```bash
+     # Interactive CLI mode (prompts operator for [approve/deny] in terminal):
+     python scripts/run_end_to_end_demo.py --mode synthetic-critical --write-incident --persist-audit
+
+     # Or deferred UI approval mode (defers approval decision to the Analyst UI):
+     python scripts/run_end_to_end_demo.py --mode synthetic-critical --approval-mode ui --write-incident --persist-audit
+     ```
+     * **Behavior**: Ingests a sanitized synthetic ModSecurity SQL injection fixture, executes deterministic decoding, evaluates deterministic risk policy (`risk_score=80`, `CRITICAL`), requires operator authorization, executes a simulated response action (`SIMULATED`), and writes artifacts.
+     * **Credentials**: None required (strictly uses deterministic `FakeModel` and `FakeTicketClient`).
+     * **Safety Boundary**: Containment is strictly simulated; zero real endpoint modification occurs.
+
+8. **Launch the SOC Analyst UI / Investigation Console** `[OFFLINE]`:
+   ```bash
+   python -m uvicorn ui.app:create_app --factory --host 127.0.0.1 --port 8010
+   ```
+   * **Supported Uvicorn Invocation**: Pass factory callable `ui.app:create_app` (without parentheses) with `--factory`.
+   * **Port Convention**: Uses port `8010` (`DEFAULT_UI_PORT = 8010` in `ui/app.py`). Port 8010 avoids collision with Splunk Web (which occupies port 8000 in the home lab) and matches the server's default origin allowlist (`http://127.0.0.1:8010` and `http://localhost:8010`).
+   * **Access**: Open `http://127.0.0.1:8010` in any web browser.
+   * **Artifact Behavior**: Reads directly from `artifacts/incidents/` and `artifacts/audit/agent_audit.jsonl`. If launched before generating synthetic artifacts in Step 7, the UI starts cleanly (HTTP 200) but displays an empty state. Generating artifacts in Step 7 populates rich incident detail views, inert Sysmon XML telemetry, ModSecurity 7-field cards, visual AI advisory vs deterministic policy separation, and audit timelines.
+   * **Credentials & Safety**: None required; read-only presentation layer; zero external outbound network requests.
+
+---
+
+### Track 2: Full Home-Lab Validation (Live Infrastructure Track)
+
+The live validation track connects the agentic security control plane to real telemetry streams and external cloud APIs. **Cloning the repository does NOT reproduce the home lab environment.** Live execution requires an equivalent virtualization topology, active endpoint telemetry forwarders, a running Splunk indexer, and user-supplied credentials.
+
+#### Required Home-Lab Infrastructure
+* **Network & Hypervisor**: VirtualBox host-only network `LabNet` (`192.168.1.0/24`) routed through a dedicated **pfSense** gateway VM.
+* **Attacker System**: **Kali Linux** (`192.168.1.100`) generating controlled adversary traffic.
+* **Windows Endpoint (`DC01`)**: Windows Server 2022 Active Directory Domain Controller (`192.168.1.10`) with Microsoft Sysmon installed and Splunk Universal Forwarder transmitting Process Create (Event ID 1) logs.
+* **Web Server (`WEB01`)**: Ubuntu 24.04.3 LTS (`192.168.1.102`) running Apache 2.4 reverse proxy with OWASP ModSecurity Core Rule Set (OWASP CRS 3.3.5) blocking mode and OWASP Juice Shop. Splunk Universal Forwarder forwarding `apache:access` and `modsecurity` audit logs.
+* **SIEM (`Splunk-Server`)**: Splunk Enterprise (`192.168.1.101`) indexing telemetry into `index=main` and exposing the management API on `https://localhost:8089`.
+
+#### User-Supplied External Credentials (Environment Variables)
+When running live modes, credentials must be set in the local process environment (never committed to git; `.env` is ignored by `.gitignore`):
+```bash
+# OpenAI API Access (used for advisory investigation analysis)
+export OPENAI_API_KEY="sk-..."
+export OPENAI_MODEL="gpt-5.6-sol"
+
+# Jira Cloud REST API v3 (used strictly as downstream reporting sink)
+export JIRA_BASE_URL="https://your-domain.atlassian.net"
+export JIRA_USER_EMAIL="analyst@example.com"
+export JIRA_API_TOKEN="your-api-token"
+
+# VirusTotal REST API v3 (used strictly for bounded public IPv4 enrichment)
+export VIRUSTOTAL_API_KEY="your-vt-api-key"
+# For live VirusTotal tests, also set: export RUN_LIVE_VT_TESTS="1"
+```
+
+#### Supported Live Demo Modes
+All live demo modes must be executed on the **Splunk-Server** VM where `https://localhost:8089` is reachable:
+
+1. **Live Benign Endpoint Search** `[LIVE]`:
+   ```bash
+   # Using deterministic FakeModel (requires live Splunk only, no OpenAI API key)
+   python scripts/run_end_to_end_demo.py --mode live-benign --provider fake --minutes 15
+
+   # Using live OpenAI advisory investigation
+   python scripts/run_end_to_end_demo.py --mode live-benign --provider openai --minutes 15
+   ```
+   * **Requirements**: Real Sysmon telemetry on DC01 containing the benign test fixture (`Write-Host 'AI-NativeSOC-LAB-TEST'`) ingested into Splunk within the specified `--minutes` lookback.
+   * **Policy Outcome**: Evaluates to `risk_score=0`, `LOW`, `NO_ACTION`. Never prompts for human approval.
+
+2. **Live PowerShell Network Retrieval Investigation** `[LIVE]`:
+   ```bash
+   python scripts/run_end_to_end_demo.py --mode live-network-retrieval --provider openai --minutes 15
+   ```
+   * **Requirements**: Controlled PowerShell download cradle executed on DC01 matching `DET-POWERSHELL-002` (`T1105`), indexed in Splunk, with valid `OPENAI_API_KEY`.
+   * **Policy Outcome**: Advisory investigation evaluates suspicious indicators; deterministic policy scores `70 / 100`, `HIGH`, `HUMAN_REVIEW`.
+
+3. **Live Scheduled Task Persistence Investigation** `[LIVE]`:
+   ```bash
+   python scripts/run_end_to_end_demo.py --mode live-scheduled-task --provider openai --minutes 10
+   ```
+   * **Requirements**: Controlled scheduled task creation on DC01 (`SOCLab-Task-Validation-3`) matching `DET-TASK-001` (`T1053.005`), indexed in Splunk, with valid `OPENAI_API_KEY`.
+   * **Policy Outcome**: Advisory investigation assesses persistence mechanics; deterministic policy scores `65 / 100`, `HIGH`, `HUMAN_REVIEW`.
+
+4. **Live Downstream Jira Cloud Ticket Creation** `[LIVE]`:
+   ```bash
+   # Live Jira Cloud dispatch attached to an end-to-end incident run
+   python scripts/run_end_to_end_demo.py --mode live-scheduled-task --provider openai --create-ticket --ticket-provider jira --jira-project KAN --jira-issue-type Incident
+
+   # Standalone Jira Cloud connectivity smoke test
+   python scripts/run_jira_smoke.py --project KAN --issue-type Incident --summary "Connectivity Smoke Test"
+   ```
+   * **Requirements**: Reachable Jira Cloud instance with valid `JIRA_BASE_URL`, `JIRA_USER_EMAIL`, and `JIRA_API_TOKEN` exported.
+   * **Safety Boundary**: Jira Cloud functions strictly as a downstream reporting and tracking sink. Jira has **zero response authority** and cannot trigger containment or modify policies.
+
+---
+
+### Verification Summary: Local vs. Live Capabilities
+
+#### What a Reviewer Can Verify Locally `[OFFLINE]`
+* **Tool Allowlisting & Schema Enforcement**: Strict parameter typing, argument validation, and static SPL query restriction (`ToolRouter`).
+* **Deterministic Policy Engine**: Exact risk scoring formulas, additive indicator weights, threshold rules, and disposition assignment (`RiskPolicyEngine`).
+* **Human Approval & Replay Protection**: 600s TTL expiry, exact action hash matching, single-use token consumption, and append-only ledger (`approval_consumption.jsonl`) with flush+fsync replay prevention.
+* **Simulation Safety Boundary**: Proof that containment is strictly recorded as `SIMULATED` vs `NOT_EXECUTED`; zero real subprocess or network mutation code exists.
+* **Audit Logging & Governance**: Append-only sequential JSONL writing, strict field validation, and deterministic timeline reconstruction.
+* **Adversarial & Injection Defenses**: 21 canonical security evaluation scenarios, CAT-1 through CAT-8 injection datasets, ADF codeBlock containment, and canary secrecy tests.
+* **Automated Decision Evaluation**: 10-scenario policy evaluation harness ensuring deterministic outputs across simulated variations.
+* **Synthetic Incident Flows & UI Console**: End-to-end incident records, policy decisions, audit timelines, and approval controls rendered in the FastAPI SOC Analyst UI.
+
+#### What Requires Live Infrastructure `[LIVE]`
+* **Sysmon $\rightarrow$ Splunk Ingestion**: Active forwarder delivery from Windows Server 2022 DC01 into Splunk Enterprise index `main`.
+* **ModSecurity Telemetry**: Active Apache reverse proxy WAF audit log collection from WEB01.
+* **Live Splunk Retrieval**: Authenticated REST API queries against `https://localhost:8089` on the Splunk-Server instance.
+* **Live OpenAI Advisory Investigation**: Live API requests to OpenAI using user-supplied API keys.
+* **Live Jira Cloud Issue Creation**: Real incident ticket creation in an active Atlassian Jira Cloud project (`KAN-*`).
+* **Live VirusTotal Enrichment**: Real v3 REST API reputation queries for public IPv4 addresses.
+* **Physical Network Boundary UI Validation**: Accessing the SOC Analyst UI from separate guest virtual machines (e.g., Kali browser validation across LabNet).
+
+| Security & Governance Capability | What a Reviewer Can Verify Locally `[OFFLINE]` | What Requires Live Infrastructure `[LIVE]` |
+| :--- | :--- | :--- |
+| **Tool Allowlisting & Permissions** | Complete schema enforcement, unallowlisted tool rejection, argument validation, and static SPL query restriction (`ToolRouter`). | Ingestion of telemetry from physical forwarders into Splunk Enterprise. |
+| **Deterministic Policy Engine** | Exact risk scoring mathematical formulas, additive weight calculation, threshold rules, and disposition assignment (`RiskPolicyEngine`). | Live environmental baseline tuning against ambient network traffic. |
+| **Human Approval & Ledger** | 600s TTL expiry, exact action SHA-256 hash matching, single-use token consumption, and append-only ledger fsync replay protection. | Real operator interactive workflow during an active live attack campaign. |
+| **Simulation Safety Boundary** | Proof that containment is strictly recorded as `SIMULATED` vs `NOT_EXECUTED`; zero real subprocess or network mutation code exists. | Confirmed absence of network disruption across physical lab switches/hosts. |
+| **Audit Logging & Governance** | Append-only sequential JSONL writing, strict field validation, and deterministic timeline reconstruction. | Distributed multi-host audit aggregation. |
+| **Adversarial & Injection Defenses** | 21 canonical security evaluation scenarios, CAT-1 through CAT-8 injection datasets, ADF codeBlock containment, and canary secrecy tests. | Empirical adversarial red-teaming against live, unconstrained third-party LLMs. |
+| **Incident Presentation Console** | Full FastAPI SOC Analyst UI displaying inert evidence, policy visualizations, audit timelines, and approval controls. | Browser access across physical network segments outside localhost. |
+| **Threat Intelligence Gating** | Deterministic 8-scope IPv4 classification (`classify_ipv4_scope`), private IP blocking (`SKIPPED_INELIGIBLE`), and score caps (+15 max). | Live REST API v3 queries against VirusTotal for real public IPv4 lookups. |
+| **Incident Ticketing** | Bounded `TicketRequest` schema formatting, hardened ADF structure (headings, bullets, inert code blocks), and mock dispatch. | Real ticket creation (`KAN-*`) in an active Atlassian Jira Cloud project. |
+| **Response Containment** | **SIMULATED ONLY** — verified locally that no containment actions mutate system state. | **NOT IMPLEMENTED / NOT EXECUTED** — no live containment exists in any mode. |
+
+---
+
 ## 2. Scenario Workflows
 
 ### 2.1 Endpoint Obfuscated PowerShell Workflow (DC01)
