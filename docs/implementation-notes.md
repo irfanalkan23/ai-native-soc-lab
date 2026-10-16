@@ -3109,6 +3109,7 @@ The canonical harness persists updated evaluation reports containing all 21 scen
   - **Milestone 18B-3 — COMPLETE**: Investigation & Policy Integration. Extended `InvestigationInput` and generic process telemetry handling, integrated `DET-TASK-001` and `T1053.005` into `RiskPolicyEngine` with deterministic scoring (+25 base, +10 MITRE, indicators/confidence weights), generalized synthetic incident ID generation (`INC-DEMO-TASK`), and added offline test suite (`test_investigation_scheduled_task.py`). Committed at `0a22895`.
   - **Milestone 18B-4 — COMPLETE**: Live Integrated DET-TASK-001 Investigation Validation. Added `--mode live-scheduled-task` to end-to-end runner, implemented exact controlled fixture selector, established live fake model contract, validated against live Splunk on DC01 telemetry, and verified complete end-to-end governance lifecycle. Committed at `7740975`.
   - **Milestone 18B-5 — COMPLETE**: Live OpenAI Validation for DET-TASK-001. Exercised the live OpenAI model path (`OPENAI_MODEL=gpt-5.6-sol`) against real DC01 Sysmon telemetry in Splunk, verifying advisory ToolRouter execution (bounded Splunk search + MITRE mapping), deterministic risk evaluation (65/100 HIGH), in-memory audit trail (12 events), non-containment invariants, and fail-closed security controls.
+  - **Milestone 18B-6 — COMPLETE**: Live Jira Validation for DET-TASK-001. Validated downstream ticketing integration against real Jira Cloud, creating ticket `KAN-12` via the live scheduled-task workflow while enforcing strict downstream-only boundaries (Jira has zero response or policy authority; zero endpoint mutation). Preceded by standalone connectivity validation creating `KAN-11`.
 
 #### Milestone 18B-4 — Live Integrated DET-TASK-001 Investigation Validation
 
@@ -3119,7 +3120,7 @@ The canonical harness persists updated evaluation reports containing all 21 scen
   - `DET-TASK-001` investigation & policy integration: **LIVE LAB VALIDATED**
   - `FakeModel` advisory path: **LIVE LAB VALIDATED** (with deterministic fake provider)
   - `OpenAIModel` live validation for `DET-TASK-001`: **LIVE LAB VALIDATED** (completed in M18B-5)
-  - Jira live validation for `DET-TASK-001`: **NOT YET VALIDATED**
+  - Jira live validation for `DET-TASK-001`: **LIVE LAB VALIDATED** (completed in M18B-6)
   - Endpoint containment: **NOT IMPLEMENTED / NOT EXECUTED**
 
 ##### Infrastructure & Telemetry Recovery Note
@@ -3207,7 +3208,7 @@ python3 scripts/run_end_to_end_demo.py \
 | Deterministic risk policy engine | **LIVE LAB VALIDATED** | Evaluated to score 65 HIGH / HUMAN_REVIEW |
 | AI investigation advisory loop | **LIVE LAB VALIDATED** | Executed via deterministic `FakeModel` |
 | Live OpenAI (`gpt-4o` / `gpt-5.6-sol`) | **LIVE LAB VALIDATED** | Validated against live DC01 telemetry in Milestone 18B-5 |
-| Live Jira Cloud ticketing | **NOT YET VALIDATED** | Adapter implemented and tested; live Jira creation not yet performed for DET-TASK-001 |
+| Live Jira Cloud ticketing | **LIVE LAB VALIDATED** | Real Jira Cloud ticket `KAN-12` created in Milestone 18B-6 |
 | Threat intelligence enrichment | **NOT IN SCOPE** | Scheduled tasks do not contain external IP observables |
 | Real host containment / isolation | **NOT IMPLEMENTED** | System does not possess endpoint mutation capabilities |
 
@@ -3217,7 +3218,7 @@ python3 scripts/run_end_to_end_demo.py \
   - `DET-TASK-001` OpenAI advisory path: **LIVE LAB VALIDATED**
   - `DET-TASK-001` bounded Splunk retrieval: **LIVE LAB VALIDATED**
   - `DET-TASK-001` investigation & policy integration: **LIVE LAB VALIDATED**
-  - Jira live validation for `DET-TASK-001`: **NOT YET VALIDATED**
+  - Jira live validation for `DET-TASK-001`: **LIVE LAB VALIDATED** (completed in M18B-6)
   - Endpoint containment: **NOT IMPLEMENTED / NOT EXECUTED**
 
 ##### Runtime Prerequisites & Operational Findings
@@ -3298,7 +3299,116 @@ Exactly 12 in-memory audit events were recorded in verified chronological lifecy
 | DET-TASK-001 OpenAI advisory path | **LIVE LAB VALIDATED** | Live model decision loop executed with `gpt-5.6-sol` |
 | DET-TASK-001 bounded Splunk retrieval | **LIVE LAB VALIDATED** | Retrieved 1 bounded Sysmon Event ID 1 from live Splunk on DC01 |
 | DET-TASK-001 investigation/policy path | **LIVE LAB VALIDATED** | Evaluated deterministically to score 65 HIGH / HUMAN_REVIEW |
-| Jira live validation for DET-TASK-001 | **NOT YET VALIDATED** | Deferred; not exercised in this run |
+| Jira live validation for DET-TASK-001 | **LIVE LAB VALIDATED** | Real Jira Cloud ticket `KAN-12` created in Milestone 18B-6 |
+| Real host containment / isolation | **NOT IMPLEMENTED** | System does not possess endpoint mutation capabilities |
+
+#### Milestone 18B-6 — Live Jira Validation for DET-TASK-001
+
+- **Validation Classification**:
+  - `DET-TASK-001` detection telemetry: **LIVE LAB VALIDATED**
+  - `DET-TASK-001` bounded Splunk retrieval: **LIVE LAB VALIDATED**
+  - `DET-TASK-001` investigation & policy integration: **LIVE LAB VALIDATED**
+  - `DET-TASK-001` OpenAI advisory path: **LIVE LAB VALIDATED**
+  - `DET-TASK-001` Jira ticketing path: **LIVE LAB VALIDATED**
+  - Endpoint containment: **NOT IMPLEMENTED / NOT EXECUTED**
+
+##### Pre-Validation Jira Connectivity Check (Smoke Test)
+Prior to integrated scheduled-task execution, standalone Jira connectivity was verified:
+- **Smoke Test Command**:
+  ```bash
+  .venv/bin/python scripts/run_jira_smoke.py \
+    --project KAN \
+    --issue-type Incident \
+    --summary "AI-Native SOC Lab Jira Connectivity Validation 2026-10-16"
+  ```
+- **Real Jira Cloud Ticket Created**: `KAN-11`
+- **Ticket Provider**: `jira_cloud`
+- **Detail Code**: `ticket_created_jira`
+- **Scope Note**: This was a standalone connectivity test confirming credential validity, API reachability, and project/issue-type configuration, separate from the `DET-TASK-001` incident pipeline.
+
+##### Controlled Live Telemetry Event (DC01)
+- **Controlled Task Name**: `SOCLab-Task-Validation-3`
+- **Target Host**: `DC01`
+- **Target User**: `SOCLAB\Administrator`
+- **Detection ID**: `DET-TASK-001`
+- **MITRE Technique**: `T1053.005` (Scheduled Task/Job: Scheduled Task)
+- **Evidence Source**: `Live Splunk (localhost:8089)`
+- **Bounded Ingestion Retrieval**: Exactly 1 bounded Sysmon Event ID 1 event retrieved.
+
+##### Integrated Jira Validation Command
+The end-to-end investigation runner was executed on `Splunk-Server` with ticketing enabled:
+```bash
+.venv/bin/python scripts/run_end_to_end_demo.py \
+  --mode live-scheduled-task \
+  --provider fake \
+  --minutes 10 \
+  --create-ticket \
+  --ticket-provider jira \
+  --jira-project KAN \
+  --jira-issue-type Incident
+```
+
+##### Integrated Incident Identification
+`INC-LIVE-DC01-20261016T145709607TUTC`
+
+##### AI Advisory Path (Deterministic FakeModel)
+- **Investigation Model**: Deterministic `FakeModel` sequence
+- **Assessed Confidence**: `medium`
+- **Suspicious Indicators Count**: 2
+- **Advisory Analysis**: Recognized `schtasks.exe /create` process creation; did not assert unauthorized persistence as proven; model remained strictly advisory.
+
+##### Deterministic Policy Evaluation (Authoritative Control Gate)
+- **Deterministic Risk Score**: `65 / 100` (+25 base detection `DET-TASK-001`, +10 authoritative MITRE `T1053.005`, +20 indicators $\ge 1$, +5 indicators $> 1$, +5 model confidence medium)
+- **Risk Level**: `HIGH`
+- **Action Disposition**: `HUMAN_REVIEW`
+- **Proposed Action**: `create_incident_record`
+- **Human Approval Required**: `no`
+- **Policy Reason Codes**:
+  - `scheduled_task_creation_detected`
+  - `mitre_t1053_005`
+  - `suspicious_indicators_present`
+  - `multiple_suspicious_indicators`
+  - `model_confidence_medium`
+
+##### Runtime Audit Accounting
+Exactly 10 in-memory audit events were recorded in verified chronological lifecycle sequence:
+1. `MODEL_REQUESTED`
+2. `TOOL_REQUESTED` (`map_mitre_technique`)
+3. `TOOL_ALLOWED`
+4. `TOOL_COMPLETED`
+5. `MODEL_REQUESTED`
+6. `FINAL_RESULT_ACCEPTED`
+7. `POLICY_EVALUATED`
+8. `SIMULATION_NOT_EXECUTED`
+9. `TICKET_REQUESTED`
+10. `TICKET_CREATED`
+
+##### Real Jira Cloud Ticket Creation Result
+- **Ticket Key Generated**: `KAN-12`
+- **Ticket Provider**: `jira_cloud`
+- **Detail Code**: `ticket_created_jira`
+- **Created At UTC**: `2026-10-16T14:58:23.170286+00:00`
+- **Ticket Payload**: Hardened Atlassian Document Format (ADF) description containing incident metadata, detection ID `DET-TASK-001`, MITRE `T1053.005`, policy reasons, and zero plain Base64 or unsafe script blocks.
+
+##### Operational Outcome & Safety Invariants
+- **Simulation Response**: `NOT_EXECUTED` (detail code: `incident_record_deferred`)
+- **Containment Authorization**: Zero containment action authorized or executed
+- **Endpoint Integrity**: Endpoint state on DC01 was not modified by the AI agent
+- **Manual Teardown**: Controlled scheduled task `SOCLab-Task-Validation-3` was manually deleted on DC01 following validation
+
+##### Important Architecture & Authority Boundaries
+- **Downstream-Only Reporting**: Jira functions strictly as an external incident tracking and reporting sink. Jira possesses **zero response authority** over risk scoring, policy evaluation, approval gates, or endpoint actions.
+- **No Containment Implication**: Ticket creation does not execute, authorize, or imply containment, remediation, or endpoint mutation.
+- **Deterministic Precedence**: Deterministic policy remains authoritative over all risk decisions, action proposals, and investigation outcomes.
+
+##### Truthfulness Classification Summary
+| Component / Flow | Status | Truthfulness Note |
+|---|---|---|
+| DET-TASK-001 detection telemetry | **LIVE LAB VALIDATED** | Real Windows Event ID 1 generated on DC01 |
+| DET-TASK-001 bounded Splunk retrieval | **LIVE LAB VALIDATED** | Bounded query returned 1 exact match |
+| DET-TASK-001 investigation/policy integration | **LIVE LAB VALIDATED** | Evaluated deterministically to score 65 HIGH / HUMAN_REVIEW |
+| DET-TASK-001 OpenAI advisory path | **LIVE LAB VALIDATED** | Validated live with `gpt-5.6-sol` in M18B-5 |
+| DET-TASK-001 Jira ticketing path | **LIVE LAB VALIDATED** | Real Jira Cloud ticket `KAN-12` created in M18B-6 |
 | Real host containment / isolation | **NOT IMPLEMENTED** | System does not possess endpoint mutation capabilities |
 
 ### Milestone 19 — Suricata / Network Detection Integration
