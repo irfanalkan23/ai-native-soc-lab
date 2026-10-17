@@ -23,7 +23,7 @@ The AI agent functions strictly as an advisory investigator—it cannot execute 
 * **Quick Start & Demos**: [Getting Started & Demo Paths](#getting-started-demo-paths) • [Offline Reviewer Quick Start](#track-1-offline-portfolio-demo-reviewer-quick-start) • [Verification Summary: Local vs. Live](#verification-summary-local-vs-live-capabilities)
 * **Architecture & Principles**: [Core Runtime Security Principle](#core-runtime-security-principle) • [Multi-Layer Telemetry Architecture](#multi-layer-telemetry-architecture) • [Architecture Diagram](docs/images/architecture/ai-native-soc-home-lab-architecture.png)
 * **Detection Engineering**: [Sigma Rules](detections/sigma/) • [Splunk SPL Detections](detections/splunk/) • [Sigma Validation Guide](docs/detection-engineering/sigma-validation.md) • [Telemetry & Detection Status](#6-telemetry-detection-status)
-* **Case Studies**: [Encoded PowerShell Investigation](docs/case-studies/encoded-powershell-end-to-end.md) • [Scheduled Task Persistence Case Study](docs/case-studies/scheduled-task-persistence.md)
+* **Case Studies**: [Encoded PowerShell Investigation](docs/case-studies/encoded-powershell-end-to-end.md) • [Scheduled Task Persistence](docs/case-studies/scheduled-task-persistence.md) • [WEB01 ModSecurity SQL Injection](docs/case-studies/web01-modsecurity-sqli.md)
 * **Security Evaluations**: [Automated Evaluation Harness](evaluation/harness.py) • [Security Evaluation Artifacts](artifacts/evaluation/security-evaluation.md) • [Evaluation Suite Details](#7-adversarial-security-evaluations-canonical-harness)
 * **Analyst UI**: [FastAPI Investigation Console Source](ui/app.py) • [UI Templates](ui/templates/)
 * **Implementation & Governance**: [Formal Project Threat Model](docs/threat-model.md) • [Component Status Matrix](#component-status-matrix) • [Current Limitations & Boundaries](#8-current-limitations-boundary-disclosures) • [Implementation Notes](docs/implementation-notes.md)
@@ -250,7 +250,7 @@ The live validation track connects the agentic security control plane to real te
 * **Network & Hypervisor**: VirtualBox host-only network `LabNet` (`192.168.1.0/24`) routed through a dedicated **pfSense** gateway VM.
 * **Attacker System**: **Kali Linux** (`192.168.1.100`) generating controlled adversary traffic.
 * **Windows Endpoint (`DC01`)**: Windows Server 2022 Active Directory Domain Controller (`192.168.1.10`) with Microsoft Sysmon installed and Splunk Universal Forwarder transmitting Process Create (Event ID 1) logs.
-* **Web Server (`WEB01`)**: Ubuntu 24.04.3 LTS (`192.168.1.102`) running Apache 2.4 reverse proxy with OWASP ModSecurity Core Rule Set (OWASP CRS 3.3.5) blocking mode and OWASP Juice Shop. Splunk Universal Forwarder forwarding `apache:access` and `modsecurity` audit logs.
+* **Web Server (`WEB01`)**: Ubuntu 24.04.3 LTS (`192.168.1.20`) running Apache 2.4 reverse proxy with OWASP ModSecurity Core Rule Set (OWASP CRS 3.3.5) blocking mode and OWASP Juice Shop. Splunk Universal Forwarder forwarding `apache:access` and `modsecurity` audit logs.
 * **SIEM (`Splunk-Server`)**: Splunk Enterprise (`192.168.1.101`) indexing telemetry into `index=main` and exposing the management API on `https://localhost:8089`.
 
 #### User-Supplied External Credentials (Environment Variables)
@@ -375,7 +375,7 @@ The web tier incident scenario covers an external web-attack attempt against the
 Kali (Controlled SQLi Attack: 192.168.1.100)
     │
     ▼
-WEB01 Apache Reverse Proxy (192.168.1.102)
+WEB01 Apache Reverse Proxy (192.168.1.20)
     │
     ▼
 ModSecurity WAF / OWASP CRS 3.3.5 (Rule 942100: libinjection SQLi, Anomaly Score 8 -> HTTP 403 Forbidden)
@@ -576,7 +576,7 @@ The physical/virtual infrastructure exists outside this repository in an isolate
   * Microsoft Sysmon installed and generating operational event logs
   * Splunk Universal Forwarder forwarding logs to dedicated SIEM
 * **Web Application Server (WEB01)**:
-  * Ubuntu Linux 24.04.3 (`192.168.1.102`)
+  * Ubuntu Linux 24.04.3 (`192.168.1.20`, interface `enp0s3`)
   * Apache 2.4 reverse proxy with ModSecurity (`libapache2-mod-security2`)
   * OWASP ModSecurity Core Rule Set (OWASP CRS 3.3.5) in active blocking mode
   * OWASP Juice Shop running as a Node.js application on port 3000

@@ -1869,7 +1869,7 @@ The complete WEB01 pipeline control flow operates as follows:
 Kali Linux (Controlled SQLi Attack: 192.168.1.100)
     │
     ▼
-WEB01 Apache Reverse Proxy (Ubuntu 24.04.3: 192.168.1.102) -> OWASP Juice Shop (Node.js on port 3000)
+WEB01 Apache Reverse Proxy (Ubuntu 24.04.3: 192.168.1.20) -> OWASP Juice Shop (Node.js on port 3000)
     │
     ▼
 ModSecurity WAF / OWASP CRS 3.3.5
@@ -1946,7 +1946,8 @@ Automated Security Evaluation Harness (Canonical 17-Scenario Suite)
 #### 12A — WEB01 Telemetry Ingestion to Splunk
 - **Status**: **LIVE VERIFIED**
 - **Evidence**:
-  - Controlled SQL injection request executed from Kali Linux (`192.168.1.100`) against the WEB01 (Ubuntu 24.04.3) Apache reverse proxy (`192.168.1.102`) protecting OWASP Juice Shop running as a Node.js application on port 3000.
+  - Controlled SQL injection request executed from Kali Linux (`192.168.1.100`) against the WEB01 (Ubuntu 24.04.3) Apache reverse proxy (`192.168.1.20`) protecting OWASP Juice Shop running as a Node.js application on port 3000.
+  - **Live Host Network Verification Note**: Direct live verification on the running WEB01 VM (`ifconfig enp0s3`) confirms the authoritative active interface IP is `192.168.1.20` (netmask `255.255.255.0`, broadcast `192.168.1.255`). Prior documentation references recording `192.168.1.102` were stale and have been corrected across current architecture and case-study documentation.
   - Apache access telemetry forwarded by Splunk Universal Forwarder to Splunk Enterprise (`index=main`, `sourcetype=apache:access`).
   - ModSecurity audit log forwarded to Splunk Enterprise (`index=main`, `sourcetype=modsecurity`).
   - Inbound attack matched OWASP CRS Rule `942100` ("SQL Injection Attack Detected via libinjection" under OWASP CRS 3.3.5).
