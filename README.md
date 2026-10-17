@@ -26,7 +26,7 @@ The AI agent functions strictly as an advisory investigator—it cannot execute 
 * **Case Study**: [Encoded PowerShell End-to-End Investigation Walkthrough](docs/case-studies/encoded-powershell-end-to-end.md)
 * **Security Evaluations**: [Automated Evaluation Harness](evaluation/harness.py) • [Security Evaluation Artifacts](artifacts/evaluation/security-evaluation.md) • [Evaluation Suite Details](#7-adversarial-security-evaluations-canonical-harness)
 * **Analyst UI**: [FastAPI Investigation Console Source](ui/app.py) • [UI Templates](ui/templates/)
-* **Implementation & Governance**: [Component Status Matrix](#component-status-matrix) • [Current Limitations & Boundaries](#8-current-limitations-boundary-disclosures) • [Implementation Notes](docs/implementation-notes.md)
+* **Implementation & Governance**: [Formal Project Threat Model](docs/threat-model.md) • [Component Status Matrix](#component-status-matrix) • [Current Limitations & Boundaries](#8-current-limitations-boundary-disclosures) • [Implementation Notes](docs/implementation-notes.md)
 
 ---
 
