@@ -74,6 +74,9 @@ schtasks.exe /create /tn "SOCLab-Task-Validation-3" /tr "C:\Windows\System32\not
 
 ### 3.3 Validated Live Event Facts
 
+![Splunk Telemetry Capture - DET-TASK-001 Live Event](../images/evidence/splunk-det-task-001.png)
+*Historical live lab Sysmon Event ID 1 telemetry indexed in Splunk Enterprise for the controlled scheduled-task validation fixture (`SOCLab-Task-Validation-3`). The event captures `schtasks.exe /create` execution on DC01; detection evidence identifies suspicious task creation behavior and does not prove unauthorized adversary compromise.*
+
 ```json
 {
   "timestamp": "2026-10-16 12:40:49.188 UTC",
@@ -184,6 +187,9 @@ Exercised during Milestone 18B-6 to validate live external case creation:
 * **In-Memory Audit Events**: Exactly 10 chronological events (including `TICKET_REQUESTED` and `TICKET_CREATED`).
 * **OpenAI Status**: No OpenAI API calls in this run (deterministic `FakeModel` used).
 * **Containment Execution**: None (`NOT IMPLEMENTED / NOT EXECUTED`).
+
+![Jira Cloud Incident Ticket - KAN-12](../images/evidence/jira-kan-12.png)
+*Jira Cloud incident ticket KAN-12 created during the separate live Jira validation pipeline. Downstream ticketing functions strictly as an external tracking and reporting sink with zero response authority over risk scoring, policy evaluation, or containment. This run was performed separately from the live OpenAI scheduled-task validation pipeline.*
 
 ---
 

@@ -21,7 +21,7 @@ The AI agent functions strictly as an advisory investigator—it cannot execute 
 ### Explore the Project
 
 * **Quick Start & Demos**: [Getting Started & Demo Paths](#getting-started-demo-paths) • [Offline Reviewer Quick Start](#track-1-offline-portfolio-demo-reviewer-quick-start) • [Verification Summary: Local vs. Live](#verification-summary-local-vs-live-capabilities)
-* **Architecture & Principles**: [Core Runtime Security Principle](#core-runtime-security-principle) • [Multi-Layer Telemetry Architecture](#multi-layer-telemetry-architecture) • [Architecture Diagram](docs/images/architecture/ai-native-soc-home-lab-architecture.png)
+* **Architecture & Principles**: [Core Runtime Security Principle](#core-runtime-security-principle) • [Multi-Layer Telemetry Architecture](#multi-layer-telemetry-architecture) • [Architecture Diagram](docs/images/architecture/ai-native-soc-lab-architecture.svg)
 * **Detection Engineering**: [Sigma Rules](detections/sigma/) • [Splunk SPL Detections](detections/splunk/) • [Sigma Validation Guide](docs/detection-engineering/sigma-validation.md) • [Telemetry & Detection Status](#6-telemetry-detection-status)
 * **Case Studies**: [Encoded PowerShell Investigation](docs/case-studies/encoded-powershell-end-to-end.md) • [Scheduled Task Persistence](docs/case-studies/scheduled-task-persistence.md) • [WEB01 ModSecurity SQL Injection](docs/case-studies/web01-modsecurity-sqli.md)
 * **Security Evaluations**: [Automated Evaluation Harness](evaluation/harness.py) • [Security Evaluation Artifacts](artifacts/evaluation/security-evaluation.md) • [Evaluation Suite Details](#7-adversarial-security-evaluations-canonical-harness)
@@ -74,7 +74,8 @@ The AI agent functions strictly as an advisory investigator—it cannot execute 
 
 Modern Security Operations Centers face high alert volumes and context fragmentation. This project demonstrates how an AI agent can assist human analysts during alert triage, telemetry analysis, and IOC enrichment while remaining bound by strict deterministic security policies.
 
-![AI-Native SOC Home Lab Architecture](docs/images/architecture/ai-native-soc-home-lab-architecture.png)
+[![AI-Native SOC Lab Architecture](docs/images/architecture/ai-native-soc-lab-architecture.png)](docs/images/architecture/ai-native-soc-lab-architecture.svg)
+*Current Milestone 19 architecture — isolated VirtualBox lab, bounded SIEM retrieval, advisory AI, deterministic policy, human approval for consequential simulated actions, and no real endpoint containment.*
 
 ### Core Runtime Security Principle
 
@@ -102,6 +103,9 @@ To ensure safety and auditability, the runtime architecture follows a strict uni
 * **No Unrestricted Autonomous Agents**: The system does not have arbitrary shell execution, endpoint isolation capabilities, firewall management, or destructive access.
 * **Least Privilege**: Programmatic security-tool access is restricted through explicit, least-privilege interfaces. The current Splunk integration is bounded and read-only; external threat-intelligence lookups are bounded and eligibility-gated.
 * **Human-in-the-Loop**: Consequential actions require explicit human authorization and remain simulated in initial phases.
+
+![SOC Analyst UI - Incident Detail and Governance Controls](docs/images/evidence/soc-ui-incident-detail.png)
+*FastAPI SOC Analyst UI detail view demonstrating the core governance boundary: AI advisory hypotheses and summaries are presented alongside authoritative deterministic policy evaluations. Consequential actions (such as simulated endpoint isolation) require explicit human approval via interactive APPROVE / DENY controls. All response actions shown are strictly simulated; real endpoint containment is not implemented.*
 
 ### Multi-Layer Telemetry Architecture
 
@@ -640,6 +644,9 @@ The lab implements and validates 4 core detections across Windows endpoint and L
 ## 7. Adversarial Security Evaluations & Canonical Harness
 
 To ensure defense-in-depth and prevent model regressions, all deterministic security controls are evaluated against an automated canonical evaluation harness (`evaluation/harness.py`). The harness runs **21 canonical scenarios** (7 baseline + 10 WEB01 + 4 Milestone 17B governance/policy-integrity scenarios) offline with zero live network dependencies.
+
+![Canonical Adversarial Security Evaluation - 21/21 Scenarios Passed](docs/images/evidence/security-evaluation-21-pass.png)
+*Canonical offline adversarial evaluation: 21/21 scenarios passed in the controlled lab test suite. Results are not production assurance.*
 
 ### Summary Results
 * **Total Scenarios**: 21

@@ -1,0 +1,115 @@
+flowchart LR
+    %% =========================================================================
+    %% AI-Native SOC & Agentic Security Engineering Lab — Current Architecture
+    %% Milestone 19 Truthful Implementation & Trust Boundary Map
+    %%
+    %% Core Security Invariant:
+    %% AI proposes -> deterministic policy evaluates -> human approves consequential actions -> permitted simulation
+    %%
+    %% Lab Context: Isolated VirtualBox research lab. Not a production SOC.
+    %% Real endpoint containment NOT implemented. No autonomous remediation.
+    %% =========================================================================
+
+    classDef liveLab fill:#064e3b,stroke:#10b981,stroke-width:2px,color:#ecfdf5;
+    classDef detControl fill:#0f172a,stroke:#0284c7,stroke-width:2px,color:#f0f9ff;
+    classDef advisoryAi fill:#2e1065,stroke:#a855f7,stroke-width:2px,color:#faf5ff;
+    classDef extService fill:#18181b,stroke:#a1a1aa,stroke-dasharray: 4 4,stroke-width:2px,color:#f4f4f5;
+    classDef simResponse fill:#4c0519,stroke:#f43f5e,stroke-width:2px,color:#fff1f2;
+    classDef humanGate fill:#451a03,stroke:#f59e0b,stroke-width:2px,color:#fffbeb;
+
+    %% =========================================================================
+    %% COLUMN 1: ISOLATED LABNET (TELEMETRY GENERATION & INGESTION)
+    %% =========================================================================
+    subgraph COL_LABNET ["1. Isolated LabNet (192.168.1.0/24)"]
+        direction TB
+
+        PFSENSE["<b>pfSense CE 2.8.1 (192.168.1.1)</b><br/>• Gateway & Boundary Firewall<br/>• Internal NAT & Network Isolation"]:::liveLab
+
+        KALI["<b>Kali Linux (192.168.1.100)</b><br/>• Attacker & Verification Tooling<br/>• Synthetic Source [Private IP]"]:::liveLab
+
+        WEB01["<b>WEB01: Ubuntu Linux 24.04.3 (192.168.1.20)</b><br/>• Apache 2.4 Reverse Proxy (:80) ──▶ OWASP Juice Shop (:3000)<br/>• ModSecurity v2.9 + OWASP CRS 3.3.5 (SQLi Blocked: <b>HTTP 403</b>)<br/>• Audit Log: /var/log/apache2/modsec_audit.log<br/>• <b>Splunk Universal Forwarder 10.2.0</b> (Dest: 192.168.1.101:9997)"]:::liveLab
+
+        DC01["<b>DC01: Windows Server 2022 (192.168.1.10)</b><br/>• Active Directory Domain Controller | Sysmon Event ID 1<br/>• <b>Authoritative Detections (Sigma + SPL Verified):</b><br/>  - DET-POWERSHELL-001 (T1059.001 - Encoded PowerShell)<br/>  - DET-POWERSHELL-002 (T1105 - Suspicious PowerShell Network Retrieval)<br/>  - DET-TASK-001 (T1053.005 - Scheduled Task Persistence)<br/>• <b>Splunk Universal Forwarder</b> (Dest: 192.168.1.101:9997)"]:::liveLab
+
+        SPLUNK["<b>Splunk Server: Ubuntu Linux 24.04.3 (192.168.1.101)</b><br/>• <b>Splunk Receiver: TCP 9997</b> (inputs.conf splunktcp://9997)<br/>• Splunk Enterprise (Free License) | Index: main<br/>• Telemetry: XmlWinEventLog:Sysmon, ModSecurity Audit<br/>• <b>Management REST API (:8089)</b> (Local/bounded use)"]:::liveLab
+
+        KALI -- "Synthetic Attacks" --> WEB01
+        KALI -. "AD Verification" .-> DC01
+        WEB01 -- "Forward Audit Logs (TCP 9997)" --> SPLUNK
+        DC01 -- "Forward Sysmon Logs (TCP 9997)" --> SPLUNK
+    end
+
+    %% =========================================================================
+    %% COLUMN 2: GATEWAY, ADVISORY AI & DETERMINISTIC POLICY
+    %% =========================================================================
+    subgraph COL_CORE ["2. Gateway, Advisory AI & Deterministic Governance"]
+        direction TB
+
+        GATEWAY["<b>Trust Boundary 1: Bounded Splunk Gateway (gateway/)</b><br/>• gateway/policy.py & gateway/splunk_search.py<br/>• <b>Exact Allowlisted Query Types:</b><br/>  1. encoded_powershell_matches<br/>  2. powershell_network_retrieval_matches<br/>  3. scheduled_task_creation_matches<br/>  4. modsecurity_sqli_matches<br/>• <b>NO arbitrary model-supplied SPL</b>: Raw queries fail closed<br/>• Telemetry treated strictly as untrusted, inert data"]:::detControl
+
+        ORCH["<b>Trust Boundary 2: Advisory AI Investigator (investigator/)</b><br/>• AI Investigator Orchestrator (orchestrator.py, model.py)<br/>• Schema-constrained JSON contracts (schemas.py)<br/>• <b>ADVISORY-ONLY AUTHORITY</b>: Hypotheses & summaries<br/>• <b>ZERO EXECUTION AUTHORITY</b>: Cannot mutate state or run commands"]:::advisoryAi
+
+        ROUTER["<b>Deterministic Tool Router & Guardrails</b><br/>• ToolRouter (tool_router.py): allowlisted tools only<br/>• Unknown tools rejected with <b>TOOL_NOT_FOUND</b><br/>• RuntimeGuard (runtime_guard.py): Max 5 tool call budget<br/>• Irreversible fail-closed latching kill switch"]:::detControl
+
+        POLICY["<b>Trust Boundary 3: Deterministic Policy Authority (policy.py)</b><br/>• <b>Authoritative Risk Scoring (0–100)</b>: Additive evidence facts<br/>• Dispositions: LOW | MEDIUM | HIGH | CRITICAL<br/>• Authoritative MITRE ATT&CK technique catalog mapping<br/>• <b>Model Override Blocked</b>: AI cannot set risk, disposition, or MITRE<br/>• <b>IPv4 Scope Classifier (threat_intel.py)</b>: 8 RFC scopes<br/>  - Private LabNet (192.168.1.x) ──▶ <b>SKIPPED_INELIGIBLE</b> (Zero Leakage)<br/>  - Public IPs ──▶ Bounded VirusTotal REST v3 (+15 cap)"]:::detControl
+
+        GATEWAY -- "Validated Telemetry" --> ORCH
+        ORCH <--> ROUTER
+        ROUTER -- "Bounded Queries" --> GATEWAY
+        ORCH -- "Hypothesis & Action" --> POLICY
+    end
+
+    SPLUNK -- "REST Export (:8089)" --> GATEWAY
+
+    %% =========================================================================
+    %% COLUMN 3: CONDITIONAL ACTION SPLIT, APPROVAL & SIMULATION
+    %% =========================================================================
+    subgraph COL_ACTION ["3. Conditional Action Split & Permitted Simulation"]
+        direction TB
+
+        ACTION_DISPATCH["<b>Deterministic Action Policy Engine</b><br/>• Evaluates proposed action against policy disposition<br/>• <b>Strict Conditional Split</b>: Reporting vs. Consequential Actions"]:::detControl
+
+        REPORTING["<b>Non-Consequential / Reporting Path</b><br/>• Actions: create_incident_record, HUMAN_REVIEW<br/>• Informational summaries & downstream tracking<br/>• <b>Does NOT require human approval</b> (reporting sink)<br/>• Jira Incident Ticketing (ticketing.py): Hardened ADF<br/>• Verified tickets: KAN-7, KAN-8/9, KAN-10, KAN-12<br/>• <b>ZERO response authority</b>: Cannot trigger actions"]:::detControl
+
+        APPROVAL_GATE["<b>Trust Boundary 4: Human Approval Gate (Consequential Path)</b><br/>• Consequential Action: simulate_endpoint_isolation<br/>• <b>Mandatory Human Authorization Required</b><br/>• <b>ApprovalRegistry (approval.py)</b>:<br/>  - Exact Triple Binding: (incident_id, action, policy)<br/>  - Bounded Freshness TTL: <b>600 seconds</b><br/>  - Single-use approval consumption<br/>  - Persistent JSONL consumption ledger (approval_consumption.jsonl)<br/>  - Replay rejection with flush+fsync<br/>  - <i>Non-claim: No cross-host/multiprocess atomicity guarantee</i>"]:::humanGate
+
+        SIMULATOR["<b>Trust Boundary 5: Permitted Simulation Boundary</b><br/>• <b>Simulated Response Executor (simulator.py)</b><br/>• <b>REAL ENDPOINT CONTAINMENT: NOT IMPLEMENTED</b><br/>• Flow: AI proposes ──▶ Policy evaluates ──▶ Human approves ──▶ Simulation<br/>• Records simulated action (SIMULATED vs. NOT_EXECUTED)<br/>• Zero real host isolation, zero account disabling, zero firewall changes"]:::simResponse
+
+        ACTION_DISPATCH -- "Non-consequential Action" --> REPORTING
+        ACTION_DISPATCH -- "Consequential Action" --> APPROVAL_GATE
+        APPROVAL_GATE -- "Authorized Execution" --> SIMULATOR
+    end
+
+    POLICY --> ACTION_DISPATCH
+
+    %% =========================================================================
+    %% COLUMN 4: OBSERVABILITY, AUDIT & EXTERNAL SERVICES
+    %% =========================================================================
+    subgraph COL_OBSERVE ["4. Presentation, Verification & Observability"]
+        direction TB
+
+        UI["<b>SOC Analyst UI Console (ui/app.py)</b><br/>• FastAPI Investigation Console (http://127.0.0.1:8010)<br/>• Dark-mode analyst triage queue & incident detail<br/>• Side-by-side: AI Advisory Hypothesis vs. Deterministic Policy<br/>• <b>Interactive APPROVE / DENY action controls</b><br/>• Read-oriented correlated audit timeline"]:::detControl
+
+        AUDIT_LOG["<b>Forensic Audit Logging (audit_writer.py)</b><br/>• Persistent Structured Audit (artifacts/audit/agent_audit.jsonl)<br/>• Monotonically ordered sequence numbers<br/>• Strictly allowlisted 4-field schema (fsync flushed)<br/>• <i>(Structured JSONL; non-cryptographic, not immutable)</i>"]:::detControl
+
+        EVAL_CORE["<b>Adversarial Evaluation Harness (evaluation/)</b><br/>• <b>Canonical Offline Security Evaluation — 21 / 21 PASS</b><br/>• Automated repeatable adversarial regression harness<br/>• Evaluates prompt injection, arbitrary SPL, private IP TI gating,<br/>  kill switch, Jira ADF injection, approval replay, model override"]:::detControl
+
+        UI -. "Review Decision (APPROVE / DENY)" .-> APPROVAL_GATE
+        SIMULATOR -- "Record Action" --> AUDIT_LOG
+        REPORTING -- "Audit Event" --> AUDIT_LOG
+        AUDIT_LOG -. "Audit Stream" .-> UI
+    end
+
+    %% =========================================================================
+    %% EXTERNAL SERVICES (ATTACHED SINK)
+    %% =========================================================================
+    subgraph COL_EXT ["External Cloud Services (Untrusted Boundaries & Gated Sinks)"]
+        direction LR
+        OPENAI_API["<b>OpenAI Responses API</b><br/>• Advisory reasoning & hypotheses<br/>• Schema-constrained JSON contracts<br/>• Untrusted output boundary"]:::extService
+        VT_API["<b>VirusTotal REST API v3</b><br/>• Public IP reputation (+15 cap)<br/>• Private LabNet IPs gated<br/>• Advisory evidence only"]:::extService
+        JIRA_API["<b>Jira Cloud REST API</b><br/>• Downstream incident tracking sink<br/>• Hardened Atlassian Document Format (ADF)<br/>• Zero response authority"]:::extService
+    end
+
+    ORCH <-->|"JSON Contract"| OPENAI_API
+    POLICY -.->|"Public IPs Only"| VT_API
+    REPORTING -->|"Hardened ADF Ticket"| JIRA_API

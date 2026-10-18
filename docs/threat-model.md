@@ -91,6 +91,13 @@ The following data sources are explicitly classified as **untrusted** and treate
 * **Model outputs**: Tool call arguments, analytical text, suggested MITRE techniques, recommended risk levels (may be hallucinated or manipulated by prompt injection).
 * **External API responses**: Network errors, timeouts, malformed HTTP payloads from Jira or OpenAI.
 
+### 3.2 Audit & Approval Trust Boundary Lifecycle
+
+Every transition crossing trust boundaries—from bounded telemetry retrieval to tool routing, model proposal, deterministic policy scoring, human approval gating, and simulated response execution—is persisted sequentially to the local structured audit log.
+
+![Structured Audit Timeline Lifecycle](images/evidence/audit-timeline-lifecycle.png)
+*Persistent structured JSONL audit timeline showing ordered investigation, allowlisted tool execution, deterministic policy evaluation, approval, and simulated action lifecycle.*
+
 ---
 
 ## 4. Threat Actors & Threat Sources
