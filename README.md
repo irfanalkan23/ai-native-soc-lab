@@ -22,11 +22,11 @@ The AI agent functions strictly as an advisory investigator—it cannot execute 
 
 * **Quick Start & Demos**: [Getting Started & Demo Paths](#getting-started-demo-paths) • [Offline Reviewer Quick Start](#track-1-offline-portfolio-demo-reviewer-quick-start) • [Verification Summary: Local vs. Live](#verification-summary-local-vs-live-capabilities)
 * **Architecture & Principles**: [Core Runtime Security Principle](#core-runtime-security-principle) • [Multi-Layer Telemetry Architecture](#multi-layer-telemetry-architecture) • [Architecture Diagram](docs/images/architecture/ai-native-soc-lab-architecture.svg)
-* **Detection Engineering**: [Sigma Rules](detections/sigma/) • [Splunk SPL Detections](detections/splunk/) • [Sigma Validation Guide](docs/detection-engineering/sigma-validation.md) • [Telemetry & Detection Status](#6-telemetry-detection-status)
+* **Detection Engineering**: [Sigma Rules](detections/sigma/) • [Splunk SPL Detections](detections/splunk/) • [Sigma Validation Guide](docs/detection-engineering/sigma-validation.md) • [Telemetry & Detection Status](#telemetry-detection-status)
 * **Case Studies**: [Encoded PowerShell Investigation](docs/case-studies/encoded-powershell-end-to-end.md) • [Scheduled Task Persistence](docs/case-studies/scheduled-task-persistence.md) • [WEB01 ModSecurity SQL Injection](docs/case-studies/web01-modsecurity-sqli.md)
-* **Security Evaluations**: [Automated Evaluation Harness](evaluation/harness.py) • [Security Evaluation Artifacts](artifacts/evaluation/security-evaluation.md) • [Evaluation Suite Details](#7-adversarial-security-evaluations-canonical-harness)
+* **Security Evaluations**: [Automated Evaluation Harness](evaluation/harness.py) • [Security Evaluation Artifacts](artifacts/evaluation/security-evaluation.md) • [Evaluation Suite Details](#evaluation-suite-details)
 * **Analyst UI**: [FastAPI Investigation Console Source](ui/app.py) • [UI Templates](ui/templates/)
-* **Implementation & Governance**: [Formal Project Threat Model](docs/threat-model.md) • [Component Status Matrix](#component-status-matrix) • [Current Limitations & Boundaries](#8-current-limitations-boundary-disclosures) • [Implementation Notes](docs/implementation-notes.md)
+* **Implementation & Governance**: [Formal Project Threat Model](docs/threat-model.md) • [Component Status Matrix](#component-status-matrix) • [Current Limitations & Boundaries](#current-limitations-boundaries) • [Implementation Notes](docs/implementation-notes.md)
 
 ---
 
@@ -74,8 +74,13 @@ The AI agent functions strictly as an advisory investigator—it cannot execute 
 
 Modern Security Operations Centers face high alert volumes and context fragmentation. This project demonstrates how an AI agent can assist human analysts during alert triage, telemetry analysis, and IOC enrichment while remaining bound by strict deterministic security policies.
 
-[![AI-Native SOC Lab Architecture](docs/images/architecture/ai-native-soc-lab-architecture.png)](docs/images/architecture/ai-native-soc-lab-architecture.svg)
-*Current Milestone 19 architecture — isolated VirtualBox lab, bounded SIEM retrieval, advisory AI, deterministic policy, human approval for consequential simulated actions, and no real endpoint containment.*
+![AI-Native SOC Home Lab Architecture](docs/images/architecture/ai-native-soc-home-lab-architecture.png)
+*AI-Native SOC home-lab architecture: isolated endpoint and web telemetry feed Splunk and a bounded investigation control plane where AI remains advisory, deterministic policy retains authority, consequential simulated actions require human approval, and real endpoint containment is not implemented.*
+
+**Detailed technical architecture:**<br>
+[Open SVG](docs/images/architecture/ai-native-soc-lab-architecture.svg) · [View PNG](docs/images/architecture/ai-native-soc-lab-architecture.png) · [Mermaid source](docs/images/architecture/ai-native-soc-lab-architecture.mmd)
+
+*The detailed diagram documents trust boundaries, bounded SIEM retrieval, advisory AI, deterministic policy authority, conditional human approval, external integrations, audit logging, and the simulated-response boundary.*
 
 ### Core Runtime Security Principle
 
@@ -114,11 +119,12 @@ The lab demonstrates defense-in-depth across multiple enterprise telemetry layer
 * **Web Application Telemetry**: Linux (`WEB01` Ubuntu 24.04.3) / Apache 2.4 reverse proxy / OWASP ModSecurity Core Rule Set (OWASP CRS 3.3.5) / OWASP Juice Shop running as a Node.js application on port 3000.
 * **SIEM & Ingestion**: Splunk Enterprise indexer / Splunk Universal Forwarder / Bounded retrieval interfaces (static SPL; caller cannot execute arbitrary SPL).
 * **Threat Intelligence**: Bounded VirusTotal REST API v3 IP adapter (live tested; public IPv4 eligible only; private/non-global IPs gated; controlled public-source enrichment live tested in Milestone 13F-3).
-* **Agent Security & Policy**: Deterministic policy engine, least-privilege tool allowlisting, prompt-injection isolation, runtime kill switch, human approval gates for consequential actions, immutable incident records.
+* **Agent Security & Policy**: Deterministic policy engine, least-privilege tool allowlisting, prompt-injection isolation, runtime kill switch, human approval gates for consequential actions, structured validated incident records.
 * **Ticketing & SOAR**: Bounded Jira Cloud adapter (downstream reporting only, zero response authority; live tested for DC01 via `KAN-7`, live tested for WEB01 via `KAN-8`, and live verified with hardened ADF formatting via `KAN-9`).
 
 ---
 
+<a id="getting-started-demo-paths"></a>
 ## Getting Started & Demo Paths
 
 This repository strictly separates the **software control plane** (reproducible anywhere) from the **live physical/virtual home lab** (requires dedicated virtualization infrastructure). A reviewer can clone this repository, run the entire test suite, execute deterministic evaluation harnesses, run synthetic incident pipelines, and launch the SOC Analyst UI locally without needing access to the author's home lab or external paid API accounts.
@@ -242,7 +248,7 @@ The offline portfolio track demonstrates the complete deterministic agentic secu
    * **Port Convention**: Uses port `8010` (`DEFAULT_UI_PORT = 8010` in `ui/app.py`). Port 8010 avoids collision with Splunk Web (which occupies port 8000 in the home lab) and matches the server's default origin allowlist (`http://127.0.0.1:8010` and `http://localhost:8010`).
    * **Access**: Open `http://127.0.0.1:8010` in any web browser.
    * **Artifact Behavior**: Reads directly from `artifacts/incidents/` and `artifacts/audit/agent_audit.jsonl`. If launched before generating synthetic artifacts in Step 7, the UI starts cleanly (HTTP 200) but displays an empty state. Generating artifacts in Step 7 populates rich incident detail views, inert Sysmon XML telemetry, ModSecurity 7-field cards, visual AI advisory vs deterministic policy separation, and audit timelines.
-   * **Credentials & Safety**: None required; read-only presentation layer; zero external outbound network requests.
+   * **Credentials & Safety**: None required; read-oriented investigation and triage presentation layer with interactive APPROVE / DENY controls for approval-required simulated actions; zero direct privileged-tool authority; zero real endpoint containment; no production auth/RBAC/SSO; zero external outbound network requests.
 
 ---
 
@@ -320,7 +326,7 @@ All live demo modes must be executed on the **Splunk-Server** VM where `https://
 #### What a Reviewer Can Verify Locally `[OFFLINE]`
 * **Tool Allowlisting & Schema Enforcement**: Strict parameter typing, argument validation, and static SPL query restriction (`ToolRouter`).
 * **Deterministic Policy Engine**: Exact risk scoring formulas, additive indicator weights, threshold rules, and disposition assignment (`RiskPolicyEngine`).
-* **Human Approval & Replay Protection**: 600s TTL expiry, exact action hash matching, single-use token consumption, and append-only ledger (`approval_consumption.jsonl`) with flush+fsync replay prevention.
+* **Human Approval & Replay Protection**: Exact incident/action/policy binding, 600s TTL expiry, persistent JSONL consumption ledger (`artifacts/approvals/approval_consumption.jsonl`), single-use token consumption, and replay rejection.
 * **Simulation Safety Boundary**: Proof that containment is strictly recorded as `SIMULATED` vs `NOT_EXECUTED`; zero real subprocess or network mutation code exists.
 * **Audit Logging & Governance**: Append-only sequential JSONL writing, strict field validation, and deterministic timeline reconstruction.
 * **Adversarial & Injection Defenses**: 21 canonical security evaluation scenarios, CAT-1 through CAT-8 injection datasets, ADF codeBlock containment, and canary secrecy tests.
@@ -340,7 +346,7 @@ All live demo modes must be executed on the **Splunk-Server** VM where `https://
 | :--- | :--- | :--- |
 | **Tool Allowlisting & Permissions** | Complete schema enforcement, unallowlisted tool rejection, argument validation, and static SPL query restriction (`ToolRouter`). | Ingestion of telemetry from physical forwarders into Splunk Enterprise. |
 | **Deterministic Policy Engine** | Exact risk scoring mathematical formulas, additive weight calculation, threshold rules, and disposition assignment (`RiskPolicyEngine`). | Live environmental baseline tuning against ambient network traffic. |
-| **Human Approval & Ledger** | 600s TTL expiry, exact action SHA-256 hash matching, single-use token consumption, and append-only ledger fsync replay protection. | Real operator interactive workflow during an active live attack campaign. |
+| **Human Approval & Ledger** | Exact incident/action/policy binding, 600s TTL, persistent JSONL consumption ledger, single-use token consumption, and replay rejection. | Real operator interactive workflow during an active live attack campaign. |
 | **Simulation Safety Boundary** | Proof that containment is strictly recorded as `SIMULATED` vs `NOT_EXECUTED`; zero real subprocess or network mutation code exists. | Confirmed absence of network disruption across physical lab switches/hosts. |
 | **Audit Logging & Governance** | Append-only sequential JSONL writing, strict field validation, and deterministic timeline reconstruction. | Distributed multi-host audit aggregation. |
 | **Adversarial & Injection Defenses** | 21 canonical security evaluation scenarios, CAT-1 through CAT-8 injection datasets, ADF codeBlock containment, and canary secrecy tests. | Empirical adversarial red-teaming against live, unconstrained third-party LLMs. |
@@ -491,10 +497,12 @@ To maintain strict truthfulness across technical interviews and documentation, s
 | **Tool-Authorization Abuse Guardrails (14A)** | Adversarial Testing / Security Controls | **IMPLEMENTED + TESTED OFFLINE** | 23 adversarial tests (commit `d913f84`); unallowlisted tools, arbitrary SPL, forbidden arguments, provider overrides fail closed before execution; RuntimeGuard & kill-switch denial verified. |
 | **Untrusted Content & Prompt-Injection Boundary (14B)** | Adversarial Testing / Security Controls | **IMPLEMENTED + TESTED OFFLINE** | 15 adversarial tests (commit `807ad85`); telemetry, ModSecurity evidence, and TI data remain inert evidence; cannot alter tool permissions, forge approval, or leak canary secrets; ADF codeBlock containment verified. |
 | **RuntimeGuard & Execution-Budget Enforcement (14C)** | Adversarial Testing / Security Controls | **IMPLEMENTED + TESTED OFFLINE** | 14 adversarial tests (commit `5b3b0f4`); cumulative tool budget exhaustion, irreversible kill-switch latching, halt-state persistence, separate-run isolation, downstream execution blocking across TI, simulation, and ticketing verified. |
-| **SOC Analyst UI (Milestone 15)** | Presentation / Observability | **IMPLEMENTED + TESTED OFFLINE / MANUALLY BROWSER VALIDATED** | Read-only FastAPI console (`ui/app.py`); strict regex incident ID validation; bounded telemetry display; AI advisory vs deterministic policy separation; read-only sequential JSONL audit reader with timeline output bounded to 200 events; verified across 5 test suites; zero tool/containment authority. |
+| **SOC Analyst UI (Milestones 15 & 16)** | Presentation / Observability | **IMPLEMENTED + TESTED OFFLINE / MANUALLY BROWSER VALIDATED** | Read-oriented FastAPI investigation/triage console (`ui/app.py`); incident list and detail views; bounded telemetry display; AI advisory vs deterministic policy visualization; sequential JSONL audit reader with timeline output bounded to 200 events; interactive APPROVE / DENY controls for approval-required simulated actions; zero direct privileged-tool authority; zero real endpoint containment; no production auth/RBAC/SSO. |
 | **Post-M15 Controlled Live Validation** | End-to-End Live Validation | **LIVE LAB VALIDATED** | Controlled live exercise (2026-10-08); canonical incident `INC-LIVE-DC01-20261008T191323685TUTC`; real DC01 Sysmon $\rightarrow$ Splunk UF $\rightarrow$ Splunk Enterprise $\rightarrow$ bounded `DET-POWERSHELL-002` $\rightarrow$ live OpenAI `gpt-5.6-sol` $\rightarrow$ deterministic policy $\rightarrow$ persistence $\rightarrow$ Kali browser UI; zero real containment. |
-| **Human Approval Gate & Ledger (Milestone 16)** | Security Controls / HITL | **IMPLEMENTED + TESTED OFFLINE / MANUALLY BROWSER VALIDATED** | Deterministic approval binding, 600s TTL, persistent append-only consumption ledger (`artifacts/approvals/approval_consumption.jsonl` with flush+fsync), single-use token consumption, browser UI approve/deny routes; zero real containment. |
-| **Scheduled Task Telemetry & Investigation (DET-TASK-001 / Milestone 18)** | End-to-End Live Validation | **LIVE LAB VALIDATED** | Controlled harmless task `SOCLab-Task-Validation-3` on DC01 $\rightarrow$ Sysmon Event ID 1 $\rightarrow$ Splunk $\rightarrow$ live OpenAI advisory investigation `gpt-5.6-sol` $\rightarrow$ deterministic policy 65 HIGH / HUMAN_REVIEW $\rightarrow$ live Jira ticket `KAN-12`; zero real containment. |
+| **Human Approval Gate & Ledger (Milestone 16)** | Security Controls / HITL | **IMPLEMENTED + TESTED OFFLINE / MANUALLY BROWSER VALIDATED** | Exact incident/action/policy binding, 600s TTL, persistent JSONL consumption ledger (`artifacts/approvals/approval_consumption.jsonl` with flush+fsync write semantics), single-use token consumption, browser UI approve/deny routes; zero real containment. |
+| **Scheduled Task Telemetry & Investigation (DET-TASK-001 / Milestone 18)** | End-to-End Live Validation | **LIVE LAB VALIDATED** | Controlled harmless task `SOCLab-Task-Validation-3` on DC01 $\rightarrow$ Sysmon Event ID 1 $\rightarrow$ real Splunk retrieval $\rightarrow$ deterministic policy 65 HIGH / HUMAN_REVIEW; validated across two distinct live pipelines: M18B-5 (real Splunk + live OpenAI `gpt-5.6-sol`, no Jira) and M18B-6 (real Splunk + deterministic FakeModel + real Jira Cloud ticket `KAN-12`, no live OpenAI); zero real containment. |
+| **Formal Threat Model (Milestone 21)** | Security Architecture & Governance | **IMPLEMENTED / PUBLISHED** | Comprehensive threat model in `docs/threat-model.md` documenting trust boundaries, untrusted inputs, advisory AI vs deterministic policy authority, external-provider boundaries, approval gate, and residual risks. |
+| **Portfolio Hardening & Visual Integration (Milestones 19 & 23 Core)** | Documentation & Architecture | **SUBSTANTIALLY DELIVERED** | Refreshed canonical Mermaid/SVG/PNG architecture, dual-track Quick Start, 3 formal incident case studies, evidence screenshots (`docs/images/evidence/`), and 21/21 security evaluation artifacts. |
 | **Suricata Network IDS Telemetry** | Network Detection | **DEFERRED** | Suricata remains deferred after earlier pfSense package-manager/integration problems. It is not currently installed/operational in the lab and is not required for the current WEB01 ModSecurity path. |
 | **Real Endpoint Containment** | Containment Safety | **NOT IMPLEMENTED / NOT EXECUTED** | Destructive containment actions explicitly excluded from V1 scope; not executed in any milestone; response actions remain strictly simulated. |
 
@@ -557,7 +565,7 @@ detection / incident input
    ```
    * Queries live Splunk for DC01 Sysmon Event ID 1 telemetry matching `DET-TASK-001` (`T1053.005`).
    * Advisory model analysis evaluates scheduled-task creation; deterministic policy scores `65 / 100`, `HIGH`, `HUMAN_REVIEW`.
-   * Live verified with OpenAI `gpt-5.6-sol` and Jira Cloud ticket `KAN-12`. Zero real containment.
+   * Live verified across two separate pipelines: live Splunk + live OpenAI `gpt-5.6-sol` (M18B-5; no Jira) and live Splunk + deterministic FakeModel + real Jira Cloud ticket `KAN-12` (M18B-6; no live OpenAI). Zero real containment.
 
 5. **Deterministic Synthetic Scheduled Task Mode** (Run anywhere / offline):
    ```bash
@@ -592,6 +600,7 @@ The physical/virtual infrastructure exists outside this repository in an isolate
 
 ---
 
+<a id="telemetry-detection-status"></a>
 ## 6. Telemetry & Detection Status
 
 The lab implements and validates 4 core detections across Windows endpoint and Linux web application telemetry. Standalone Sigma (`.yml`) and Splunk (`.spl`) rule files exist for the three endpoint detections (`DET-POWERSHELL-001`, `DET-POWERSHELL-002`, `DET-TASK-001`); `DET-WEB-001` is implemented operationally via web-tier ModSecurity CRS rules and programmatic Python gateway search logic. All detections are mapped to MITRE ATT&CK and live-tested in the isolated lab environment against controlled, harmless fixtures (no malicious compromise is claimed):
@@ -633,7 +642,7 @@ The lab implements and validates 4 core detections across Windows endpoint and L
 * **Behavior**: Process creation of `schtasks.exe` with `/create` command-line flag representing endpoint persistence mechanisms.
 * **MITRE ATT&CK Mapping**: [T1053.005 - Scheduled Task/Job: Scheduled Task](https://attack.mitre.org/techniques/T1053/005/) (Persistence `TA0003`, Privilege Escalation `TA0004`, Execution `TA0002`).
 * **Telemetry Source**: Windows Server 2022 (`DC01`) / Microsoft Sysmon Process Create (Event ID 1) / Splunk index `main`, sourcetype `XmlWinEventLog:Microsoft-Windows-Sysmon/Operational`.
-* **Validation Status**: **IMPLEMENTED + LIVE LAB VALIDATED** (Controlled harmless task `SOCLab-Task-Validation-3` launching `notepad.exe`; bounded Splunk retrieval; live OpenAI advisory investigation `gpt-5.6-sol`; deterministic policy score 65 HIGH / HUMAN_REVIEW; live Jira Cloud ticket `KAN-12`; manual task deletion after validation).
+* **Validation Status**: **IMPLEMENTED + LIVE LAB VALIDATED** (Controlled harmless task `SOCLab-Task-Validation-3` launching `notepad.exe`; bounded Splunk retrieval; deterministic policy score 65 HIGH / HUMAN_REVIEW; validated across two separate live pipelines: M18B-5 with live OpenAI `gpt-5.6-sol` [no Jira] and M18B-6 with real Jira Cloud ticket `KAN-12` using deterministic FakeModel [no live OpenAI]; manual task deletion after validation).
 * **Detection Rules**:
   * SPL: [`detections/splunk/suspicious_scheduled_task_creation.spl`](detections/splunk/suspicious_scheduled_task_creation.spl)
   * Sigma: [`detections/sigma/suspicious_scheduled_task_creation.yml`](detections/sigma/suspicious_scheduled_task_creation.yml)
@@ -641,6 +650,7 @@ The lab implements and validates 4 core detections across Windows endpoint and L
 
 ---
 
+<a id="evaluation-suite-details"></a>
 ## 7. Adversarial Security Evaluations & Canonical Harness
 
 To ensure defense-in-depth and prevent model regressions, all deterministic security controls are evaluated against an automated canonical evaluation harness (`evaluation/harness.py`). The harness runs **21 canonical scenarios** (7 baseline + 10 WEB01 + 4 Milestone 17B governance/policy-integrity scenarios) offline with zero live network dependencies.
@@ -679,6 +689,7 @@ To ensure defense-in-depth and prevent model regressions, all deterministic secu
 
 ---
 
+<a id="current-limitations-boundaries"></a>
 ## 8. Current Limitations & Boundary Disclosures
 
 * **Private Attacker IP in LabNet**: The controlled WEB01 attacker in the lab environment originates from private LabNet address `192.168.1.100`. Real lab incidents are intentionally not sent to external threat intelligence (`SKIPPED_INELIGIBLE`), preventing private network data leakage. In Milestone 13F-3, the public-source enrichment control path was validated live against VirusTotal using a sanitized synthetic fixture (`8.8.8.8`); this fixture was used purely for testing the deterministic pipeline and does not represent actual attacker traffic.
@@ -703,7 +714,7 @@ To ensure defense-in-depth and prevent model regressions, all deterministic secu
 
 * **Milestone 15 — SOC Analyst UI / Investigation Console**: **COMPLETE (IMPLEMENTED + TESTED OFFLINE / MANUALLY BROWSER VALIDATED)**
   Create an analyst-facing interface over the existing deterministic backend.
-  *Initial UI scope remains strictly read-only and observational; zero response action authority; containment is NOT IMPLEMENTED.*
+  *Initial Milestone 15 UI scope began as read-only and observational (with interactive approval controls added subsequently in Milestone 16); zero direct privileged-tool authority; containment is NOT IMPLEMENTED.*
   * **Post-M15 Controlled Live Validation**: **LIVE LAB VALIDATED** (see Section 12 in `docs/implementation-notes.md`).
     - Scope: real DC01 process telemetry, real Sysmon ingestion, real Splunk retrieval, live OpenAI investigation, deterministic policy evaluation, incident/audit persistence, UI rendering.
     - Explicit exclusions: real containment, live endpoint isolation, Jira write, VirusTotal enrichment, live human-approval execution path.
@@ -720,7 +731,7 @@ To ensure defense-in-depth and prevent model regressions, all deterministic secu
   ```
   Browser UI
       ↓
-  Bounded read-only API / presentation layer
+  Read-oriented API / presentation layer (with bounded approval controls)
       ↓
   Existing incident / audit data and application services
       ↓
@@ -731,28 +742,28 @@ To ensure defense-in-depth and prevent model regressions, all deterministic secu
   The backend security boundaries (schemas, ToolRouter, RuntimeGuard, policy engine, audit logging) are now mature, validated, and hardened against prompt injection and tool abuse. Exposing these boundaries early through a read-only console significantly improves demonstration capability (recruiter/interviewer demos), triage visibility, and debugging, establishing an intuitive inspection baseline before integrating interactive approval controls (Milestone 16), additional detections (Milestone 18), Suricata (Milestone 19), and runtime metrics (Milestone 20). Approval and response action controls remain strictly deferred until Milestone 16.
 
 * **Milestone 16 — Human Approval & Consequential Action Boundary**: **COMPLETE (IMPLEMENTED + TESTED OFFLINE / MANUALLY BROWSER VALIDATED)**
-  Harden approval binding, freshness (600s TTL), single-use consumption, persistent append-only consumption ledger (`artifacts/approvals/approval_consumption.jsonl` with flush+fsync), and auditability. Consequential response remains simulated or explicitly human-approved. Integrated controlled Analyst UI Approve/Deny routes (`POST /api/incidents/{incident_id}/approval/approve|deny`) with server-side validation and lab-local origin/CSRF protection. Manually browser validated from Kali (`INC-DEMO-UI-001`, `INC-DEMO-UI-002`, `INC-DEMO-CRIT-20261013-001`). Real endpoint containment remains **NOT IMPLEMENTED** (simulated only).
+  Harden exact incident/action/policy binding, freshness (600s TTL), single-use consumption, persistent JSONL consumption ledger (`artifacts/approvals/approval_consumption.jsonl` with flush+fsync write semantics), replay rejection, and auditability. Consequential response remains simulated or explicitly human-approved. Integrated controlled Analyst UI Approve/Deny routes (`POST /api/incidents/{incident_id}/approval/approve|deny`) with server-side validation and lab-local origin/CSRF protection. Manually browser validated from Kali (`INC-DEMO-UI-001`, `INC-DEMO-UI-002`, `INC-DEMO-CRIT-20261013-001`). Real endpoint containment remains **NOT IMPLEMENTED** (simulated only).
 
 * **Milestone 17 — Security Evaluation Framework Expansion**: **COMPLETE (IMPLEMENTED + TESTED OFFLINE)**
   Expanded the automated canonical security evaluation harness from 17 to 21 deterministic scenarios (**21/21 PASS, 100.0% pass rate**). Added 4 governance and policy-integrity scenarios actively challenging violation counters: model downgrade rejection (`POLICY_OVERRIDE_PREVENTED`), hallucinated MITRE rejection (`DETERMINISTIC_MITRE_PRESERVED`), approval replay rejection (`APPROVAL_REPLAY_BLOCKED`), and fail-closed incomplete evidence handling (`INCOMPLETE_EVIDENCE_FAILED_CLOSED`).
 
 * **Milestone 18 — Additional Detection Coverage**: **COMPLETE (IMPLEMENTED + LIVE LAB VALIDATED)**
-  Expanded endpoint detection coverage with `DET-TASK-001` (Suspicious Scheduled Task Creation — `T1053.005`). Delivered complete Sigma rule, SPL detection, bounded query helper, and deterministic policy integration (+25 base, +10 MITRE). Live lab validated end-to-end on DC01 Sysmon Event ID 1 telemetry: bounded Splunk search, live OpenAI advisory investigation (`gpt-5.6-sol`), deterministic risk evaluation (65/100 HIGH), in-memory audit accounting, and live Jira Cloud ticket creation (`KAN-12`). Additional detections beyond the four implemented detections are optional/deferred for now.
+  Expanded endpoint detection coverage with `DET-TASK-001` (Suspicious Scheduled Task Creation — `T1053.005`). Delivered complete Sigma rule, SPL detection, bounded query helper, and deterministic policy integration (+25 base, +10 MITRE). Live lab validated end-to-end on DC01 Sysmon Event ID 1 telemetry across two distinct verified pipelines: M18B-5 exercising bounded Splunk search + live OpenAI advisory investigation (`gpt-5.6-sol`, no Jira), and M18B-6 exercising bounded Splunk search + deterministic FakeModel + real Jira Cloud ticket creation (`KAN-12`, no live OpenAI). Additional detections beyond the four implemented detections are optional/deferred for now.
 
-* **Milestone 19 — Portfolio Hardening & Demonstration Readiness**: **IN PROGRESS**
-  Perform portfolio-readiness audits, documentation synchronization, repeatable demo hardening, and interview readiness. Verify that all claims, architecture disclosures, and evaluation evidence are transparent and reproducible. Broader Suricata/pfSense network IDS telemetry remains **DEFERRED**. Single-agent architecture remains intentional; multi-agent architecture is **NOT PLANNED**. Real endpoint containment remains outside V1 scope (**NOT IMPLEMENTED / SIMULATED ONLY**).
+* **Milestone 19 — Portfolio Hardening & Demonstration Readiness**: **SUBSTANTIALLY COMPLETE / ACTIVE**
+  Portfolio-readiness audits, documentation synchronization, repeatable demo hardening, and interview readiness are substantially complete through README synchronization, dual-track Quick Start, GitHub landing polish, formal threat model integration, end-to-end incident case studies, evidence screenshots, refreshed reproducible architecture diagrams, and portfolio visual integration. Broader Suricata/pfSense network IDS telemetry remains **DEFERRED**. Single-agent architecture remains intentional; multi-agent architecture is **NOT PLANNED**. Real endpoint containment remains outside V1 scope (**NOT IMPLEMENTED / SIMULATED ONLY**).
 
 * **Milestone 20 — Runtime Monitoring & Operational Safety**: **PLANNED**
   Expose per-run tool counts, blocked-tool counts, provider failures, kill-switch state, approval state, audit correlation, and bounded runtime-health/security metrics.
 
-* **Milestone 21 — Threat Model & Security Architecture Documentation**: **PLANNED**
-  Formalize trust boundaries, untrusted inputs, model authority, deterministic control plane, secrets handling, external-provider boundaries, approval boundary, abuse cases, residual risks, and production limitations.
+* **Milestone 21 — Threat Model & Security Architecture Documentation**: **SUBSTANTIALLY IMPLEMENTED / COMPLETED CORE ARTIFACTS**
+  Formal threat model and security architecture documentation completed and published in [`docs/threat-model.md`](docs/threat-model.md), documenting trust boundaries, untrusted inputs, advisory model authority, deterministic control plane, secrets handling, external-provider boundaries, human approval gate, abuse cases, residual risks, and production limitations. Enterprise compliance mappings remain future work.
 
 * **Milestone 22 — Recruiter / Interview Demo**: **PLANNED**
   Create one polished end-to-end SOC incident demonstration and one adversarial-control demonstration proving that malicious/untrusted content cannot bypass ToolRouter, RuntimeGuard, deterministic policy, or human approval.
 
-* **Milestone 23 — Portfolio & GitHub Finalization**: **PLANNED**
-  Finalize architecture diagrams, README/setup, implementation-status matrix, incident case studies, screenshots, evaluation results, live-tested vs simulated matrix, limitations, future improvements, and public roadmap.
+* **Milestone 23 — Portfolio & GitHub Finalization**: **IN PROGRESS / CORE ASSETS DELIVERED**
+  Core portfolio assets are delivered and verified in the repository: refreshed architecture diagrams ([SVG](docs/images/architecture/ai-native-soc-lab-architecture.svg) / [PNG](docs/images/architecture/ai-native-soc-lab-architecture.png) / [MMD](docs/images/architecture/ai-native-soc-lab-architecture.mmd)), comprehensive README, component status matrix, incident case studies, evidence screenshots (`docs/images/evidence/`), evaluation results (21/21 PASS), limitations, and boundary disclosures. Final public portfolio showcase packaging and recorded demonstration walkthroughs remain planned.
 
 ---
 
@@ -821,3 +832,7 @@ To ensure defense-in-depth and prevent model regressions, all deterministic secu
   - [x] **18B-4**: Live integrated investigation validation: `--mode live-scheduled-task`, bounded Splunk search, deterministic `FakeModel`, audit accounting, zero containment mutation.
   - [x] **18B-5**: Live OpenAI advisory validation for `DET-TASK-001` using model `gpt-5.6-sol` against live DC01 telemetry in Splunk.
   - [x] **18B-6**: Live Jira Cloud incident creation for `DET-TASK-001`, creating real ticket `KAN-12` (downstream reporting sink, zero response authority; preceded by connectivity smoke test `KAN-11`).
+- [x] **Milestone 19**: Portfolio Hardening & Demonstration Readiness (**SUBSTANTIALLY DELIVERED / ACTIVE**):
+  - [x] **19A**: Documentation and README synchronization across offline portfolio demo and full live home-lab validation tracks.
+  - [x] **19B**: End-to-end incident case study documentation ([PowerShell](docs/case-studies/encoded-powershell-end-to-end.md), [Scheduled Task](docs/case-studies/scheduled-task-persistence.md), [ModSecurity SQLi](docs/case-studies/web01-modsecurity-sqli.md)).
+  - [x] **19C**: Portfolio evidence visuals integration (`docs/images/evidence/`), refreshed canonical architecture diagrams ([SVG](docs/images/architecture/ai-native-soc-lab-architecture.svg) / [PNG](docs/images/architecture/ai-native-soc-lab-architecture.png) / [MMD](docs/images/architecture/ai-native-soc-lab-architecture.mmd)), and UX navigation cleanup.
