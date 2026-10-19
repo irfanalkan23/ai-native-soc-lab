@@ -66,6 +66,9 @@ The AI agent functions strictly as an advisory investigator—it cannot execute 
 
 > **Live Integration Scope**: External integrations were validated in specific verified pipelines. The full integrated live flow (real Splunk + live OpenAI + real Jira Cloud) was exercised for `DET-POWERSHELL-002` (`KAN-10`). For `DET-TASK-001`, live Splunk + live OpenAI (M18B-5) and live Splunk + real Jira `KAN-12` (M18B-6) were validated as separate live pipelines. Quad-integration of all external APIs simultaneously was not performed or claimed.
 
+![Jira Cloud - DET-TASK-001 Incident KAN-12](docs/images/evidence/jira-kan-12.png)
+*Real Jira Cloud incident ticket `KAN-12` created during the separate `DET-TASK-001` live Jira validation pipeline. The ticket records validated Splunk evidence, advisory investigation output, and deterministic policy results; Jira remains a downstream reporting sink with zero response authority. This Jira validation was separate from the live OpenAI scheduled-task run.*
+
 > **Core Architectural & Safety Disclosures**:
 > 1. **Advisory Investigation Only**: The AI investigator generates structured analytical hypotheses and evidence summaries. It does not directly authorize actions, mutate rules, or alter risk scores.
 > 2. **Downstream-Only Ticketing Authority**: Jira issue creation (`KAN-7` for `DET-POWERSHELL-001`, `KAN-8`/`KAN-9` for `DET-WEB-001`, `KAN-10` for `DET-POWERSHELL-002`, and `KAN-12` for `DET-TASK-001`) acts strictly as a downstream external tracking and reporting sink. Jira possesses **zero response authority** over risk scoring, policy evaluation, approval gates, or endpoint actions.
