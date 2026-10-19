@@ -6,6 +6,14 @@ Modern Security Operations Centers (SOCs) face high alert volumes, repetitive tr
 
 This project demonstrates how an AI assistant can safely accelerate tier-1 and tier-2 SOC investigations without surrendering operational control or granting the model direct execution authority. Unlike traditional detection-only home labs or experimental LLM chatbots, this system encapsulates AI advisory reasoning within strict, deterministic security boundaries: bounded read-only SIEM queries, static tool allowlists, runtime execution guards, risk policies independent of model output, and fail-closed human approval gates.
 
+![AI-Native SOC Home Lab Architecture](docs/images/architecture/ai-native-soc-home-lab-architecture.png)
+*AI-Native SOC home-lab architecture: isolated endpoint and web telemetry feed Splunk and a bounded investigation control plane where AI remains advisory, deterministic policy retains authority, consequential simulated actions require human approval, and real endpoint containment is not implemented.*
+
+**Detailed technical architecture:**<br>
+[Open SVG](docs/images/architecture/ai-native-soc-lab-architecture.svg) · [View PNG](docs/images/architecture/ai-native-soc-lab-architecture.png) · [Mermaid source](docs/images/architecture/ai-native-soc-lab-architecture.mmd)
+
+*The detailed diagram documents trust boundaries, bounded SIEM retrieval, advisory AI, deterministic policy authority, conditional human approval, external integrations, audit logging, and the simulated-response boundary.*
+
 **Core Governing Principle:**
 ```text
 AI proposes → deterministic policy evaluates → human approves consequential actions → system executes permitted/simulated response → everything is logged and evaluated
@@ -72,15 +80,7 @@ The AI agent functions strictly as an advisory investigator—it cannot execute 
 
 ## 1. Project Purpose
 
-Modern Security Operations Centers face high alert volumes and context fragmentation. This project demonstrates how an AI agent can assist human analysts during alert triage, telemetry analysis, and IOC enrichment while remaining bound by strict deterministic security policies.
-
-![AI-Native SOC Home Lab Architecture](docs/images/architecture/ai-native-soc-home-lab-architecture.png)
-*AI-Native SOC home-lab architecture: isolated endpoint and web telemetry feed Splunk and a bounded investigation control plane where AI remains advisory, deterministic policy retains authority, consequential simulated actions require human approval, and real endpoint containment is not implemented.*
-
-**Detailed technical architecture:**<br>
-[Open SVG](docs/images/architecture/ai-native-soc-lab-architecture.svg) · [View PNG](docs/images/architecture/ai-native-soc-lab-architecture.png) · [Mermaid source](docs/images/architecture/ai-native-soc-lab-architecture.mmd)
-
-*The detailed diagram documents trust boundaries, bounded SIEM retrieval, advisory AI, deterministic policy authority, conditional human approval, external integrations, audit logging, and the simulated-response boundary.*
+The lab connects controlled endpoint and web-application telemetry to Splunk, then routes validated evidence through a bounded AI-assisted investigation workflow. The model provides advisory analysis while deterministic policy controls risk scoring, MITRE ATT&CK mapping, approval requirements, and permitted response actions. The resulting workflow demonstrates practical SOC workflow acceleration and agent-security engineering rather than autonomous remediation.
 
 ### Core Runtime Security Principle
 
